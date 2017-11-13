@@ -3,7 +3,7 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 7;
+use Test::More tests => 8;
 
 my $cluster = new Cluster(3);
 $cluster->init();
@@ -69,6 +69,8 @@ $cluster->{nodes}->[2]->psql('postgres', "select 't'",
                             stdout => \$stopped_out, stderr => \$stopped_err);
 is($cluster->is_data_identic( (0,1,3) ), 1, "soft stop / resume");
 print("::$stopped_out ::$stopped_err\n");
+
+# should be disabled
 is($stopped_out eq '' && $stopped_err ne '', 1, "soft stop / resume");
 
 $cluster->psql(0, 'postgres', "select mtm.resume_node(3)");
@@ -90,8 +92,6 @@ $cluster->pgbench(1, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,3) ), 1, "hard stop / resume");
 
-TODO: {
-todo_skip "Not working correcly yet",1;
 $cluster->psql(0, 'postgres', "select mtm.recover_node(3)");
 
 # now we need to perform backup from live node
@@ -109,4 +109,5 @@ $cluster->pgbench(1, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 $cluster->pgbench(4, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,3,4) ), 1, "hard stop / resume");
-}
+
+ok($cluster->stop('fast'), "cluster stops");
