@@ -536,7 +536,7 @@ pglogical_receiver_main(Datum main_arg)
 					int msg_len = rc - hdr_len;
 					stmt = copybuf + hdr_len;
 					MTM_LOG3("Receive message %c from node %d", stmt[0], nodeId);
-					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*GUC_UNIT_KB) {
+					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*1024L) {
 						if (spill_file < 0) {
 							int file_id;
 							spill_file = MtmCreateSpillFile(nodeId, &file_id);

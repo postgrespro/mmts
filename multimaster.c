@@ -2880,7 +2880,7 @@ _PG_init(void)
 		&MtmTransSpillThreshold,
 		100 * 1024, /* 100Mb */
 		0,
-		MaxAllocSize/GUC_UNIT_KB,
+		MaxAllocSize/1024,
 		PGC_SIGHUP,
 		GUC_UNIT_KB,
 		NULL,
