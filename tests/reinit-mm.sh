@@ -44,9 +44,9 @@ do
         port = '$port'
         max_prepared_transactions = 100
         synchronous_commit = on
-        fsync = off
+        fsync = on
         wal_level = logical
-        max_worker_processes = 15
+        max_worker_processes = 100
         max_replication_slots = 10
         max_wal_senders = 10
         shared_preload_libraries = 'multimaster'
