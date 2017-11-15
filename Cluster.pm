@@ -128,6 +128,7 @@ sub configure
 			max_replication_slots = 6
 			shared_preload_libraries = 'multimaster'
 			shared_buffers = 16MB
+			wal_writer_delay = 2ms
 
 			multimaster.arbiter_port = $arbiter_port
 			multimaster.workers = 1
