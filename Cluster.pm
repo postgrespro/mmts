@@ -400,4 +400,14 @@ sub add_node()
 	push(@{$self->{nodes}}, $node);
 }
 
+sub await_nodes()
+{
+	my ($self, @nodenums) = @_;
+
+	foreach my $i (@nodenums)
+	{
+		$self->{nodes}->[$i]->poll_query_until('postgres', "select 't'");
+	}
+}
+
 1;
