@@ -13,49 +13,29 @@ my $cluster = new Cluster($nnodes);
 $cluster->init();
 $cluster->configure();
 $cluster->start();
-note("sleeping 10");
-sleep(10);
+$cluster->await_nodes( (0,1) );
 
-my ($in, $out, $err, $rc);
+my ($out, $err, $rc);
 my $seconds = 30;
-$in = '';
+my $total_err = '';
 $out = '';
 
-my @init_argv = (
-	'pgbench',
-	'-i',
-	-h => $cluster->{nodes}->[0]->host(),
-	-p => $cluster->{nodes}->[0]->port(),
-	'postgres',
-);
-note("running pgbench init");
-my $init_run = start(\@init_argv, $in, $out);
-finish($init_run) || BAIL_OUT("pgbench exited with $?");
-
-my @bench_argv = (
-	'pgbench',
-	"-T $seconds",
-	'-N',
-	'-c 8',
-	-h => $cluster->{nodes}->[0]->host(),
-	-p => $cluster->{nodes}->[0]->port(),
-	'postgres',
-);
-note("running pgbench: " . join(' ', @bench_argv));
-my $bench_run = start(\@bench_argv, $in, $out);
-sleep(2);
+$cluster->pgbench(0, ('-i', -s => '1') );
+my $pgb_handle = $cluster->pgbench_async(0, ('-N', '-n', -T => $seconds, -c => 8) );
 
 my $started = time();
 while (time() - $started < $seconds)
 {
 	($rc, $out, $err) = $cluster->psql(1, 'postgres', "truncate pgbench_history;");
-	($rc, $out, $err) = $cluster->psql(1, 'postgres', "vacuum full");
-	($rc, $out, $err) = $cluster->psql(0, 'postgres', "truncate pgbench_history;");
-	($rc, $out, $err) = $cluster->psql(0, 'postgres', "vacuum full");
-	sleep(0.5);
+	note("truncated");
+	$total_err .= $err;
+	sleep(1);
+	# ($rc, $out, $err) = $cluster->psql(0, 'postgres', "truncate pgbench_history;");
+	# $total_err .= $err;
+	# sleep(0.5);
 }
+$cluster->pgbench_await($pgb_handle);
 
-finish($bench_run) || $cluster->bail_out_with_logs("pgbench exited with $?");
-sleep(1);
-ok($cluster->stop('fast'), "cluster stops");
+is($total_err, '', "truncate successful");
+$cluster->stop();
 1;

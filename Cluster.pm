@@ -225,15 +225,8 @@ sub stop
 	note("stopping cluster ${mode}ly");
 	
 	foreach my $node (@$nodes) {
-		if (!stopnode($node, $mode)) {
-			$ok = 0;
-			# if (!stopnode($node, 'kill')) {
-			# 	my $name = $node->name;
-			# 	BAIL_OUT("failed to kill $name");
-			# }
-		}
+		$node->stop($mode);
 	}
-	sleep(2);
 
 	$self->dumplogs();
 
@@ -313,6 +306,7 @@ sub pgbench_async()
 sub pgbench_await()
 {
 	my ($self, $pgbench_handle) = @_;
+	note("finished pgbench");
 	IPC::Run::finish($pgbench_handle) || BAIL_OUT("pgbench exited with $?");
 }
 
@@ -328,6 +322,7 @@ sub is_data_identic()
 	{
 		my $current_hash = '';
 		$self->{nodes}->[$i]->psql('postgres', $sql, stdout => \$current_hash);
+		note("hash$i: $current_hash");
 		if ($current_hash eq '')
 		{
 			note("got empty hash from node $i");

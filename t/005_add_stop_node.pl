@@ -111,3 +111,5 @@ $cluster->pgbench(4, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,3,4) ), 1, "hard stop / resume");
 
 ok($cluster->stop('fast'), "cluster stops");
+
+1;

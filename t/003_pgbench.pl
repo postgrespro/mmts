@@ -16,8 +16,7 @@ $cluster->start();
 
 my ($rc, $in, $out, $err);
 
-note("sleeping 10");
-sleep(10);
+$cluster->await_nodes( (0,1) );
 
 note("preparing the tables");
 if ($cluster->psql(0, 'postgres', "create table t (k int primary key, v int)"))

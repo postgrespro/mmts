@@ -2,21 +2,16 @@ use strict;
 use warnings;
 use Cluster;
 use TestLib;
-use Test::More tests => 9;
+use Test::More tests => 5;
 
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->configure();
 $cluster->start();
-
-###############################################################################
-# Wait until nodes are up
-###############################################################################
+$cluster->await_nodes( (0,1,2) );
 
 my $ret;
 my $psql_out;
-# XXX: create extension on start and poll_untill status is Online
-sleep(10);
 
 ###############################################################################
 # Replication check
@@ -47,12 +42,9 @@ if ($cluster->stopid(2, 'fast')) {
 	$cluster->bail_out_with_logs("failed to stop $name in fast mode");
 }
 
-sleep(5); # Wait until failure of node will be detected
-
 note("inserting 2 on node 0");
 $ret = $cluster->psql(0, 'postgres', "insert into t values(2, 20);"); # this transaciton may fail
 note("tx1 status = $ret");
- 
 
 note("inserting 3 on node 1");
 $ret = $cluster->psql(1, 'postgres', "insert into t values(3, 30);"); # this transaciton may fail
@@ -78,18 +70,12 @@ is($psql_out, '40', "Check replication after node failure.");
 note("starting node 2");
 $cluster->{nodes}->[2]->start;
 
-sleep(5); # Wait until node is started
+$cluster->await_nodes( (2) );
 
 note("inserting 6 on node 0 (can fail)");
 $cluster->psql(0, 'postgres', "insert into t values(6, 60);"); 
 note("inserting 7 on node 1 (can fail)");
 $cluster->psql(1, 'postgres', "insert into t values(7, 70);");
-
-note("polling node 2");
-for (my $poller = 0; $poller < 3; $poller++) {
-	my $pollee = 2;
-	ok($cluster->poll($poller, 'postgres', $pollee, 10, 1), "node $pollee is online according to node $poller");
-}
 
 note("getting cluster state");
 $cluster->psql(0, 'postgres', "select * from mtm.get_cluster_state();", stdout => \$psql_out);
@@ -115,5 +101,5 @@ note("selected");
 
 is($psql_out, '90', "Check replication after failed node recovery.");
 
-ok($cluster->stop('fast'), "cluster stops");
+$cluster->stop();
 1;

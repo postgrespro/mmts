@@ -118,3 +118,5 @@ is($sum2, $sum1, "Check that sum_2 == sum_1");
 $cluster->{nodes}->[0]->stop('fast');
 $cluster->{nodes}->[1]->stop('fast');
 $cluster->{nodes}->[2]->stop('fast');
+
+1;
