@@ -1,5 +1,5 @@
 import unittest
-from cluster import Cluster
+from mm_cluster import Cluster
 
 
 class Bootstrap(unittest.TestCase):

@@ -2,7 +2,7 @@ import unittest
 import subprocess
 import time
 
-from cluster import Cluster
+from mm_cluster import Cluster
 
 
 NUM_NODES = 2
