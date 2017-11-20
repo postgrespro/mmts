@@ -19,7 +19,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "pg_socket.h"
+#include "common/pg_socket.h"
 #include "pqexpbuffer.h"
 #include "access/xact.h"
 #include "access/clog.h"
