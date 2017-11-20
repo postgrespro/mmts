@@ -83,7 +83,7 @@ is($cluster->is_data_identic( (0,1,2,3) ), 1, "soft stop / resume");
 ################################################################################
 
 note('Stopping node with slot drop');
-$cluster->psql(0, 'postgres', "select mtm.stop_node(3,'t')");
+# $cluster->psql(0, 'postgres', "select mtm.stop_node(3,'t')");
 # await for comletion?
 $cluster->{nodes}->[2]->stop('fast');
 
@@ -93,6 +93,8 @@ $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,3) ), 1, "hard stop / resume");
 
 $cluster->psql(0, 'postgres', "select mtm.recover_node(3)");
+
+sleep(5);
 
 # now we need to perform backup from live node
 $cluster->add_node(port => $cluster->{nodes}->[2]->{_port},
