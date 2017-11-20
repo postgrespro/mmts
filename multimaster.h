@@ -292,7 +292,7 @@ typedef struct
 	MtmNodeStatus status;              /* Status of this node */
 	int recoverySlot;                  /* NodeId of recovery slot or 0 if none */
 	volatile slock_t queueSpinlock;    /* spinlock used to protect sender queue */
-	PGSemaphoreData sendSemaphore;     /* semaphore used to notify mtm-sender about new responses to coordinator */
+	PGSemaphore sendSemaphore;     /* semaphore used to notify mtm-sender about new responses to coordinator */
 	LWLockPadded *locks;               /* multimaster lock tranche */
 	TransactionId oldestXid;           /* XID of oldest transaction visible by any active transaction (local or global) */
 	nodemask_t disabledNodeMask;       /* Bitmask of disabled nodes */

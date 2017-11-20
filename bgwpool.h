@@ -25,8 +25,8 @@ typedef struct
 {
     BgwPoolExecutor executor;
     volatile slock_t lock;
-    PGSemaphoreData available;
-    PGSemaphoreData overflow;
+	PGSemaphore available;
+	PGSemaphore overflow;
     size_t head;
     size_t tail;
     size_t size;

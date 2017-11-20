@@ -340,7 +340,7 @@ static void MtmScheduleHeartbeat()
 		enable_timeout_after(heartbeat_timer, MtmHeartbeatSendTimeout);
 		send_heartbeat = true;
 	}
-	PGSemaphoreUnlock(&Mtm->sendSemaphore);
+	PGSemaphoreUnlock(Mtm->sendSemaphore);
 }
 	
 static void MtmSendHeartbeat()
@@ -741,7 +741,7 @@ static void MtmSender(Datum arg)
 
 	while (!stop) {
 		MtmMessageQueue *curr, *next;		
-		PGSemaphoreLock(&Mtm->sendSemaphore);
+		PGSemaphoreLock(Mtm->sendSemaphore);
 		CHECK_FOR_INTERRUPTS();
 
 		if (ConfigReloadPending)

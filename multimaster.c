@@ -1694,7 +1694,7 @@ void MtmSendMessage(MtmArbiterMessage* msg)
 		Mtm->sendQueue = mq;
 		if (sendQueue == NULL) {
 			/* signal semaphore only once for the whole list */
-			PGSemaphoreUnlock(&Mtm->sendSemaphore);
+			PGSemaphoreUnlock(Mtm->sendSemaphore);
 		}
 	}
 	SpinLockRelease(&Mtm->queueSpinlock);
@@ -2547,8 +2547,8 @@ static void MtmInitialize()
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
 		Mtm->nodes[MtmNodeId-1].restartLSN = (lsn_t)PG_UINT64_MAX;
-		PGSemaphoreCreate(&Mtm->sendSemaphore);
-		PGSemaphoreReset(&Mtm->sendSemaphore);
+		Mtm->sendSemaphore = PGSemaphoreCreate();
+		PGSemaphoreReset(Mtm->sendSemaphore);
 		SpinLockInit(&Mtm->queueSpinlock);
 		BgwPoolInit(&Mtm->pool, MtmExecutor, MtmDatabaseName, MtmDatabaseUser, MtmQueueSize, MtmWorkers);
 		RegisterXactCallback(MtmXactCallback, NULL);

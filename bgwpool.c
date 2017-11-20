@@ -59,10 +59,10 @@ static void BgwPoolMainLoop(BgwPool* pool)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-        PGSemaphoreLock(&pool->available);
+		PGSemaphoreLock(pool->available);
         SpinLockAcquire(&pool->lock);
 		if (pool->shutdown) { 	
-			PGSemaphoreUnlock(&pool->available);
+			PGSemaphoreUnlock(pool->available);
 			break;
 		}
         size = *(int*)&pool->queue[pool->head];
@@ -85,7 +85,7 @@ static void BgwPoolMainLoop(BgwPool* pool)
         }
         if (pool->producerBlocked) {
             pool->producerBlocked = false;
-            PGSemaphoreUnlock(&pool->overflow);
+			PGSemaphoreUnlock(pool->overflow);
 			pool->lastPeakTime = 0;
         }
         SpinLockRelease(&pool->lock);
@@ -108,10 +108,10 @@ void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  c
 		elog(PANIC, "Failed to allocate memory for background workers pool: %lld bytes requested", (long64)queueSize);
 	}
     pool->executor = executor;
-    PGSemaphoreCreate(&pool->available);
-    PGSemaphoreCreate(&pool->overflow);
-    PGSemaphoreReset(&pool->available);
-    PGSemaphoreReset(&pool->overflow);
+	pool->available = PGSemaphoreCreate();
+	pool->overflow = PGSemaphoreCreate();
+	PGSemaphoreReset(pool->available);
+	PGSemaphoreReset(pool->overflow);
     SpinLockInit(&pool->lock);
 	pool->shutdown = false;
     pool->producerBlocked = false;
@@ -215,7 +215,7 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
 			}
 			pool->producerBlocked = true;
             SpinLockRelease(&pool->lock);
-            PGSemaphoreLock(&pool->overflow);
+			PGSemaphoreLock(pool->overflow);
             SpinLockAcquire(&pool->lock);
         } else {
             pool->pending += 1;
@@ -236,7 +236,7 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
             if (pool->tail == pool->size) {
                 pool->tail = 0;
             }
-            PGSemaphoreUnlock(&pool->available);
+			PGSemaphoreUnlock(pool->available);
             break;
         }
     }
@@ -248,6 +248,6 @@ void BgwPoolStop(BgwPool* pool)
     SpinLockAcquire(&pool->lock);
 	pool->shutdown = true;
     SpinLockRelease(&pool->lock);            
-	PGSemaphoreUnlock(&pool->available);
-	PGSemaphoreUnlock(&pool->overflow);
+	PGSemaphoreUnlock(pool->available);
+	PGSemaphoreUnlock(pool->overflow);
 }
