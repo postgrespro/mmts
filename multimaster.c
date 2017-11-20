@@ -963,7 +963,7 @@ static void
 MtmBeginTransaction(MtmCurrentTrans* x)
 {
 	if (x->snapshot == INVALID_CSN) {
-		TransactionId xmin = (Mtm->gcCount >= MtmGcPeriod) ? PgGetOldestXmin(NULL, false) : InvalidTransactionId; /* Get oldest xmin outside critical section */
+		TransactionId xmin = (Mtm->gcCount >= MtmGcPeriod) ? PgGetOldestXminNoslot(NULL, false) : InvalidTransactionId; /* Get oldest xmin outside critical section */
 
 		Assert(!x->isActive);
 		MtmLock(LW_EXCLUSIVE);
@@ -2849,7 +2849,7 @@ _PG_init(void)
 		"Number of distributed transactions after which garbage collection is started",
 		"Multimaster is building xid->csn hash map which has to be cleaned to avoid hash overflow. This parameter specifies interval of invoking garbage collector for this map",
 		&MtmGcPeriod,
-		MTM_HASH_SIZE/10,
+		1000,
 		1,
 		INT_MAX,
 		PGC_BACKEND,
