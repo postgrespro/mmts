@@ -5571,3 +5571,13 @@ Datum mtm_referee_poll(PG_FUNCTION_ARGS)
 
 	PG_RETURN_INT64(recoveredNodeMask);
 }
+
+/*
+ * Allow to replicate handcrafted heap inserts/updates.
+ * Needed for scheduler.
+ */
+void
+MtmToggleDML(void)
+{
+	MtmTx.containsDML = true;
+}
