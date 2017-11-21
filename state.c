@@ -622,3 +622,16 @@ MtmRefereeClearWinner(void)
 	PQfinish(conn);
 	return true;
 }
+
+/*
+ * Mtm current status accessor.
+ */
+MtmNodeStatus
+MtmGetCurrentStatus()
+{
+	volatile MtmNodeStatus status;
+	MtmLock(LW_SHARED);
+	status = Mtm->status;
+	MtmUnlock();
+	return status;
+}

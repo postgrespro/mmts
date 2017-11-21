@@ -33,3 +33,5 @@ extern void MtmReconnectNode(int nodeId);
 extern void MtmRefreshClusterStatus(void);
 
 extern int countZeroBits(nodemask_t mask, int nNodes);
+
+extern MtmNodeStatus MtmGetCurrentStatus(void);
