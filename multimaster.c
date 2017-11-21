@@ -5173,7 +5173,7 @@ static void MtmProcessUtility(Node *parsetree, const char *queryString,
 				pgClassTuple = SearchSysCache1(RELOID, tableOid);
 				pgClassStruct = (Form_pg_class) GETSTRUCT(pgClassTuple);
 				if (pgClassStruct->relpersistence == 't')
-					MyXactAccessedTempRel = true;
+					MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 				ReleaseSysCache(pgClassTuple);
 			}
 			break;
@@ -5341,7 +5341,7 @@ static void MtmProcessUtility(Node *parsetree, const char *queryString,
 	}
 	else MTM_LOG3("Skip utility statement '%s': skip=%d, insideDDL=%d", queryString, skipCommand, MtmDDLStatement != NULL);
 
-	prevMyXactAccessedTempRel = MyXactAccessedTempRel;
+	prevMyXactAccessedTempRel = MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL;
 
 	if (PreviousProcessUtilityHook != NULL)
 	{
@@ -5369,9 +5369,10 @@ static void MtmProcessUtility(Node *parsetree, const char *queryString,
 		{
 			prevMyXactAccessedTempRel = true;
 		}
-		MyXactAccessedTempRel = prevMyXactAccessedTempRel;
+		if (prevMyXactAccessedTempRel)
+			MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 	}
-	if (MyXactAccessedTempRel)
+	if (MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL)
 	{
 		MTM_LOG1("Xact accessed temp table, stopping replication of statement '%s'", queryString);
 		MtmTx.isDistributed = false; /* Skip */
