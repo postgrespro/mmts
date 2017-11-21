@@ -21,7 +21,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "pg_socket.h"
+#include "common/pg_socket.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
 #include "storage/s_lock.h"
