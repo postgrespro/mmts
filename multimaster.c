@@ -148,9 +148,11 @@ static void MtmAbortPreparedTransaction(MtmCurrentTrans* x);
 static void MtmPreCommitPreparedTransaction(MtmCurrentTrans* x);
 static void MtmEndTransaction(MtmCurrentTrans* x, bool commit);
 static bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
-static TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum);
-// static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
+
+static TransactionId MtmGetOldestXmin(Relation rel, int flags);
+//static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
 static void MtmAdjustOldestXid(void);
+
 static bool MtmDetectGlobalDeadLock(PGPROC* proc);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId* subxids, int nSubxids);
 static char const* MtmGetName(void);
@@ -609,9 +611,9 @@ Snapshot MtmGetSnapshot(Snapshot snapshot)
 }
 
 
-TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum)
+TransactionId MtmGetOldestXmin(Relation rel, int flags)
 {
-	TransactionId xmin = PgGetOldestXmin(rel, ignoreVacuum); /* consider all backends */
+	TransactionId xmin = PgGetOldestXmin(rel, flags); /* consider all backends */
 	// if (TransactionIdIsValid(xmin)) {
 	// 	MtmLock(LW_EXCLUSIVE);
 	// 	xmin = MtmAdjustOldestXid(xmin);
