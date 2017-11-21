@@ -289,9 +289,11 @@ static shmem_startup_hook_type PreviousShmemStartupHook;
 
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
-static void MtmProcessUtility(Node *parsetree, const char *queryString,
-							 ProcessUtilityContext context, ParamListInfo params,
-							 DestReceiver *dest, char *completionTag);
+static void MtmProcessUtility(PlannedStmt *pstmt,
+										  const char *queryString, ProcessUtilityContext context,
+										  ParamListInfo params,
+										  QueryEnvironment *queryEnv,
+										  DestReceiver *dest, char *completionTag);
 static void MtmSeqNextvalHook(Oid seqid, int64 next);
 
 static bool MtmAtExitHookRegistered = false;
@@ -5036,13 +5038,16 @@ static bool MtmFunctionProfileDependsOnTempTable(CreateFunctionStmt* func)
 
 
 
-static void MtmProcessUtility(Node *parsetree, const char *queryString,
-							  ProcessUtilityContext context, ParamListInfo params,
-							  DestReceiver *dest, char *completionTag)
+static void MtmProcessUtility(PlannedStmt *pstmt,
+										  const char *queryString, ProcessUtilityContext context,
+										  ParamListInfo params,
+										  QueryEnvironment *queryEnv,
+										  DestReceiver *dest, char *completionTag)
 {
 	bool skipCommand = false;
 	bool executed = false;
 	bool prevMyXactAccessedTempRel;
+	Node *parsetree = pstmt->utilityStmt;
 
 	MTM_LOG2("%d: Process utility statement tag=%d, context=%d, issubtrans=%d, creating_extension=%d, query=%s",
 			 MyProcPid, nodeTag(parsetree), context, IsSubTransaction(), creating_extension, queryString);
@@ -5347,14 +5352,17 @@ static void MtmProcessUtility(Node *parsetree, const char *queryString,
 
 	if (PreviousProcessUtilityHook != NULL)
 	{
-		PreviousProcessUtilityHook(parsetree, queryString, context,
-								   params, dest, completionTag);
+		PreviousProcessUtilityHook(pstmt, queryString,
+										 context, params, queryEnv,
+										 dest, completionTag);
 	}
 	else
 	{
-		standard_ProcessUtility(parsetree, queryString, context,
-								params, dest, completionTag);
+		standard_ProcessUtility(pstmt, queryString,
+									context, params, queryEnv,
+									dest, completionTag);
 	}
+
 #if 0
 	if (!MtmVolksWagenMode && MtmTx.isDistributed && XactIsoLevel != XACT_REPEATABLE_READ) {
 		MTM_ELOG(ERROR, "Isolation level %s is not supported by multimaster", isoLevelStr[XactIsoLevel]);
