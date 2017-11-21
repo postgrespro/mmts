@@ -4483,11 +4483,8 @@ Datum mtm_make_table_local(PG_FUNCTION_ARGS)
 
 		tup = heap_form_tuple(tupDesc, values, nulls);
 
-		/* Insert the tuple to the catalog. */
-		simple_heap_insert(rel, tup);
-
-		/* Update the indexes. */
-		CatalogUpdateIndexes(rel, tup);
+		/* Insert the tuple to the catalog and update the indexes. */
+		CatalogTupleInsert(rel, tup);
 
 		/* Cleanup. */
 		heap_freetuple(tup);
