@@ -1811,7 +1811,7 @@ static void MtmDropSlot(int nodeId)
 	if (MtmTryLockNode(nodeId, LW_EXCLUSIVE))
 	{
 		MTM_ELOG(INFO, "Drop replication slot for node %d", nodeId);
-		ReplicationSlotDrop(psprintf(MULTIMASTER_SLOT_PATTERN, nodeId));
+		ReplicationSlotDrop(psprintf(MULTIMASTER_SLOT_PATTERN, nodeId), false);
 		MtmUnlockNode(nodeId);
 	} else {
 		MTM_ELOG(WARNING, "Failed to drop replication slot for node %d", nodeId);
