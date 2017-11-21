@@ -34,6 +34,8 @@
 
 static bool MtmRefereeStop;
 
+void MtmRefereeMain(Datum arg);
+
 static void MtmShutdownReferee(int sig)
 {
 	MtmRefereeStop = true;
@@ -144,7 +146,7 @@ static void MtmRefereeLoop(char const** connections, int nConns)
 	}
 }
 
-static void MtmRefereeMain(Datum arg)
+void MtmRefereeMain(Datum arg)
 {
 	char const* connections[MAX_NODES];
 	int i;
@@ -168,9 +170,13 @@ static BackgroundWorker MtmRefereeWorker = {
 	0,
 	BgWorkerStart_ConsistentState,
 	REFEREE_RECONNECT_TIMEOUT,
-	MtmRefereeMain
+	// MtmRefereeMain
+	"referee",
+	"MtmRefereeMain",
+	(Datum) 0,
+	"",
+	0
 };
-
 
 void MtmRefereeInitialize(void)
 {

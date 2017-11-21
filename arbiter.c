@@ -91,9 +91,9 @@ static TimeoutId   heartbeat_timer;
 static nodemask_t  busy_mask;
 static timestamp_t last_heartbeat_to_node[MAX_NODES];
 
-static void MtmSender(Datum arg);
-static void MtmReceiver(Datum arg);
-static void MtmMonitor(Datum arg);
+void MtmSender(Datum arg);
+void MtmReceiver(Datum arg);
+void MtmMonitor(Datum arg);
 static void MtmSendHeartbeat(void);
 static bool MtmSendToNode(int node, void const* buf, int size);
 
@@ -116,7 +116,12 @@ static BackgroundWorker MtmSenderWorker = {
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
-	MtmSender
+	// MtmSender
+	"multimaster",
+	"MtmSender",
+	(Datum) 0,
+	"",
+	0
 };
 
 static BackgroundWorker MtmRecevierWorker = {
@@ -124,7 +129,12 @@ static BackgroundWorker MtmRecevierWorker = {
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
-	MtmReceiver
+	// MtmReceiver
+	"multimaster",
+	"MtmReceiver",
+	(Datum) 0,
+	"",
+	0
 };
 
 static BackgroundWorker MtmMonitorWorker = {
@@ -132,7 +142,11 @@ static BackgroundWorker MtmMonitorWorker = {
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
-	MtmMonitor
+	"multimaster",
+	"MtmMonitor",
+	(Datum) 0,
+	"",
+	0
 };
 
 
@@ -711,7 +725,7 @@ static void MtmAppendBuffer(MtmBuffer* txBuffer, MtmArbiterMessage* msg)
 }
 
 
-static void MtmSender(Datum arg)
+void MtmSender(Datum arg)
 {
 	int nNodes = MtmMaxNodes;
 	int i;
@@ -807,7 +821,7 @@ static bool MtmRecovery()
 }
 #endif
 
-static void MtmMonitor(Datum arg)
+void MtmMonitor(Datum arg)
 {
 	pqsignal(SIGINT, SetStop);
 	pqsignal(SIGQUIT, SetStop);
@@ -838,7 +852,7 @@ static void MtmMonitor(Datum arg)
 	}
 }
 
-static void MtmReceiver(Datum arg)
+void MtmReceiver(Datum arg)
 {
 	int nNodes = MtmMaxNodes;
 	int nResponses;

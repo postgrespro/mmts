@@ -67,6 +67,8 @@ lsn_t MtmSenderWalEnd;
 static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
+void pglogical_receiver_main(Datum main_arg);
+
 static void
 receiver_raw_sigterm(SIGNAL_ARGS)
 {
@@ -207,7 +209,7 @@ static char const* const MtmReplicationModeName[] =
 	"open_existed" /* normal mode: use existed slot or create new one and start receiving data from it from the rememered position */
 };
 
-static void
+void
 pglogical_receiver_main(Datum main_arg)
 {
 	int nodeId = DatumGetInt32(main_arg);
@@ -717,7 +719,9 @@ void MtmStartReceiver(int nodeId, bool dynamic)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_main = pglogical_receiver_main;
+	// worker.bgw_main = pglogical_receiver_main;
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "pglogical_receiver_main");
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 
 	/* Worker parameter and registration */

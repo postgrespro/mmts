@@ -21,6 +21,9 @@ int  MtmMaxWorkers;
 
 static BgwPool* MtmPool;
 
+void BgwPoolStaticWorkerMainLoop(Datum arg);
+void BgwPoolDynamicWorkerMainLoop(Datum arg);
+
 static void BgwShutdownWorker(int sig)
 {
 	MTM_LOG1("Background worker %d receive shutdown request", MyProcPid);
@@ -132,13 +135,13 @@ timestamp_t BgwGetLastPeekTime(BgwPool* pool)
 	return pool->lastPeakTime;
 }
 
-static void BgwPoolStaticWorkerMainLoop(Datum arg)
+void BgwPoolStaticWorkerMainLoop(Datum arg)
 {
 	BgwPoolConstructor constructor = (BgwPoolConstructor)DatumGetPointer(arg);
     BgwPoolMainLoop(constructor());
 }
 
-static void BgwPoolDynamicWorkerMainLoop(Datum arg)
+void BgwPoolDynamicWorkerMainLoop(Datum arg)
 {
     BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
 }
@@ -151,7 +154,8 @@ void BgwPoolStart(int nWorkers, BgwPoolConstructor constructor)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
     worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_main = BgwPoolStaticWorkerMainLoop;
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "BgwPoolStaticWorkerMainLoop");
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 
     for (i = 0; i < nWorkers; i++) { 
@@ -182,7 +186,8 @@ static void BgwStartExtraWorker(BgwPool* pool)
 			MemSet(&worker, 0, sizeof(BackgroundWorker));
 			worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
 			worker.bgw_start_time = BgWorkerStart_ConsistentState;
-			worker.bgw_main = BgwPoolDynamicWorkerMainLoop;
+			sprintf(worker.bgw_library_name, "multimaster");
+			sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
 			worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 			snprintf(worker.bgw_name, BGW_MAXLEN, "bgw_pool_dynworker_%d", (int)++pool->nWorkers);
 			worker.bgw_main_arg = PointerGetDatum(pool);
