@@ -5127,9 +5127,9 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 
 		case T_VacuumStmt:
 		{
-			VacuumStmt* vacuum = (VacuumStmt*)parsetree;
+			// VacuumStmt* vacuum = (VacuumStmt*)parsetree;
 			skipCommand = true;
-			if ((vacuum->options & VACOPT_LOCAL) == 0 && !MtmVolksWagenMode)
+			if (!MtmVolksWagenMode)
 			{
 				if (context == PROCESS_UTILITY_TOPLEVEL) {
 					MtmProcessDDLCommand(queryString, false);
