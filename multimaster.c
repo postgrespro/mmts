@@ -283,7 +283,7 @@ static ExecutorStart_hook_type PreviousExecutorStartHook;
 static ExecutorFinish_hook_type PreviousExecutorFinishHook;
 static ProcessUtility_hook_type PreviousProcessUtilityHook;
 static shmem_startup_hook_type PreviousShmemStartupHook;
-static seq_nextval_hook_t PreviousSeqNextvalHook;
+// static seq_nextval_hook_t PreviousSeqNextvalHook;
 
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
@@ -3360,8 +3360,8 @@ _PG_init(void)
 	PreviousProcessUtilityHook = ProcessUtility_hook;
 	ProcessUtility_hook = MtmProcessUtility;
 
-	PreviousSeqNextvalHook = SeqNextvalHook;
-	SeqNextvalHook = MtmSeqNextvalHook;
+	// PreviousSeqNextvalHook = SeqNextvalHook;
+	// SeqNextvalHook = MtmSeqNextvalHook;
 }
 
 /*
@@ -3373,7 +3373,7 @@ _PG_fini(void)
 	shmem_startup_hook = PreviousShmemStartupHook;
 	ExecutorFinish_hook = PreviousExecutorFinishHook;
 	ProcessUtility_hook = PreviousProcessUtilityHook;
-	SeqNextvalHook = PreviousSeqNextvalHook;
+	// SeqNextvalHook = PreviousSeqNextvalHook;
 }
 
 
