@@ -61,6 +61,23 @@ static void pg_decode_begin_txn(LogicalDecodingContext *ctx,
 					ReorderBufferTXN *txn);
 static void pg_decode_commit_txn(LogicalDecodingContext *ctx,
 					 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+
+static void pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn);
+static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn);
+static void pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn);
+
+static bool pg_filter_decode_txn(LogicalDecodingContext *ctx,
+					 ReorderBufferTXN *txn);
+
+static bool pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 TransactionId xid, const char *gid);
+
+static void pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr abort_lsn);
+
 static void pg_decode_change(LogicalDecodingContext *ctx,
 				 ReorderBufferTXN *txn, Relation rel,
 				 ReorderBufferChange *change);
@@ -109,6 +126,14 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->begin_cb = pg_decode_begin_txn;
 	cb->change_cb = pg_decode_change;
 	cb->commit_cb = pg_decode_commit_txn;
+	cb->abort_cb = pg_decode_abort_txn;
+
+	cb->filter_prepare_cb = pg_filter_prepare;
+	cb->filter_decode_txn_cb = pg_filter_decode_txn;
+	cb->prepare_cb = pg_decode_prepare_txn;
+	cb->commit_prepared_cb = pg_decode_commit_prepared_txn;
+	cb->abort_prepared_cb = pg_decode_abort_prepared_txn;
+
 	cb->filter_by_origin_cb = pg_decode_origin_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
@@ -476,6 +501,39 @@ pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 }
 
 void
+pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn)
+{
+	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+
+	MtmOutputPluginPrepareWrite(ctx, true, true);
+	pglogical_write_prepare(ctx->out, data, txn, lsn);
+	MtmOutputPluginWrite(ctx, true, true);
+}
+
+void
+pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn)
+{
+	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+
+	MtmOutputPluginPrepareWrite(ctx, true, true);
+	pglogical_write_commit_prepared(ctx->out, data, txn, lsn);
+	MtmOutputPluginWrite(ctx, true, true);
+}
+
+void
+pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr lsn)
+{
+	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+
+	MtmOutputPluginPrepareWrite(ctx, true, true);
+	pglogical_write_abort_prepared(ctx->out, data, txn, lsn);
+	MtmOutputPluginWrite(ctx, true, true);
+}
+
+void
 pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				 Relation relation, ReorderBufferChange *change)
 {
@@ -610,4 +668,58 @@ static void pg_decode_shutdown(LogicalDecodingContext * ctx)
 		MemoryContextDelete(data->hooks_mctxt);
 		data->hooks_mctxt = NULL;
 	}
+}
+
+/* Filter out unnecessary two-phase transactions */
+static bool
+pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					TransactionId xid, const char *gid)
+{
+	// PGLogicalOutputData *data = ctx->output_plugin_private;
+
+	/*
+	 * decode all 2PC transactions
+	 */
+	return false;
+}
+
+/*
+ * Check if we should continue to decode this transaction.
+ *
+ * If it has aborted in the meanwhile, then there's no sense
+ * in decoding and sending the rest of the changes, we might
+ * as well ask the subscribers to abort immediately.
+ *
+ * This should be called if we are streaming a transaction
+ * before it's committed or if we are decoding a 2PC
+ * transaction. Otherwise we always decode committed
+ * transactions
+ *
+ * Additional checks can be added here, as needed
+ */
+static bool
+pg_filter_decode_txn(LogicalDecodingContext *ctx,
+					   ReorderBufferTXN *txn)
+{
+	/*
+	 * Due to caching, repeated TransactionIdDidAbort calls
+	 * shouldn't be that expensive
+	 */
+	if (txn != NULL &&
+			TransactionIdIsValid(txn->xid) &&
+			TransactionIdDidAbort(txn->xid))
+			return true;
+
+	/* if txn is NULL, filter it out */
+	return (txn != NULL)? false:true;
+}
+
+/* ABORT callback */
+static void
+pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
+					 XLogRecPtr abort_lsn)
+{
+	// PGLogicalOutputData *data = ctx->output_plugin_private;
+
+	MTM_LOG1("pg_decode_abort_txn called for " XID_FMT, txn->xid);
 }

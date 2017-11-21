@@ -68,4 +68,15 @@ typedef enum PGLogicalProtoType
 
 extern PGLogicalProtoAPI *pglogical_init_api(PGLogicalProtoType typ);
 
+
+extern void pglogical_write_prepare(StringInfo out,
+					   struct PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn);
+extern void pglogical_write_commit_prepared(StringInfo out,
+					   struct PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn);
+extern void pglogical_write_abort_prepared(StringInfo out,
+					   struct PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn);
+
 #endif /* PG_LOGICAL_PROTO_H */

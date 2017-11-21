@@ -250,106 +250,106 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 	pq_sendbytes(out, message, sz);
 }
 
-/*
- * Write COMMIT to the output stream.
- */
-static void
-pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
-					   ReorderBufferTXN *txn, XLogRecPtr commit_lsn)
-{
-    uint8 event = 0;
+// /*
+//  * Write COMMIT to the output stream.
+//  */
+// static void
+// pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
+// 					   ReorderBufferTXN *txn, XLogRecPtr commit_lsn)
+// {
+//     uint8 event = 0;
 	
-	MTM_LOG2("%d: pglogical_write_commit XID=%lld node=%d restart_decoding_lsn=%llx first_lsn=%llx end_lsn=%llx confirmed_flush=%llx", 
-			 MyProcPid, (long64)txn->xid, MtmReplicationNodeId, txn->restart_decoding_lsn, txn->first_lsn, txn->end_lsn, MyReplicationSlot->data.confirmed_flush);
+// 	MTM_LOG2("%d: pglogical_write_commit XID=%lld node=%d restart_decoding_lsn=%llx first_lsn=%llx end_lsn=%llx confirmed_flush=%llx", 
+// 			 MyProcPid, (long64)txn->xid, MtmReplicationNodeId, txn->restart_decoding_lsn, txn->first_lsn, txn->end_lsn, MyReplicationSlot->data.confirmed_flush);
 
 
-    if (txn->xact_action == XLOG_XACT_COMMIT) 
-    	event = PGLOGICAL_COMMIT;
-	else if (txn->xact_action == XLOG_XACT_PREPARE)
-    	event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
-	else if (txn->xact_action == XLOG_XACT_COMMIT_PREPARED)
-    	event = PGLOGICAL_COMMIT_PREPARED;
-	else if (txn->xact_action == XLOG_XACT_ABORT_PREPARED)
-    	event = PGLOGICAL_ABORT_PREPARED;
-	else
-    	Assert(false);
+//     if (txn->xact_action == XLOG_XACT_COMMIT) 
+//     	event = PGLOGICAL_COMMIT;
+// 	else if (txn->xact_action == XLOG_XACT_PREPARE)
+//     	event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
+// 	else if (txn->xact_action == XLOG_XACT_COMMIT_PREPARED)
+//     	event = PGLOGICAL_COMMIT_PREPARED;
+// 	else if (txn->xact_action == XLOG_XACT_ABORT_PREPARED)
+//     	event = PGLOGICAL_ABORT_PREPARED;
+// 	else
+//     	Assert(false);
 
-	if (event == PGLOGICAL_COMMIT || event == PGLOGICAL_PREPARE) {
-		/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
-		if (MtmIsFilteredTxn) { 
-			Assert(MtmTransactionRecords == 0);
-			return;
-		}
-	} else { 
-		nodemask_t partisipantsMask;
-		bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
-		csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
+// 	if (event == PGLOGICAL_COMMIT || event == PGLOGICAL_PREPARE) {
+// 		/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
+// 		if (MtmIsFilteredTxn) { 
+// 			Assert(MtmTransactionRecords == 0);
+// 			return;
+// 		}
+// 	} else { 
+// 		nodemask_t partisipantsMask;
+// 		bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+// 		csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
 
-		Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
+// 		Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
 
-		if (!isRecovery && csn == INVALID_CSN)
-		{
-			if (event == PGLOGICAL_ABORT_PREPARED) { 
-				MTM_LOG1("Skip ABORT_PREPARED for transaction %s to node %d origin %d", txn->gid, MtmReplicationNodeId, txn->origin_id);
-			}
-			Assert(MtmTransactionRecords == 0);
-			return;
-		}
-		if (isRecovery) { 
-			MTM_LOG2("PGLOGICAL_SEND recover transaction: event=%d, gid=%s, xid=%d, commit_lsn=%llx, txn->end_lsn=%llx, xlog=%llx", 
-					 event, txn->gid, txn->xid, commit_lsn, txn->end_lsn, GetXLogInsertRecPtr());
-		}
-		if (event == PGLOGICAL_ABORT_PREPARED) { 
-			MTM_LOG1("Send ABORT_PREPARED for transaction %s (%llu) end_lsn=%llx to node %d, isRecovery=%d, txn->origin_id=%d, csn=%lld", 
-					 txn->gid, (long64)txn->xid, (long64)txn->end_lsn, MtmReplicationNodeId, isRecovery, txn->origin_id, csn);
-		}
-		if (event == PGLOGICAL_PRECOMMIT_PREPARED) { 
-			MTM_LOG2("Send PGLOGICAL_PRECOMMIT_PREPARED for transaction %s (%llu) end_lsn=%llx to node %d, isRecovery=%d, txn->origin_id=%d, csn=%lld", 
-					 txn->gid, (long64)txn->xid, (long64)txn->end_lsn, MtmReplicationNodeId, isRecovery, txn->origin_id, csn);
-		}
-		MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
-	}
+// 		if (!isRecovery && csn == INVALID_CSN)
+// 		{
+// 			if (event == PGLOGICAL_ABORT_PREPARED) { 
+// 				MTM_LOG1("Skip ABORT_PREPARED for transaction %s to node %d origin %d", txn->gid, MtmReplicationNodeId, txn->origin_id);
+// 			}
+// 			Assert(MtmTransactionRecords == 0);
+// 			return;
+// 		}
+// 		if (isRecovery) { 
+// 			MTM_LOG2("PGLOGICAL_SEND recover transaction: event=%d, gid=%s, xid=%d, commit_lsn=%llx, txn->end_lsn=%llx, xlog=%llx", 
+// 					 event, txn->gid, txn->xid, commit_lsn, txn->end_lsn, GetXLogInsertRecPtr());
+// 		}
+// 		if (event == PGLOGICAL_ABORT_PREPARED) { 
+// 			MTM_LOG1("Send ABORT_PREPARED for transaction %s (%llu) end_lsn=%llx to node %d, isRecovery=%d, txn->origin_id=%d, csn=%lld", 
+// 					 txn->gid, (long64)txn->xid, (long64)txn->end_lsn, MtmReplicationNodeId, isRecovery, txn->origin_id, csn);
+// 		}
+// 		if (event == PGLOGICAL_PRECOMMIT_PREPARED) { 
+// 			MTM_LOG2("Send PGLOGICAL_PRECOMMIT_PREPARED for transaction %s (%llu) end_lsn=%llx to node %d, isRecovery=%d, txn->origin_id=%d, csn=%lld", 
+// 					 txn->gid, (long64)txn->xid, (long64)txn->end_lsn, MtmReplicationNodeId, isRecovery, txn->origin_id, csn);
+// 		}
+// 		MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
+// 	}
 
-    pq_sendbyte(out, 'C');		/* sending COMMIT */
+//     pq_sendbyte(out, 'C');		/* sending COMMIT */
 
-	MTM_LOG2("PGLOGICAL_SEND commit: event=%d, gid=%s, commit_lsn=%llx, txn->end_lsn=%llx, xlog=%llx",
-			 event, txn->gid, (long64)commit_lsn, (long64)txn->end_lsn, (long64)GetXLogInsertRecPtr());
+// 	MTM_LOG2("PGLOGICAL_SEND commit: event=%d, gid=%s, commit_lsn=%llx, txn->end_lsn=%llx, xlog=%llx",
+// 			 event, txn->gid, (long64)commit_lsn, (long64)txn->end_lsn, (long64)GetXLogInsertRecPtr());
 
-    /* send the event field */
-    pq_sendbyte(out, event);
-    pq_sendbyte(out, MtmNodeId);
+//     /* send the event field */
+//     pq_sendbyte(out, event);
+//     pq_sendbyte(out, MtmNodeId);
 
-    /* send fixed fields */
-    pq_sendint64(out, commit_lsn);
-    pq_sendint64(out, txn->end_lsn);
-    pq_sendint64(out, txn->commit_time);
+//     /* send fixed fields */
+//     pq_sendint64(out, commit_lsn);
+//     pq_sendint64(out, txn->end_lsn);
+//     pq_sendint64(out, txn->commit_time);
 
-	if (txn->origin_id != InvalidRepOriginId) { 
-		int i;
-		for (i = 0; i < Mtm->nAllNodes && Mtm->nodes[i].originId != txn->origin_id; i++);
-		if (i == Mtm->nAllNodes) { 
-			elog(WARNING, "Failed to map origin %d", txn->origin_id);
-			i = MtmNodeId-1;
-		} else { 
-			// Assert(i == MtmNodeId-1 || txn->origin_lsn != InvalidXLogRecPtr);
-		}
-		pq_sendbyte(out, i+1);
-	} else { 
-		pq_sendbyte(out, MtmNodeId);
-	}
-	pq_sendint64(out, txn->origin_lsn);
+// 	if (txn->origin_id != InvalidRepOriginId) { 
+// 		int i;
+// 		for (i = 0; i < Mtm->nAllNodes && Mtm->nodes[i].originId != txn->origin_id; i++);
+// 		if (i == Mtm->nAllNodes) { 
+// 			elog(WARNING, "Failed to map origin %d", txn->origin_id);
+// 			i = MtmNodeId-1;
+// 		} else { 
+// 			// Assert(i == MtmNodeId-1 || txn->origin_lsn != InvalidXLogRecPtr);
+// 		}
+// 		pq_sendbyte(out, i+1);
+// 	} else { 
+// 		pq_sendbyte(out, MtmNodeId);
+// 	}
+// 	pq_sendint64(out, txn->origin_lsn);
 
-	if (txn->xact_action == XLOG_XACT_COMMIT_PREPARED) { 
-		Assert(MtmTransactionRecords == 0);
-		pq_sendint64(out, MtmGetTransactionCSN(txn->xid));
-	}
-    if (txn->xact_action != XLOG_XACT_COMMIT) { 
-    	pq_sendstring(out, txn->gid);
-	}
+// 	if (txn->xact_action == XLOG_XACT_COMMIT_PREPARED) { 
+// 		Assert(MtmTransactionRecords == 0);
+// 		pq_sendint64(out, MtmGetTransactionCSN(txn->xid));
+// 	}
+//     if (txn->xact_action != XLOG_XACT_COMMIT) { 
+//     	pq_sendstring(out, txn->gid);
+// 	}
 
-	MtmTransactionRecords = 0;
-	MTM_TXTRACE(txn, "pglogical_write_commit Finish");
-}
+// 	MtmTransactionRecords = 0;
+// 	MTM_TXTRACE(txn, "pglogical_write_commit Finish");
+// }
 
 /* 
  * WAL sender caught up 
@@ -447,6 +447,159 @@ pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
 static void
 write_startup_message(StringInfo out, List *msg)
 {
+}
+
+static void
+send_node_id(StringInfo out, ReorderBufferTXN *txn)
+{
+	if (txn->origin_id != InvalidRepOriginId)
+	{
+		int i;
+		for (i = 0; i < Mtm->nAllNodes && Mtm->nodes[i].originId != txn->origin_id; i++)
+			;
+		if (i == Mtm->nAllNodes)
+		{
+			elog(WARNING, "Failed to map origin %d", txn->origin_id);
+			i = MtmNodeId - 1;
+		}
+		else
+		{
+			// Assert(i == MtmNodeId - 1 || txn->origin_lsn != InvalidXLogRecPtr);
+		}
+		pq_sendbyte(out, i + 1);
+	}
+	else
+	{
+		pq_sendbyte(out, MtmNodeId);
+	}
+}
+
+
+/*
+ * Write PREPARE/PRECOMMIT to the output stream.
+ */
+void
+pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+{
+	uint8 event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
+
+	/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
+	if (MtmIsFilteredTxn)
+		return;
+
+	/* send the event fields */
+	pq_sendbyte(out, 'C');
+	pq_sendbyte(out, event);
+	pq_sendbyte(out, MtmNodeId);
+
+	/* send fixed fields */
+	pq_sendint64(out, lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	send_node_id(out, txn);
+	pq_sendint64(out, txn->origin_lsn);
+
+	pq_sendstring(out, txn->gid);
+}
+
+/*
+ * Write COMMIT PREPARED to the output stream.
+ */
+void
+pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+{
+	uint8 event = PGLOGICAL_COMMIT_PREPARED;
+	nodemask_t partisipantsMask;
+	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+	csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
+
+	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
+
+	if (!isRecovery && csn == INVALID_CSN)
+		return;
+
+	MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
+
+	/* send the event fields */
+	pq_sendbyte(out, 'C');
+	pq_sendbyte(out, event);
+	pq_sendbyte(out, MtmNodeId);
+
+	/* send fixed fields */
+	pq_sendint64(out, lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	send_node_id(out, txn);
+	pq_sendint64(out, txn->origin_lsn);
+
+	/* only for commit prepared */
+	pq_sendint64(out, MtmGetTransactionCSN(txn->xid));
+
+	pq_sendstring(out, txn->gid);
+}
+
+/*
+ * Write ABORT PREPARED to the output stream.
+ */
+void
+pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+{
+	uint8 event = PGLOGICAL_ABORT_PREPARED;
+	nodemask_t partisipantsMask;
+	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+	csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
+
+	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
+
+	if (!isRecovery && csn == INVALID_CSN)
+		return;
+
+	MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
+
+	/* send the event fields */
+	pq_sendbyte(out, 'C');
+	pq_sendbyte(out, event);
+	pq_sendbyte(out, MtmNodeId);
+
+	/* send fixed fields */
+	pq_sendint64(out, lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	send_node_id(out, txn);
+	pq_sendint64(out, txn->origin_lsn);
+
+	/* skip CSN */
+
+	pq_sendstring(out, txn->gid);
+}
+
+static void
+pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+{
+	uint8 event = PGLOGICAL_COMMIT;
+
+	if (MtmIsFilteredTxn)
+		return;
+
+	/* send fixed fields */
+	pq_sendbyte(out, 'C');
+	pq_sendbyte(out, event);
+	pq_sendbyte(out, MtmNodeId);
+
+	/* send fixed fields */
+	pq_sendint64(out, lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	send_node_id(out, txn);
+	pq_sendint64(out, txn->origin_lsn);
 }
 
 /*
