@@ -400,7 +400,8 @@ pglogical_receiver_main(Datum main_arg)
 			/* Wait necessary amount of time */
 			rc = WaitLatch(&MyProc->procLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   receiver_idle_time * 1L);
+						   receiver_idle_time * 1L,
+						   PG_WAIT_EXTENSION);
 			ResetLatch(&MyProc->procLatch);
 			/* Process signals */
 			if (got_sighup)

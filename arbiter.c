@@ -57,7 +57,8 @@
 #include "replication/slot.h"
 #include "port/atomics.h"
 #include "tcop/utility.h"
-#include "libpq/ip.h"
+#include "common/ip.h"
+#include "pgstat.h"
 
 
 #ifndef USE_EPOLL
@@ -822,7 +823,7 @@ static void MtmMonitor(Datum arg)
 	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL);
 
 	while (!stop) {
-		int rc = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout);
+		int rc = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
 		if (rc & WL_POSTMASTER_DEATH) { 
 			break;
 		}

@@ -26,6 +26,7 @@
 #include "storage/latch.h"
 #include "storage/proc.h"
 #include "storage/ipc.h"
+#include "pgstat.h"
 
 #include "multimaster.h"
 
@@ -96,7 +97,7 @@ static void MtmRefereeLoop(char const** connections, int nConns)
 			}
 		}
 		/* Wait some time */
-		result = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout);
+		result = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
 		if (result & WL_POSTMASTER_DEATH) {
 			proc_exit(1);
 		}

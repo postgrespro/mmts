@@ -14,6 +14,8 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "common/pg_socket.h"
+#include "pgstat.h"
+#include "utils/regproc.h"
 
 #include "libpq-fe.h"
 #include "lib/stringinfo.h"
@@ -1290,7 +1292,7 @@ Mtm2PCVoting(MtmCurrentTrans* x, MtmTransState* ts)
 	{
 		MtmUnlock();
 		MTM_TXTRACE(x, "PostPrepareTransaction WaitLatch Start");
-		result = WaitLatch(&MyProc->procLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatSendTimeout);
+		result = WaitLatch(&MyProc->procLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatSendTimeout, PG_WAIT_EXTENSION);
 		MTM_TXTRACE(x, "PostPrepareTransaction WaitLatch Finish");
 		/* Emergency bailout if postmaster has died */
 		if (result & WL_POSTMASTER_DEATH) {
