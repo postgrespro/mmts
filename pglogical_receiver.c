@@ -43,6 +43,7 @@
 #include "multimaster.h"
 #include "spill.h"
 #include "state.h"
+#include "bgwpool.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
@@ -418,7 +419,10 @@ pglogical_receiver_main(Datum main_arg)
 
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
+			{
+				BgwPoolStop(&Mtm->pool);
 				proc_exit(1);
+			}
 
 			if (Mtm->status == MTM_DISABLED || (Mtm->status == MTM_RECOVERY && Mtm->recoverySlot != nodeId))
 			{
