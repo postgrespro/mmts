@@ -4217,7 +4217,6 @@ PQconnectdb_safe(const char *conninfo, int timeout)
 
 	erase_option_from_connstr("arbiter_port", safe_connstr);
 	conn = PQconnectdb(safe_connstr);
-	pfree(safe_connstr);
 
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
@@ -4225,6 +4224,8 @@ PQconnectdb_safe(const char *conninfo, int timeout)
 			safe_connstr, PQerrorMessage(conn));
 		return conn;
 	}
+
+	pfree(safe_connstr);
 
 	if (timeout != 0)
 	{
