@@ -744,11 +744,19 @@ MtmAdjustOldestXid(TransactionId xid)
 		} else {
 			oldestSnapshot = Mtm->nodes[MtmNodeId-1].oldestSnapshot;
 		}
-		for (i = 0; i < Mtm->nAllNodes; i++) {
-			if (!BIT_CHECK(Mtm->disabledNodeMask, i)
-				&& Mtm->nodes[i].oldestSnapshot < oldestSnapshot)
-			{
-				oldestSnapshot = Mtm->nodes[i].oldestSnapshot;
+		/*
+		 * If there is no activity on neighbors during recovery then they will not
+		 * advance their oldestSnapshot, so we can explode our hashes. But during
+		 * recovery do not really need to look at oldestSnapshot of neighbors.
+		 */
+		if (Mtm->status != MTM_RECOVERY)
+		{
+			for (i = 0; i < Mtm->nAllNodes; i++) {
+				if (!BIT_CHECK(Mtm->disabledNodeMask, i)
+					&& Mtm->nodes[i].oldestSnapshot < oldestSnapshot)
+				{
+					oldestSnapshot = Mtm->nodes[i].oldestSnapshot;
+				}
 			}
 		}
 		if (oldestSnapshot > MtmVacuumDelay*USECS_PER_SEC) {
