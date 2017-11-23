@@ -35,3 +35,4 @@ extern void MtmRefreshClusterStatus(void);
 extern int countZeroBits(nodemask_t mask, int nNodes);
 
 extern MtmNodeStatus MtmGetCurrentStatus(void);
+extern nodemask_t MtmGetDisabledNodeMask(void);

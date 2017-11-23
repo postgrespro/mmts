@@ -635,3 +635,16 @@ MtmGetCurrentStatus()
 	MtmUnlock();
 	return status;
 }
+
+/*
+ * Mtm current status accessor.
+ */
+nodemask_t
+MtmGetDisabledNodeMask()
+{
+	volatile nodemask_t disabledMask;
+	MtmLock(LW_SHARED);
+	disabledMask = Mtm->disabledNodeMask;
+	MtmUnlock();
+	return disabledMask;
+}
