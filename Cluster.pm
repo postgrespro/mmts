@@ -104,6 +104,7 @@ sub configure
 	my $nodes = $self->{nodes};
 
 	my $connstr = $self->all_connstrs();
+	$connstr =~ s/'//gms;
 
 	foreach my $node (@$nodes)
 	{
@@ -366,6 +367,8 @@ sub add_node()
 		$arbiter_port = (allocate_ports('127.0.0.1', 1))[0];
 		$connstrs = $self->all_connstrs() . ", dbname=postgres host=127.0.0.1 port=$pgport arbiter_port=$arbiter_port";
 	}
+
+	$connstrs =~ s/'//gms;
 
 	my $node = PostgresNode->get_new_node("node${node_id}x");
 

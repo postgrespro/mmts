@@ -46,6 +46,8 @@ my $new_connstr;
 
 $cluster->add_node();
 $new_connstr = $cluster->{nodes}->[3]->{mmconnstr};
+$new_connstr =~ s/'//gms;
+
 $cluster->psql(0, 'postgres', "SELECT mtm.add_node('$new_connstr')");
 # await for comletion?
 $cluster->{nodes}->[3]->start;
