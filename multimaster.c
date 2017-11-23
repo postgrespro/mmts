@@ -606,7 +606,7 @@ Snapshot MtmGetSnapshot(Snapshot snapshot)
 
 TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum)
 {
-	TransactionId xmin = PgGetOldestXmin(NULL, false); /* consider all backends */
+	TransactionId xmin = PgGetOldestXmin(rel, ignoreVacuum); /* consider all backends */
 	if (TransactionIdIsValid(xmin)) {
 		MtmLock(LW_EXCLUSIVE);
 		xmin = MtmAdjustOldestXid(xmin);
@@ -971,7 +971,7 @@ static void
 MtmBeginTransaction(MtmCurrentTrans* x)
 {
 	if (x->snapshot == INVALID_CSN) {
-		TransactionId xmin = (Mtm->gcCount >= MtmGcPeriod) ? PgGetOldestXminNoslot(NULL, false) : InvalidTransactionId; /* Get oldest xmin outside critical section */
+		TransactionId xmin = (Mtm->gcCount >= MtmGcPeriod) ? PgGetOldestXminNoslot(NULL, true) : InvalidTransactionId; /* Get oldest xmin outside critical section */
 
 		Assert(!x->isActive);
 		MtmLock(LW_EXCLUSIVE);
