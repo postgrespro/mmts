@@ -3251,12 +3251,12 @@ _PG_init(void)
 		return;
 	}
 
+	/* This will also perform some checks on connection strings */
+	MtmSplitConnStrs();
+
 	if (!ConfigIsSane()) {
 		MTM_ELOG(ERROR, "Multimaster config is insane, refusing to work");
 	}
-
-	/* This will also perform some checks on connection strings */
-	MtmSplitConnStrs();
 
 	MtmStartReceivers();
 
