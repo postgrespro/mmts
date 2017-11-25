@@ -12,11 +12,12 @@ import aioprocessing
 import multiprocessing
 import logging
 import re
+import pprint
 
 class MtmTxAggregate(object):
 
-    def __init__(self, name):
-        self.name = name
+    def __init__(self):
+        # self.name = name
         self.isolation = 0
         self.clear_values()
 
@@ -41,9 +42,19 @@ class MtmTxAggregate(object):
         else:
             self.finish[status] += 1
 
+    def __add__(self, other):
+        res = MtmTxAggregate()
+        res.max_latency = max(self.max_latency, other.max_latency)
+        res.isolation = self.isolation + other.isolation
+        res.finish = { k: self.finish.get(k, 0) + other.finish.get(k, 0) for k in set(self.finish) | set(other.finish) }
+        return res
+
+    def __repr__(self):
+        return str(self.as_dict())
+
     def as_dict(self):
         return {
-            'running_latency': 'xxx', #(datetime.datetime.now() - self.start_time).total_seconds(),
+            # 'running_latency': 'xxx', #(datetime.datetime.now() - self.start_time).total_seconds(),
             'max_latency': self.max_latency,
             'isolation': self.isolation,
             'finish': copy.deepcopy(self.finish)
@@ -67,7 +78,7 @@ class MtmClient(object):
         self.n_accounts = n_accounts
         self.dsns = dsns
         self.total = 0
-        self.aggregates = {}
+        self.aggregates = [{} for e in dsns]
         keep_trying(40, 1, self.initdb, 'self.initdb')
         self.running = True
         self.nodes_state_fields = ["id", "disabled", "disconnected", "catchUp", "slotLag",
@@ -162,24 +173,30 @@ class MtmClient(object):
             if msg == 'status' or msg == 'status_noclean':
                 serialized_aggs = []
 
-                for conn_id, conn_aggs in self.aggregates.items():
+                for node_id, node_aggs in enumerate(self.aggregates):
                     serialized_aggs.append({})
-                    for aggname, agg in conn_aggs.items():
-                        serialized_aggs[conn_id][aggname] = agg.as_dict()
-                        if msg == 'status':
-                            agg.clear_values()
+                    for aggname, aggarray in node_aggs.items():
+                        total_agg = MtmTxAggregate()
+                        for agg in aggarray:
+                            total_agg += agg
+                            if msg == 'status':
+                                agg.clear_values()
+                        serialized_aggs[node_id][aggname] = total_agg.as_dict()
 
                 yield from self.child_pipe.coro_send(serialized_aggs)
             else:
                 print('evloop: unknown message')
 
     @asyncio.coroutine
-    def exec_tx(self, tx_block, aggname_prefix, conn_i):
-        aggname = "%s_%i" % (aggname_prefix, conn_i)
-        if conn_i not in self.aggregates:
-            self.aggregates[conn_i] = {}
-        agg = self.aggregates[conn_i][aggname_prefix] = MtmTxAggregate(aggname)
-        dsn = self.dsns[conn_i]
+    def exec_tx(self, tx_block, node_id, aggname_prefix, conn_i):
+        # aggname = "%i_%s_%i" % (aggname_prefix, conn_i)
+
+        if aggname_prefix not in self.aggregates[node_id]:
+            self.aggregates[node_id][aggname_prefix] = []
+
+        agg = MtmTxAggregate()
+        self.aggregates[node_id][aggname_prefix].append(agg)
+        dsn = self.dsns[node_id]
 
         conn = cur = False
 
@@ -272,8 +289,9 @@ class MtmClient(object):
         self.loop = asyncio.get_event_loop()
 
         for i, _ in enumerate(self.dsns):
-            asyncio.ensure_future(self.exec_tx(self.transfer_tx, 'transfer', i))
-            asyncio.ensure_future(self.exec_tx(self.total_tx, 'sumtotal', i))
+            for j in range(15):
+                asyncio.ensure_future(self.exec_tx(self.transfer_tx, i, 'transfer', j))
+            asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
 
         asyncio.ensure_future(self.status())
 
@@ -308,7 +326,7 @@ class MtmClient(object):
 
     @classmethod
     def print_aggregates(cls, aggs):
-            columns = ['running_latency', 'max_latency', 'isolation', 'finish']
+            columns = ['max_latency', 'isolation', 'finish']
 
             # print table header
             print("\t\t", end="")
@@ -328,11 +346,11 @@ class MtmClient(object):
             print("")
 
 if __name__ == "__main__":
-    c = MtmClient(['dbname=postgres user=postgres host=127.0.0.1',
-        'dbname=postgres user=postgres host=127.0.0.1 port=5433',
-        'dbname=postgres user=postgres host=127.0.0.1 port=5434'], n_accounts=10000)
+    c = MtmClient(['dbname=regression user=postgres host=127.0.0.1 port=15432',
+        'dbname=regression user=postgres host=127.0.0.1 port=15433'], n_accounts=10000)
     c.bgrun()
     while True:
-        time.sleep(1)
-        aggs = c.get_status()
-        MtmClient.print_aggregates(aggs)
+        time.sleep(5)
+        print('='*80)
+        aggs = c.get_aggregates()
+        # MtmClient.print_aggregates(aggs)

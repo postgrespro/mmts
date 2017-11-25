@@ -2917,7 +2917,7 @@ _PG_init(void)
 		"When wal-sender almost catch-up WAL current position we need to stop 'Achilles tortile competition' and "
 		"temporary stop commit of new transactions until node will be completely repared",
 		&MtmMinRecoveryLag,
-		10 * 1024, /* 10 MB */
+		10, /* 10 kB */
 		0,
 		INT_MAX,
 		PGC_SIGHUP,

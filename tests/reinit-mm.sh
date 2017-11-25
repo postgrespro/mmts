@@ -19,16 +19,16 @@ make clean && make install
 
 cd $BASEDIR/contrib/mmts/tests
 
-rm -rf referee node? *.log
+rm -rf tmp_check *.log
 
 ###############################################################################
 
-initdb referee
-cat <<SQL > referee/postgresql.conf
+initdb tmp_check/referee
+cat <<SQL > tmp_check/referee/postgresql.conf
     listen_addresses='*'
     port = '5440'
 SQL
-pg_ctl -w -D referee -l referee.log start
+pg_ctl -w -D tmp_check/referee -l referee.log start
 createdb -p 5440
 psql -p 5440 -c 'create extension referee'
 
@@ -42,10 +42,10 @@ do
     arbiter_port=$((7000 + i))
     conn_str="$conn_str${sep} dbname=$USER host=127.0.0.1 port=$port arbiter_port=$arbiter_port sslmode=disable"
     sep=","
-    initdb node$i
-    pg_ctl -w -D node$i -l node$i.log start
+    initdb tmp_check/node$i
+    pg_ctl -w -D tmp_check/node$i -l node$i.log start
     createdb
-    pg_ctl -w -D node$i -l node$i.log stop
+    pg_ctl -w -D tmp_check/node$i -l node$i.log stop
 done
 
 echo "Starting nodes..."
@@ -56,7 +56,7 @@ do
     port=$((5431+i))
     arbiter_port=$((7000 + i))
 
-    cat <<SQL > node$i/postgresql.conf
+    cat <<SQL > tmp_check/node$i/postgresql.conf
         listen_addresses='*'
         port = '$port'
         max_prepared_transactions = 300
@@ -76,8 +76,8 @@ do
         multimaster.max_recovery_lag = 30GB
         multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
 SQL
-    cp pg_hba.conf node$i
-    pg_ctl -w -D node$i -l node$i.log start
+    cp pg_hba.conf tmp_check/node$i
+    pg_ctl -w -D tmp_check/node$i -l node$i.log start
 done
 
 sleep 10
