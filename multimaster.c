@@ -150,7 +150,7 @@ static void MtmEndTransaction(MtmCurrentTrans* x, bool commit);
 static bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 static TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum);
 static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
-static TransactionId MtmAdjustOldestXid(TransactionId xid);
+static void MtmAdjustOldestXid(void);
 static bool MtmDetectGlobalDeadLock(PGPROC* proc);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId* subxids, int nSubxids);
 static char const* MtmGetName(void);
@@ -205,7 +205,7 @@ static TransactionManager MtmTM =
 	MtmGetOldestXmin,
 	PgTransactionIdIsInProgress,
 	PgGetGlobalTransactionId,
-	MtmXidInMVCCSnapshot,
+	PgXidInMVCCSnapshot,
 	MtmDetectGlobalDeadLock,
 	MtmGetName,
 	MtmGetTransactionStateSize,
@@ -599,7 +599,7 @@ Snapshot MtmGetSnapshot(Snapshot snapshot)
 			LogLogicalMessage("S", (char*)&MtmTx.snapshot, sizeof(MtmTx.snapshot), true);
 		}
 	}
-	RecentGlobalDataXmin = RecentGlobalXmin = Mtm->oldestXid;
+	// RecentGlobalDataXmin = RecentGlobalXmin = Mtm->oldestXid;
 	return snapshot;
 }
 
@@ -607,11 +607,11 @@ Snapshot MtmGetSnapshot(Snapshot snapshot)
 TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum)
 {
 	TransactionId xmin = PgGetOldestXmin(rel, ignoreVacuum); /* consider all backends */
-	if (TransactionIdIsValid(xmin)) {
-		MtmLock(LW_EXCLUSIVE);
-		xmin = MtmAdjustOldestXid(xmin);
-		MtmUnlock();
-	}
+	// if (TransactionIdIsValid(xmin)) {
+	// 	MtmLock(LW_EXCLUSIVE);
+	// 	xmin = MtmAdjustOldestXid(xmin);
+	// 	MtmUnlock();
+	// }
 	return xmin;
 }
 
@@ -644,10 +644,23 @@ bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
 
 	for (i = 0; i < MAX_WAIT_LOOPS; i++)
 	{
+		csn_t csn;
+		RepOriginId reporigin_id;
 		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
 		if (ts != NULL /*&& ts->status != TRANSACTION_STATUS_IN_PROGRESS*/)
 		{
-			if (ts->csn > MtmTx.snapshot) {
+
+			if (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS)
+				csn = ts->csn;
+			else
+				TransactionIdGetCommitTsData(xid, &csn, &reporigin_id);
+
+			if (ts->csn != csn && ts->status != TRANSACTION_STATUS_ABORTED)
+			{
+				MTM_LOG1("WOW! %d: tuple with xid=%lld(csn=%ld / %ld) woes in snapshot %ld (s=%d)", MyProcPid, (long64)xid, csn, ts->csn, MtmTx.snapshot, ts->status);
+			}
+
+			if (csn > MtmTx.snapshot) {
 				MTM_LOG4("%d: tuple with xid=%lld(csn=%lld) is invisible in snapshot %lld",
 						 MyProcPid, (long64)xid, ts->csn, MtmTx.snapshot);
 #if DEBUG_LEVEL > 1
@@ -726,89 +739,41 @@ bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
  * We collect oldest CSNs from all nodes and choose minimum from them.
  * If no such XID can be located, then return previously observed oldest XID
  */
-static TransactionId
-MtmAdjustOldestXid(TransactionId xid)
+static void
+MtmAdjustOldestXid(void)
 {
-	int i;
-	csn_t oldestSnapshot = INVALID_CSN;
-	MtmTransState *prev = NULL;
-	MtmTransState *ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
-	MTM_LOG2("%d: MtmAdjustOldestXid(%d): snapshot=%lld, csn=%lld, status=%d", MyProcPid, xid, ts != NULL ? ts->snapshot : 0, ts != NULL ? ts->csn : 0, ts != NULL ? ts->status : -1);
-	Mtm->gcCount = 0;
+	MtmL2List *start = Mtm->activeTransList.next;
+	MtmL2List *cur;
 
-	if (ts != NULL) {
-		oldestSnapshot = ts->snapshot;
-		Assert(oldestSnapshot != INVALID_CSN);
-		if (Mtm->nodes[MtmNodeId-1].oldestSnapshot < oldestSnapshot) {
-			Mtm->nodes[MtmNodeId-1].oldestSnapshot = oldestSnapshot;
-		} else {
-			oldestSnapshot = Mtm->nodes[MtmNodeId-1].oldestSnapshot;
-		}
-		/*
-		 * If there is no activity on neighbors during recovery then they will not
-		 * advance their oldestSnapshot, so we can explode our hashes. But during
-		 * recovery do not really need to look at oldestSnapshot of neighbors.
-		 */
-		if (Mtm->status != MTM_RECOVERY)
-		{
-			for (i = 0; i < Mtm->nAllNodes; i++) {
-				if (!BIT_CHECK(Mtm->disabledNodeMask, i)
-					&& Mtm->nodes[i].oldestSnapshot < oldestSnapshot)
-				{
-					oldestSnapshot = Mtm->nodes[i].oldestSnapshot;
-				}
-			}
-		}
-		if (oldestSnapshot > MtmVacuumDelay*USECS_PER_SEC) {
-			oldestSnapshot -= MtmVacuumDelay*USECS_PER_SEC;
-		} else {
-			oldestSnapshot = 0;
-		}
-
-		for (ts = Mtm->transListHead;
-			 ts != NULL
-				 && (ts->status == TRANSACTION_STATUS_ABORTED || ts->status == TRANSACTION_STATUS_COMMITTED)
-				 && ts->csn < oldestSnapshot
-				 && !ts->isPinned
-				 && TransactionIdPrecedes(ts->xid, xid);
-			 prev = ts, ts = ts->next)
-		{
-			Assert(!ts->isActive);
-			if (prev != NULL) {
-				/* Remove information about too old transactions */
-				hash_search(MtmXid2State, &prev->xid, HASH_REMOVE, NULL);
-				hash_search(MtmGid2State, &prev->gid, HASH_REMOVE, NULL);
-			}
-		}
-		if (ts != NULL) {
-			MTM_LOG2("Adjust(%lld) stop at snashot %lld, xid %lld, pinned=%d, oldestSnaphsot=%lld\n",
-					 (long64)xid, ts->csn, (long64)ts->xid, ts->isPinned, oldestSnapshot);
-		}
-	}
-
-	if (MtmUseDtm && !MtmVolksWagenMode)
+	for (cur = start; cur->next != start; cur = cur->next)
 	{
-		if (prev != NULL) {
-			MTM_LOG2("%d: MtmAdjustOldestXid: oldestXid=%d, prev->xid=%d, prev->status=%s, prev->snapshot=%lld, ts->xid=%d, ts->status=%d, ts->snapshot=%lld, oldestSnapshot=%lld",
-					 MyProcPid, xid, prev->xid, MtmTxnStatusMnem[prev->status], prev->snapshot, (ts ? ts->xid : 0), (ts ? ts->status : -1), (ts ? ts->snapshot : -1), oldestSnapshot);
-			Mtm->transListHead = prev;
-			Mtm->oldestXid = xid = prev->xid;
-		} else if (TransactionIdPrecedes(Mtm->oldestXid, xid)) {
-			xid = Mtm->oldestXid;
+		MtmTransState *ts = MtmGetActiveTransaction(cur);
+
+		if ( (ts->status == TRANSACTION_STATUS_ABORTED
+				|| ts->status == TRANSACTION_STATUS_COMMITTED)
+			 && !ts->isActive
+			 && !ts->isPinned
+			 && ts->csn < (MtmGetCurrentTime() - MtmVacuumDelay*USECS_PER_SEC) )
+		{
+			ts->activeList.prev->next = ts->activeList.next;
+			ts->activeList.next->prev = ts->activeList.prev;
+			if (cur == start)
+				start = cur->next;
+			hash_search(MtmXid2State, &ts->xid, HASH_REMOVE, NULL);
+			hash_search(MtmGid2State, &ts->gid, HASH_REMOVE, NULL);
 		}
-	} else {
-		if (prev != NULL) {
-			MTM_LOG2("%d: MtmAdjustOldestXid: oldestXid=%d, prev->xid=%d, prev->status=%s, prev->snapshot=%lld, ts->xid=%d, ts->status=%d, ts->snapshot=%lld, oldestSnapshot=%lld",
-					 MyProcPid, xid, prev->xid, MtmTxnStatusMnem[prev->status], prev->snapshot, (ts ? ts->xid : 0), (ts ? ts->status : -1), (ts ? ts->snapshot : -1), oldestSnapshot);
-			Mtm->transListHead = prev;
+		else
+		{
+			if (TransactionIdPrecedes(ts->xid, Mtm->oldestXid))
+				Mtm->oldestXid = ts->xid;
 		}
 	}
+
+	Mtm->gcCount = 0;
 
 	if (!MyReplicationSlot) {
 		MtmCheckSlots();
 	}
-
-	return xid;
 }
 
 
@@ -971,12 +936,11 @@ static void
 MtmBeginTransaction(MtmCurrentTrans* x)
 {
 	if (x->snapshot == INVALID_CSN) {
-		TransactionId xmin = (Mtm->gcCount >= MtmGcPeriod) ? PgGetOldestXminNoslot(NULL, true) : InvalidTransactionId; /* Get oldest xmin outside critical section */
 
 		Assert(!x->isActive);
 		MtmLock(LW_EXCLUSIVE);
-		if (TransactionIdIsValid(xmin) && Mtm->gcCount >= MtmGcPeriod) {
-			MtmAdjustOldestXid(xmin);
+		if (Mtm->gcCount >= MtmGcPeriod) {
+			MtmAdjustOldestXid();
 		}
 
 		x->xid = GetCurrentTransactionIdIfAny();
@@ -1074,8 +1038,9 @@ static void MtmActivateTransaction(MtmTransState* ts)
 static void MtmDeactivateTransaction(MtmTransState* ts)
 {
 	if (ts->isActive) {
-		ts->activeList.prev->next = ts->activeList.next;
-		ts->activeList.next->prev = ts->activeList.prev;
+		/*
+		 * We'll clean that later during adjustOldestXid
+		 */
 		ts->isActive = false;
 		Assert(Mtm->nActiveTransactions != 0);
 		Mtm->nActiveTransactions -= 1;
@@ -1428,15 +1393,35 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 
 	MTM_TXTRACE(x, "MtmPreCommitPreparedTransaction Start");
 
-	if (Mtm->status == MTM_RECOVERY || x->isReplicated || x->isPrepared) { /* Ignore auto-2PC originated by multimaster */
+	/* Ignore auto-2PC originated by multimaster */
+	if (Mtm->status == MTM_RECOVERY || x->isReplicated || x->isPrepared)
+	{
 		return;
 	}
+
 	MtmLock(LW_EXCLUSIVE);
 	tm = (MtmTransMap*)hash_search(MtmGid2State, x->gid, HASH_FIND, NULL);
-	if (tm == NULL) {
+	if (tm == NULL)
+	{
 		MTM_ELOG(WARNING, "Global transaction ID '%s' is not found", x->gid);
-	} else {
-		Assert(tm->state != NULL);
+	}
+	else
+	{
+		// /*
+		//  * Here we should match logic csn shifting logic of MtmEndTransaction.
+		//  */
+		// if (Mtm->status == MTM_RECOVERY)
+		// 	ForceCurrentTransactionTimestamp(x->csn);
+		// else
+		// 	ForceCurrentTransactionTimestamp(Max(x->csn, tm->state->csn));
+
+		// /* Ignore auto-2PC originated by multimaster */
+		// if (Mtm->status == MTM_RECOVERY || x->isReplicated || x->isPrepared)
+		// {
+		// 	MtmUnlock();
+		// 	return;
+		// }
+
 		MTM_LOG3("Commit prepared transaction %d with gid='%s'", x->xid, x->gid);
 		ts = tm->state;
 
@@ -3121,7 +3106,7 @@ _PG_init(void)
 		"Minimal age of records which can be vacuumed (seconds)",
 		NULL,
 		&MtmVacuumDelay,
-		1,
+		4,
 		1,
 		INT_MAX,
 		PGC_BACKEND,

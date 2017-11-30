@@ -94,7 +94,7 @@
 #define Natts_mtm_nodes_state   17
 #define Natts_mtm_cluster_state 21
 
-typedef ulong64 csn_t; /* commit serial number */
+typedef TimestampTz csn_t; /* commit serial number */
 #define INVALID_CSN  ((csn_t)-1)
 
 typedef ulong64 lsn_t;
