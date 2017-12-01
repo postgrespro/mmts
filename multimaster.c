@@ -1750,7 +1750,7 @@ static void	MtmLoadPreparedTransactions(void)
 			MtmTransactionListAppend(ts);
 			tm->status = ts->status;
 			tm->state = ts;
-			MtmBroadcastPollMessage(ts);
+			// MtmBroadcastPollMessage(ts);
 		}
 	}
 	MTM_LOG1("Recover %d prepared transactions", n);
@@ -3404,7 +3404,7 @@ MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shut
 		{
 			/* Lock on us */
 			Mtm->recoverySlot = nodeId;
-			MtmPollStatusOfPreparedTransactions();
+			// MtmPollStatusOfPreparedTransactions();
 			MtmUnlock();
 			return REPLMODE_RECOVERY;
 		}
