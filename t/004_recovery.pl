@@ -86,13 +86,13 @@ $cluster->pgbench(1, ('-N', -T => '1') );
 $cluster->pgbench(2, ('-N', -T => '1') );
 
 # kill node while neighbour is under load
-my $pgb_handle = $cluster->pgbench_async(1, ('-N', -T => '20') );
+my $pgb_handle = $cluster->pgbench_async(1, ('-N', -T => '20', -c => '5') );
 sleep(5);
 $cluster->{nodes}->[2]->stop('fast');
 $cluster->pgbench_await($pgb_handle);
 
 # start node while neighbour is under load
-$pgb_handle = $cluster->pgbench_async(0, ('-N', -T => '20') );
+$pgb_handle = $cluster->pgbench_async(0, ('-N', -T => '20', -c => '5') );
 sleep(5);
 $cluster->{nodes}->[2]->start;
 $cluster->pgbench_await($pgb_handle);
@@ -114,6 +114,12 @@ $cluster->psql(2, 'postgres', "select sum(abalance) from pgbench_accounts;", std
 note("Sums: $sum0, $sum1, $sum2");
 is($sum2, $sum0, "Check that sum_2 == sum_0");
 is($sum2, $sum1, "Check that sum_2 == sum_1");
+
+$cluster->psql(0, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum0);
+$cluster->psql(1, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum1);
+$cluster->psql(2, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum2);
+
+note("Number of prepared tx: $sum0, $sum1, $sum2");
 
 $cluster->{nodes}->[0]->stop('fast');
 $cluster->{nodes}->[1]->stop('fast');
