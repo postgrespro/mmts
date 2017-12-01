@@ -41,7 +41,7 @@
 #define MTM_LOG4(fmt, ...) fprintf(stderr, fmt "\n", ## __VA_ARGS__)
 #endif
 
-#define MTM_TXFINISH 1
+// #define MTM_TXFINISH 1
 
 #ifndef MTM_TXFINISH
 #define TXFINISH(fmt, ...)
