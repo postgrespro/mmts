@@ -3786,6 +3786,10 @@ bool MtmFilterTransaction(char* record, int size)
 	  default:
 		break;
 	}
+
+	// if (event != PGLOGICAL_COMMIT_PREPARED)
+	return false;
+
 	restart_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
 	if (Mtm->nodes[origin_node-1].restartLSN < restart_lsn) {
 		MTM_LOG2("[restartlsn] node %d: %llx -> %llx (MtmFilterTransaction)", MtmReplicationNodeId, Mtm->nodes[MtmReplicationNodeId-1].restartLSN, restart_lsn);
