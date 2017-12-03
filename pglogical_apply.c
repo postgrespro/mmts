@@ -463,8 +463,8 @@ process_remote_message(StringInfo s)
 			 * restartLSN without locks
 			 */
 			if (origin_node == MtmReplicationNodeId) { 
-				Assert(msg->origin_lsn == INVALID_LSN);
-				msg->origin_lsn = MtmSenderWalEnd;
+				// Assert(msg->origin_lsn == INVALID_LSN);
+				// msg->origin_lsn = MtmSenderWalEnd;
 			}
 			MtmRollbackPreparedTransaction(origin_node, msg->gid);
 			// if (Mtm->nodes[origin_node-1].restartLSN < msg->origin_lsn) { 
