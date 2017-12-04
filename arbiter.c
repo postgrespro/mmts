@@ -1000,10 +1000,16 @@ static void MtmReceiver(Datum arg)
 									if ((ts->participantsMask & ~Mtm->disabledNodeMask & ~ts->votedMask) == 0) {
 										MTM_ELOG(LOG, "Commit transaction %s because it is prepared at all live nodes", msg->gid);		
 
-										replorigin_session_origin = DoNotReplicateId;
+										ts->status = msg->status;
+										MtmWakeUpBackend(ts);
+										// replorigin_session_origin = DoNotReplicateId;
 										TXFINISH("%s COMMIT, MSG_POLL_STATUS", msg->gid);
-										MtmFinishPreparedTransaction(ts, true);
-										replorigin_session_origin = InvalidRepOriginId;
+										// MtmUnlock();
+										// LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
+										// MtmFinishPreparedTransaction(ts, true);
+										// LWLockRelease(TwoPhaseStateLock);
+										// MtmLock(LW_EXCLUSIVE);
+										// replorigin_session_origin = InvalidRepOriginId;
 									} else { 
 										MTM_LOG1("Receive response for transaction %s -> %s, participants=%llx, voted=%llx", 
 												 msg->gid, MtmTxnStatusMnem[msg->status], ts->participantsMask, ts->votedMask);		
