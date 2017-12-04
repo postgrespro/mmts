@@ -306,8 +306,8 @@ sub pgbench_async()
 sub pgbench_await()
 {
 	my ($self, $pgbench_handle) = @_;
-	note("finished pgbench");
 	IPC::Run::finish($pgbench_handle) || BAIL_OUT("pgbench exited with $?");
+	note("finished pgbench");
 }
 
 sub is_data_identic()
