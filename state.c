@@ -186,6 +186,18 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY:
+			/*
+			 * With big heartbeat recv timeout it can heppend that other node will
+			 * restart faster than we can detect that. Without disabledNodeMask bit set
+			 * we will never send recovery_finish in such case. So set it now.
+			 *
+			 * It is also possible to change logic of recovery_finish but for
+			 * now it is easier to do it here. MtmIsRecoveredNode deserves rewrite anyway.
+			 */
+			if (!BIT_CHECK(Mtm->disabledNodeMask, node_id-1))
+			{
+				BIT_SET(Mtm->disabledNodeMask, node_id-1);
+			}
 			// BIT_SET(Mtm->pglogicalSenderMask, node_id - 1);
 			break;
 
