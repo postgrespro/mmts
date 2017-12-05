@@ -3,8 +3,10 @@ USER=`whoami`
 BASEDIR=$CURPATH/../../..
 export PATH=$BASEDIR/tmp_install/usr/local/pgsql/bin/:$PATH
 export DESTDIR=$BASEDIR/tmp_install
+export PGHOST=127.0.0.1
+export LD_LIBRARY_PATH=$BASEDIR/tmp_install/usr/local/pgsql/lib/:$LD_LIBRARY_PATH
 
-n_nodes=2
+n_nodes=3
 ulimit -c unlimited
 pkill -9 postgres
 
@@ -75,6 +77,7 @@ do
         multimaster.arbiter_port = $arbiter_port
         multimaster.max_recovery_lag = 30GB
         multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
+	#multimaster.preserve_commit_order=false
 SQL
     cp pg_hba.conf tmp_check/node$i
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
