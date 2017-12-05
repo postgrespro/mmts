@@ -287,9 +287,9 @@ void MtmDisableNode(int nodeId)
 
 	if (Mtm->status == MTM_ONLINE) {
 		/* Make decision about prepared transaction status only in quorum */
-		MtmLock(LW_EXCLUSIVE);
-		MtmPollStatusOfPreparedTransactionsForDisabledNode(nodeId, false);
-		MtmUnlock();
+		//MtmLock(LW_EXCLUSIVE);
+		//MtmPollStatusOfPreparedTransactionsForDisabledNode(nodeId, false);
+		//MtmUnlock();
 	}
 }
 
