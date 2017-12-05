@@ -134,7 +134,7 @@ sub configure
 			multimaster.workers = 1
 			multimaster.node_id = $id
 			multimaster.conn_strings = '$connstr'
-			multimaster.heartbeat_recv_timeout = 1050
+			multimaster.heartbeat_recv_timeout = 4050
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_nodes = 6
 			multimaster.ignore_tables_without_pk = false
@@ -306,7 +306,7 @@ sub pgbench_async()
 sub pgbench_await()
 {
 	my ($self, $pgbench_handle) = @_;
-	IPC::Run::finish($pgbench_handle) || BAIL_OUT("pgbench exited with $?");
+	IPC::Run::finish($pgbench_handle) or diag("WARNING: pgbench exited with $?");
 	note("finished pgbench");
 }
 
@@ -401,7 +401,11 @@ sub await_nodes()
 
 	foreach my $i (@nodenums)
 	{
-		$self->{nodes}->[$i]->poll_query_until('postgres', "select 't'");
+		if (!$self->{nodes}->[$i]->poll_query_until('postgres', "select 't'"))
+		{
+			# sleep(3600);
+			die "Timed out while waiting for mm node to became online";
+		}
 	}
 }
 
