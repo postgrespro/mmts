@@ -67,7 +67,7 @@ if [ "$1" = 'postgres' ]; then
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_recovery_lag = 1GB
 			multimaster.min_recovery_lag = 10kB
-			multimaster.preserve_commit_order = off
+			multimaster.preserve_commit_order = on
 		EOF
 
 		if [ -n "$NODE_ID" ]; then

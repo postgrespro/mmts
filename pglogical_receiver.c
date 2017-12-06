@@ -349,10 +349,10 @@ pglogical_receiver_main(Datum main_arg)
 			resetPQExpBuffer(query);
 			Mtm->nodes[nodeId-1].manualRecovery = false;
 		} else {
-			// if (Mtm->nodes[nodeId-1].restartLSN < originStartPos) {
-			// 	MTM_LOG1("Advance restartLSN for node %d: from %llx to %llx (pglogical_receiver_main)", nodeId, Mtm->nodes[nodeId-1].restartLSN, originStartPos);
-			// 	Mtm->nodes[nodeId-1].restartLSN = originStartPos;
-			// }
+			if (Mtm->nodes[nodeId-1].restartLSN < originStartPos) {
+				MTM_LOG1("Advance restartLSN for node %d: from %llx to %llx (pglogical_receiver_main)", nodeId, Mtm->nodes[nodeId-1].restartLSN, originStartPos);
+				Mtm->nodes[nodeId-1].restartLSN = originStartPos;
+			}
 			MTM_LOG1("Restart logical receiver at position %llx from node %d", originStartPos, nodeId);
 		}
 

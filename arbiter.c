@@ -366,6 +366,10 @@ static void MtmSendHeartbeat()
 				 * true when disabled node connects to a major node which
 				 * is online. So just send it allways. --sk
 				 */
+				/*
+				 * Also recovered node need full visibitily matrix to build proper
+				 * clique. So hearbeats should be sent disregarding disabledNodeMask.
+				 */
 				// && (Mtm->status != MTM_ONLINE
 				// 	|| sockets[i] >= 0
 				// 	|| !BIT_CHECK(Mtm->disabledNodeMask, i)
@@ -1000,16 +1004,10 @@ static void MtmReceiver(Datum arg)
 									if ((ts->participantsMask & ~Mtm->disabledNodeMask & ~ts->votedMask) == 0) {
 										MTM_ELOG(LOG, "Commit transaction %s because it is prepared at all live nodes", msg->gid);		
 
-										ts->status = msg->status;
-										MtmWakeUpBackend(ts);
-										// replorigin_session_origin = DoNotReplicateId;
+										replorigin_session_origin = DoNotReplicateId;
 										TXFINISH("%s COMMIT, MSG_POLL_STATUS", msg->gid);
-										// MtmUnlock();
-										// LWLockAcquire(TwoPhaseStateLock, LW_EXCLUSIVE);
-										// MtmFinishPreparedTransaction(ts, true);
-										// LWLockRelease(TwoPhaseStateLock);
-										// MtmLock(LW_EXCLUSIVE);
-										// replorigin_session_origin = InvalidRepOriginId;
+										MtmFinishPreparedTransaction(ts, true);
+										replorigin_session_origin = InvalidRepOriginId;
 									} else { 
 										MTM_LOG1("Receive response for transaction %s -> %s, participants=%llx, voted=%llx", 
 												 msg->gid, MtmTxnStatusMnem[msg->status], ts->participantsMask, ts->votedMask);		

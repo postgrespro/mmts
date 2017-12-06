@@ -289,7 +289,7 @@ class MtmClient(object):
         self.loop = asyncio.get_event_loop()
 
         for i, _ in enumerate(self.dsns):
-            for j in range(15):
+            for j in range(3):
                 asyncio.ensure_future(self.exec_tx(self.transfer_tx, i, 'transfer', j))
             asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
 
