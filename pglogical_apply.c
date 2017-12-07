@@ -468,8 +468,8 @@ process_remote_message(StringInfo s)
 			}
 			if (Mtm->nodes[origin_node-1].restartLSN < msg->origin_lsn) { 
 				MTM_LOG1("Receive logical abort message for transaction %s from node %d: %llx < %llx", msg->gid, origin_node, Mtm->nodes[origin_node-1].restartLSN, msg->origin_lsn);
-				Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
-				replorigin_session_origin_lsn = msg->origin_lsn; 				
+				// Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
+				// replorigin_session_origin_lsn = msg->origin_lsn;
 				MtmRollbackPreparedTransaction(origin_node, msg->gid);
 			} else { 
 				if (msg->origin_lsn != INVALID_LSN) { 
