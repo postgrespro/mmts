@@ -968,7 +968,12 @@ static void MtmReceiver(Datum arg)
 						tm = (MtmTransMap*)hash_search(MtmGid2State, msg->gid, HASH_FIND, NULL);
 						if (tm == NULL || tm->state == NULL)
 						{
-							XidStatus status = GetLoggedPreparedXactState(msg->gid);
+							XidStatus status;
+
+							MtmUnlock();
+							status = GetLoggedPreparedXactState(msg->gid);
+							MtmLock(LW_EXCLUSIVE);
+
 							if (status == TRANSACTION_STATUS_UNKNOWN)
 							{
 								MTM_ELOG(WARNING, "Request for unexisted transaction %s from node %d", msg->gid, node);
