@@ -966,10 +966,21 @@ static void MtmReceiver(Datum arg)
 					  case MSG_POLL_REQUEST:
 						Assert(*msg->gid);
 						tm = (MtmTransMap*)hash_search(MtmGid2State, msg->gid, HASH_FIND, NULL);
-						if (tm == NULL || tm->state == NULL) { 
-							MTM_ELOG(WARNING, "Request for unexisted transaction %s from node %d", msg->gid, node);
-							msg->status = TRANSACTION_STATUS_ABORTED;
-						} else {
+						if (tm == NULL || tm->state == NULL)
+						{
+							XidStatus status = GetLoggedPreparedXactState(msg->gid);
+							if (status == TRANSACTION_STATUS_UNKNOWN)
+							{
+								MTM_ELOG(WARNING, "Request for unexisted transaction %s from node %d", msg->gid, node);
+							}
+							else
+							{
+								MTM_LOG1("Request for existed transaction %s from node %d -> %d", msg->gid, node, status);
+								msg->status = status;
+							}
+						}
+						else
+						{
 							msg->status = tm->state->status;
 							msg->csn = tm->state->csn;
 							MTM_LOG1("Send response %s for transaction %s to node %d", MtmTxnStatusMnem[msg->status], msg->gid, node);
