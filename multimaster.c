@@ -1364,6 +1364,15 @@ MtmPostPrepareTransaction(MtmCurrentTrans* x)
 	} else {
 		if (!ts->isLocal)  {
 			Mtm2PCVoting(x, ts);
+
+			/* recheck under lock that nothing is changed */
+			if (ts->nConfigChanges != Mtm->nConfigChanges)
+			{
+				MTM_ELOG(WARNING, "XX Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
+					ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+				MtmAbortTransaction(ts);
+				x->status = TRANSACTION_STATUS_ABORTED;
+			}
 		} else {
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
 			ts->votingCompleted = true;
@@ -1437,6 +1446,15 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 			MtmLock(LW_EXCLUSIVE);
 
 			Mtm2PCVoting(x, ts);
+
+			/* recheck under lock that nothing is changed */
+			if (ts->nConfigChanges != Mtm->nConfigChanges)
+			{
+				MTM_ELOG(WARNING, "X Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
+					ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+				MtmAbortTransaction(ts);
+				x->status = TRANSACTION_STATUS_ABORTED;
+			}
 		} else {
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
 		}
