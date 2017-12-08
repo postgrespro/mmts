@@ -975,7 +975,7 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 			&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
 			&& !MtmBypass)
 		{
-			MtmCheckClusterLock();
+			// MtmCheckClusterLock();
 		}
 		MtmInsideTransaction = true;
 		MtmDDLStatement = NULL;
@@ -5125,7 +5125,7 @@ static void MtmProcessUtility(Node *parsetree, const char *queryString,
 
 		case T_TruncateStmt:
 			skipCommand = false;
-			MtmLockCluster();
+			// MtmLockCluster();
 			break;
 
 		case T_DropStmt:
