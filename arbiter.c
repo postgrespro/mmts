@@ -977,6 +977,7 @@ static void MtmReceiver(Datum arg)
 							if (status == TRANSACTION_STATUS_UNKNOWN)
 							{
 								MTM_ELOG(WARNING, "Request for unexisted transaction %s from node %d", msg->gid, node);
+								msg->status = TRANSACTION_STATUS_ABORTED;
 							}
 							else
 							{
