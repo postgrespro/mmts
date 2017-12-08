@@ -149,7 +149,7 @@ static void MtmPreCommitPreparedTransaction(MtmCurrentTrans* x);
 static void MtmEndTransaction(MtmCurrentTrans* x, bool commit);
 static bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 static TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum);
-static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
+// static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
 static void MtmAdjustOldestXid(void);
 static bool MtmDetectGlobalDeadLock(PGPROC* proc);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId* subxids, int nSubxids);
@@ -163,7 +163,7 @@ static void	  MtmRestoreSavepointContext(void* ctx);
 static void	  MtmReleaseSavepointContext(void* ctx);
 static void   MtmSetRemoteFunction(char const* list, void* extra);
 
-static void MtmCheckClusterLock(void);
+// static void MtmCheckClusterLock(void);
 static void MtmCheckSlots(void);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId *subxids, int nSubxids);
 
@@ -174,8 +174,8 @@ static bool MtmRunUtilityStmt(PGconn* conn, char const* sql, char **errmsg);
 static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int forceOnNode);
 static void MtmProcessDDLCommand(char const* queryString, bool transactional);
 
-static void MtmLockCluster(void);
-static void MtmUnlockCluster(void);
+// static void MtmLockCluster(void);
+// static void MtmUnlockCluster(void);
 
 MtmState* Mtm;
 
@@ -307,9 +307,9 @@ void MtmReleaseLocks(void)
 		MtmInsideTransaction = false;
 		MtmUnlock();
 	}
-	if (MtmClusterLocked) {
-		MtmUnlockCluster();
-	}
+	// if (MtmClusterLocked) {
+	// 	MtmUnlockCluster();
+	// }
 }
 
 /*
@@ -615,122 +615,122 @@ TransactionId MtmGetOldestXmin(Relation rel, bool ignoreVacuum)
 	return xmin;
 }
 
-bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
-{
-#if TRACE_SLEEP_TIME
-	static timestamp_t firstReportTime;
-	static timestamp_t prevReportTime;
-	static timestamp_t totalSleepTime;
-	static timestamp_t maxSleepTime;
-#endif
-	timestamp_t delay = MIN_WAIT_TIMEOUT;
-	int i;
-#if DEBUG_LEVEL > 1
-	timestamp_t start = MtmGetSystemTime();
-#endif
+// bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
+// {
+// #if TRACE_SLEEP_TIME
+// 	static timestamp_t firstReportTime;
+// 	static timestamp_t prevReportTime;
+// 	static timestamp_t totalSleepTime;
+// 	static timestamp_t maxSleepTime;
+// #endif
+// 	timestamp_t delay = MIN_WAIT_TIMEOUT;
+// 	int i;
+// #if DEBUG_LEVEL > 1
+// 	timestamp_t start = MtmGetSystemTime();
+// #endif
 
-	Assert(xid != InvalidTransactionId);
+// 	Assert(xid != InvalidTransactionId);
 
-	if (!MtmUseDtm || TransactionIdPrecedes(xid, Mtm->oldestXid)) {
-		return PgXidInMVCCSnapshot(xid, snapshot);
-	}
-	MtmLock(LW_SHARED);
+// 	if (!MtmUseDtm || TransactionIdPrecedes(xid, Mtm->oldestXid)) {
+// 		return PgXidInMVCCSnapshot(xid, snapshot);
+// 	}
+// 	MtmLock(LW_SHARED);
 
-#if TRACE_SLEEP_TIME
-	if (firstReportTime == 0) {
-		firstReportTime = MtmGetCurrentTime();
-	}
-#endif
+// #if TRACE_SLEEP_TIME
+// 	if (firstReportTime == 0) {
+// 		firstReportTime = MtmGetCurrentTime();
+// 	}
+// #endif
 
-	for (i = 0; i < MAX_WAIT_LOOPS; i++)
-	{
-		csn_t csn;
-		RepOriginId reporigin_id;
-		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
-		if (ts != NULL /*&& ts->status != TRANSACTION_STATUS_IN_PROGRESS*/)
-		{
+// 	for (i = 0; i < MAX_WAIT_LOOPS; i++)
+// 	{
+// 		csn_t csn;
+// 		RepOriginId reporigin_id;
+// 		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
+// 		if (ts != NULL /*&& ts->status != TRANSACTION_STATUS_IN_PROGRESS*/)
+// 		{
 
-			if (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS)
-				csn = ts->csn;
-			else
-				TransactionIdGetCommitTsData(xid, &csn, &reporigin_id);
+// 			if (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS)
+// 				csn = ts->csn;
+// 			else
+// 				TransactionIdGetCommitTsData(xid, &csn, &reporigin_id);
 
-			if (ts->csn != csn && ts->status != TRANSACTION_STATUS_ABORTED)
-			{
-				MTM_LOG1("WOW! %d: tuple with xid=%lld(csn=%ld / %ld) woes in snapshot %ld (s=%d)", MyProcPid, (long64)xid, csn, ts->csn, MtmTx.snapshot, ts->status);
-			}
+// 			if (ts->csn != csn && ts->status != TRANSACTION_STATUS_ABORTED)
+// 			{
+// 				MTM_LOG1("WOW! %d: tuple with xid=%lld(csn=%ld / %ld) woes in snapshot %ld (s=%d)", MyProcPid, (long64)xid, csn, ts->csn, MtmTx.snapshot, ts->status);
+// 			}
 
-			if (csn > MtmTx.snapshot) {
-				MTM_LOG4("%d: tuple with xid=%lld(csn=%lld) is invisible in snapshot %lld",
-						 MyProcPid, (long64)xid, ts->csn, MtmTx.snapshot);
-#if DEBUG_LEVEL > 1
-				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
-					MTM_ELOG(WARNING, "Backend %d waits for transaction %s (%llu) status %lld usecs", MyProcPid, ts->gid, (long64)xid, MtmGetSystemTime() - start);
-				}
-#endif
-				MtmUnlock();
-				return true;
-			}
-			if (ts->status == TRANSACTION_STATUS_UNKNOWN)
-			{
-				MTM_LOG3("%d: wait for in-doubt transaction %u in snapshot %llu", MyProcPid, xid, MtmTx.snapshot);
-				MtmUnlock();
-#if TRACE_SLEEP_TIME
-				{
-				timestamp_t delta, now = MtmGetCurrentTime();
-#endif
-				MtmSleep(delay);
-#if TRACE_SLEEP_TIME
-				delta = MtmGetCurrentTime() - now;
-				totalSleepTime += delta;
-				if (delta > maxSleepTime) {
-					maxSleepTime = delta;
-				}
-				if (now > prevReportTime + USECS_PER_SEC*10) {
-					prevReportTime = now;
-					if (firstReportTime == 0) {
-						firstReportTime = now;
-					} else {
-						MTM_LOG3("Snapshot sleep %llu of %llu usec (%f%%), maximum=%llu", totalSleepTime, now - firstReportTime, totalSleepTime*100.0/(now - firstReportTime), maxSleepTime);
-					}
-				}
-				}
-#endif
-				if (delay*2 <= MAX_WAIT_TIMEOUT) {
-					delay *= 2;
-				}
-				MtmLock(LW_SHARED);
-			}
-			else
-			{
-				bool invisible = ts->status != TRANSACTION_STATUS_COMMITTED;
-				MTM_LOG4("%d: tuple with xid=%lld(csn= %lld) is %s in snapshot %lld",
-						 MyProcPid, (long64)xid, ts->csn, invisible ? "rollbacked" : "committed", MtmTx.snapshot);
-				MtmUnlock();
-#if DEBUG_LEVEL > 1
-				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
-					MTM_ELOG(WARNING, "Backend %d waits for %s transaction %s (%llu) %lld usecs", MyProcPid, invisible ? "rollbacked" : "committed",
-						 ts->gid, (long64)xid, MtmGetSystemTime() - start);
-				}
-#endif
-				return invisible;
-			}
-		}
-		else
-		{
-			MTM_LOG4("%d: visibility check is skipped for transaction %llu in snapshot %llu", MyProcPid, (long64)xid, MtmTx.snapshot);
-			MtmUnlock();
-			return PgXidInMVCCSnapshot(xid, snapshot);
-		}
-	}
-	MtmUnlock();
-#if DEBUG_LEVEL > 1
-	MTM_ELOG(ERROR, "Failed to get status of XID %llu in %lld usec", (long64)xid, MtmGetSystemTime() - start);
-#else
-	MTM_ELOG(ERROR, "Failed to get status of XID %llu", (long64)xid);
-#endif
-	return true;
-}
+// 			if (csn > MtmTx.snapshot) {
+// 				MTM_LOG4("%d: tuple with xid=%lld(csn=%lld) is invisible in snapshot %lld",
+// 						 MyProcPid, (long64)xid, ts->csn, MtmTx.snapshot);
+// #if DEBUG_LEVEL > 1
+// 				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
+// 					MTM_ELOG(WARNING, "Backend %d waits for transaction %s (%llu) status %lld usecs", MyProcPid, ts->gid, (long64)xid, MtmGetSystemTime() - start);
+// 				}
+// #endif
+// 				MtmUnlock();
+// 				return true;
+// 			}
+// 			if (ts->status == TRANSACTION_STATUS_UNKNOWN)
+// 			{
+// 				MTM_LOG3("%d: wait for in-doubt transaction %u in snapshot %llu", MyProcPid, xid, MtmTx.snapshot);
+// 				MtmUnlock();
+// #if TRACE_SLEEP_TIME
+// 				{
+// 				timestamp_t delta, now = MtmGetCurrentTime();
+// #endif
+// 				MtmSleep(delay);
+// #if TRACE_SLEEP_TIME
+// 				delta = MtmGetCurrentTime() - now;
+// 				totalSleepTime += delta;
+// 				if (delta > maxSleepTime) {
+// 					maxSleepTime = delta;
+// 				}
+// 				if (now > prevReportTime + USECS_PER_SEC*10) {
+// 					prevReportTime = now;
+// 					if (firstReportTime == 0) {
+// 						firstReportTime = now;
+// 					} else {
+// 						MTM_LOG3("Snapshot sleep %llu of %llu usec (%f%%), maximum=%llu", totalSleepTime, now - firstReportTime, totalSleepTime*100.0/(now - firstReportTime), maxSleepTime);
+// 					}
+// 				}
+// 				}
+// #endif
+// 				if (delay*2 <= MAX_WAIT_TIMEOUT) {
+// 					delay *= 2;
+// 				}
+// 				MtmLock(LW_SHARED);
+// 			}
+// 			else
+// 			{
+// 				bool invisible = ts->status != TRANSACTION_STATUS_COMMITTED;
+// 				MTM_LOG4("%d: tuple with xid=%lld(csn= %lld) is %s in snapshot %lld",
+// 						 MyProcPid, (long64)xid, ts->csn, invisible ? "rollbacked" : "committed", MtmTx.snapshot);
+// 				MtmUnlock();
+// #if DEBUG_LEVEL > 1
+// 				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
+// 					MTM_ELOG(WARNING, "Backend %d waits for %s transaction %s (%llu) %lld usecs", MyProcPid, invisible ? "rollbacked" : "committed",
+// 						 ts->gid, (long64)xid, MtmGetSystemTime() - start);
+// 				}
+// #endif
+// 				return invisible;
+// 			}
+// 		}
+// 		else
+// 		{
+// 			MTM_LOG4("%d: visibility check is skipped for transaction %llu in snapshot %llu", MyProcPid, (long64)xid, MtmTx.snapshot);
+// 			MtmUnlock();
+// 			return PgXidInMVCCSnapshot(xid, snapshot);
+// 		}
+// 	}
+// 	MtmUnlock();
+// #if DEBUG_LEVEL > 1
+// 	MTM_ELOG(ERROR, "Failed to get status of XID %llu in %lld usec", (long64)xid, MtmGetSystemTime() - start);
+// #else
+// 	MTM_ELOG(ERROR, "Failed to get status of XID %llu", (long64)xid);
+// #endif
+// 	return true;
+// }
 
 
 
@@ -1620,9 +1620,9 @@ MtmEndTransaction(MtmCurrentTrans* x, bool commit)
 	MTM_TXTRACE(x, "MtmEndTransaction Finish");
 
 	MtmResetTransaction();
-	if (MtmClusterLocked) {
-		MtmUnlockCluster();
-	}
+	// if (MtmClusterLocked) {
+	// 	MtmUnlockCluster();
+	// }
 }
 
 /*
@@ -2166,74 +2166,74 @@ bool MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr)
 	return caughtUp;
 }
 
-/*
- * Prevent start of any new transactions at this node
- */
-static void
-MtmLockCluster(void)
-{
-	timestamp_t delay = MIN_WAIT_TIMEOUT;
-	if (MtmClusterLocked) {
-		MtmUnlockCluster();
-	}
-	MtmLock(LW_EXCLUSIVE);
-	if (BIT_CHECK(Mtm->originLockNodeMask, MtmNodeId-1)) {
-		MtmUnlock();
-		elog(ERROR, "There is already pending exclusive lock");
-	}
-	BIT_SET(Mtm->originLockNodeMask, MtmNodeId-1);
-	MtmClusterLocked = true;
-	MTM_LOG1("Transaction %lld tries to lock cluster at %lld, running transactions=%lld",
-			 (long64)MtmTx.xid, MtmGetCurrentTime(), (long64)Mtm->nRunningTransactions);
-	/* Wait until everything is locked */
-	while (Mtm->nRunningTransactions != 1 /* I am one */
-		   || ((((nodemask_t)1 << Mtm->nAllNodes)-1) & ~(Mtm->currentLockNodeMask|Mtm->originLockNodeMask) & ~Mtm->disabledNodeMask) != 0)
-	{
-		MtmUnlock();
-		MtmSleep(delay);
-		if (delay*2 <= MAX_WAIT_TIMEOUT) {
-			delay *= 2;
-		}
-		MtmLock(LW_EXCLUSIVE);
-	}
-	MTM_LOG1("Transaction %lld locked cluster at %lld, LSN %lld, active transactions=%lld",
-			 (long64)MtmTx.xid, MtmGetCurrentTime(), (long64)GetXLogInsertRecPtr(), (long64)Mtm->nRunningTransactions);
-	MtmUnlock();
-}
+// /*
+//  * Prevent start of any new transactions at this node
+//  */
+// static void
+// MtmLockCluster(void)
+// {
+// 	timestamp_t delay = MIN_WAIT_TIMEOUT;
+// 	if (MtmClusterLocked) {
+// 		MtmUnlockCluster();
+// 	}
+// 	MtmLock(LW_EXCLUSIVE);
+// 	if (BIT_CHECK(Mtm->originLockNodeMask, MtmNodeId-1)) {
+// 		MtmUnlock();
+// 		elog(ERROR, "There is already pending exclusive lock");
+// 	}
+// 	BIT_SET(Mtm->originLockNodeMask, MtmNodeId-1);
+// 	MtmClusterLocked = true;
+// 	MTM_LOG1("Transaction %lld tries to lock cluster at %lld, running transactions=%lld",
+// 			 (long64)MtmTx.xid, MtmGetCurrentTime(), (long64)Mtm->nRunningTransactions);
+// 	/* Wait until everything is locked */
+// 	while (Mtm->nRunningTransactions != 1 /* I am one */
+// 		   || ((((nodemask_t)1 << Mtm->nAllNodes)-1) & ~(Mtm->currentLockNodeMask|Mtm->originLockNodeMask) & ~Mtm->disabledNodeMask) != 0)
+// 	{
+// 		MtmUnlock();
+// 		MtmSleep(delay);
+// 		if (delay*2 <= MAX_WAIT_TIMEOUT) {
+// 			delay *= 2;
+// 		}
+// 		MtmLock(LW_EXCLUSIVE);
+// 	}
+// 	MTM_LOG1("Transaction %lld locked cluster at %lld, LSN %lld, active transactions=%lld",
+// 			 (long64)MtmTx.xid, MtmGetCurrentTime(), (long64)GetXLogInsertRecPtr(), (long64)Mtm->nRunningTransactions);
+// 	MtmUnlock();
+// }
 
-/*
- * Remove global cluster lock set by MtmLockCluster
- */
-static void
-MtmUnlockCluster(void)
-{
-	MtmLock(LW_EXCLUSIVE);
-	MTM_LOG1("Transaction %lld unlock cluster at %lld status %s LSN %lld", (long64)MtmTx.xid, MtmGetCurrentTime(),	MtmTxnStatusMnem[MtmTx.status], (long64)GetXLogInsertRecPtr());
-	BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
-	MtmClusterLocked = false;
-	MtmUnlock();
-}
+// /*
+//  * Remove global cluster lock set by MtmLockCluster
+//  */
+// static void
+// MtmUnlockCluster(void)
+// {
+// 	MtmLock(LW_EXCLUSIVE);
+// 	MTM_LOG1("Transaction %lld unlock cluster at %lld status %s LSN %lld", (long64)MtmTx.xid, MtmGetCurrentTime(),	MtmTxnStatusMnem[MtmTx.status], (long64)GetXLogInsertRecPtr());
+// 	BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
+// 	MtmClusterLocked = false;
+// 	MtmUnlock();
+// }
 
-/*
- * If there are recovering nodes which are catching-up WAL, check the status and prevent new transaction from commit to give
- * WAL-sender a chance to catch-up WAL, completely synchronize replica and switch it to normal mode.
- * This function is called before transaction prepare with multimaster lock set.
- */
-static void
-MtmCheckClusterLock()
-{
-	timestamp_t delay = MIN_WAIT_TIMEOUT;
-	while (Mtm->originLockNodeMask | Mtm->inducedLockNodeMask) {
-		/* some "almost cautch-up" wal-senders are still working. */
-		/* Do not start new transactions until them are completed. */
-		MtmUnlock();
-		MtmSleep(delay);
-		if (delay*2 <= MAX_WAIT_TIMEOUT) {
-			delay *= 2;
-		}
-		MtmLock(LW_EXCLUSIVE);
-	}
-}
+// /*
+//  * If there are recovering nodes which are catching-up WAL, check the status and prevent new transaction from commit to give
+//  * WAL-sender a chance to catch-up WAL, completely synchronize replica and switch it to normal mode.
+//  * This function is called before transaction prepare with multimaster lock set.
+//  */
+// static void
+// MtmCheckClusterLock()
+// {
+// 	timestamp_t delay = MIN_WAIT_TIMEOUT;
+// 	while (Mtm->originLockNodeMask | Mtm->inducedLockNodeMask) {
+// 		/* some "almost cautch-up" wal-senders are still working. */
+// 		/* Do not start new transactions until them are completed. */
+// 		MtmUnlock();
+// 		MtmSleep(delay);
+// 		if (delay*2 <= MAX_WAIT_TIMEOUT) {
+// 			delay *= 2;
+// 		}
+// 		MtmLock(LW_EXCLUSIVE);
+// 	}
+// }
 
 int MtmGetNumberOfVotingNodes()
 {
