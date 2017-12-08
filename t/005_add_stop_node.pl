@@ -61,7 +61,8 @@ is($cluster->is_data_identic( (0,1,2,3) ), 1, "basebackup and add node");
 my ($stopped_out, $stopped_err);
 
 $cluster->psql(0, 'postgres', "select mtm.stop_node(3,'f')");
-# await for comletion?
+sleep(5); # await for comletion
+
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->pgbench(1, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
