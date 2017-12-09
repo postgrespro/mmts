@@ -84,10 +84,13 @@ MtmCheckState(void)
 {
 	// int nVotingNodes = MtmGetNumberOfVotingNodes();
 	bool isEnabledState;
+	MtmNodeStatus old_status;
 	int nEnabled   = countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes);
 	int nConnected = countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes);
 	int nReceivers = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalReceiverMask, Mtm->nAllNodes);
 	int nSenders   = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalSenderMask, Mtm->nAllNodes);
+
+	old_status = Mtm->status;
 
 	MTM_LOG1("[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
 		maskToString(Mtm->disabledNodeMask, Mtm->nAllNodes),
@@ -122,6 +125,9 @@ MtmCheckState(void)
 			if (isEnabledState)
 			{
 				MtmSetClusterStatus(MTM_RECOVERY);
+
+				if (old_status != Mtm->status)
+					MtmCheckState();
 				return;
 			}
 			break;
@@ -132,6 +138,9 @@ MtmCheckState(void)
 				MTM_LOG1("[LOCK] set lock on MTM_RECOVERY switch");
 				BIT_SET(Mtm->originLockNodeMask, MtmNodeId-1); // kk trick, XXXX: log that
 				MtmSetClusterStatus(MTM_RECOVERED);
+
+				if (old_status != Mtm->status)
+					MtmCheckState();
 				return;
 			}
 			break;
@@ -154,6 +163,9 @@ MtmCheckState(void)
 				MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
 				BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
 				MtmSetClusterStatus(MTM_ONLINE);
+
+				if (old_status != Mtm->status)
+					MtmCheckState();
 				return;
 			}
 			break;
