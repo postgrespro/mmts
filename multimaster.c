@@ -3213,7 +3213,7 @@ _PG_init(void)
 		"List of fnuction names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
 		NULL,
 		&MtmRemoteFunctionsList,
-		"lo_create,lo_unlink,mtm.alter_sequences",
+		"lo_create,lo_unlink",
 		PGC_USERSET, /* context */
 		GUC_LIST_INPUT | GUC_LIST_QUOTE, /* flags */
 		NULL,		 /* GucStringCheckHook check_hook */
