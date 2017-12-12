@@ -102,6 +102,76 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
+    def test_saved_referee_decision(self):
+        print('### test_saved_referee_decision ###')
+        docker_api = docker.from_env()
+
+        print('#### down on(winner) || on')
+        print('###########################')
+        aggs_failure, aggs = self.performFailure(StopNode('node1'))
+
+        self.assertNoCommits(aggs_failure[:1])
+        self.assertCommits(aggs_failure[1:])
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs[:1])
+        self.assertCommits(aggs[1:])
+        self.assertIsolation(aggs)
+
+        print('#### down restart(winner) || down')
+        print('###########################')
+        docker_api.containers.get('referee').stop()
+        aggs_failure, aggs = self.performFailure(RestartNode('node2'), node_wait_for_commit=1)
+
+        # without saved decision node2 will be endlessy disabled here
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs[:1])
+        self.assertCommits(aggs[1:])
+        self.assertIsolation(aggs)
+
+        print('#### up down(winner) || down')
+        print('###########################')
+        docker_api.containers.get('node2').stop()
+        docker_api.containers.get('node1').start()
+        aggs_failure, aggs = self.performFailure(NoFailure())
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+        self.assertNoCommits(aggs)
+        self.assertIsolation(aggs)
+
+        print('#### up down(winner) || up')
+        print('###########################')
+        docker_api.containers.get('referee').start()
+        aggs_failure, aggs = self.performFailure(NoFailure())
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+        self.assertNoCommits(aggs)
+        self.assertIsolation(aggs)
+
+        print('#### up up(winner) || up')
+        print('###########################')
+        docker_api.containers.get('node2').start()
+        self.awaitCommit(0)
+
+        # give it time to clean old decision
+        time.sleep(5)
+
+        print('#### check that decision is cleaned')
+        print('###########################')
+        con = psycopg2.connect("dbname=regression user=postgres host=127.0.0.1 port=15435")
+        con.autocommit = True
+        cur = con.cursor()
+        cur.execute("select node_id into winner_id from referee.decision where key = 'winner'")
+        decisions_count = cur.rowcount
+        cur.close()
+        con.close()
+
+        self.assertEqual(decisions_count, 0)
 
     def test_winner_restart(self):
         print('### test_winner_restart ###')

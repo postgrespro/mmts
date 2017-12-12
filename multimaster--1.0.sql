@@ -114,6 +114,8 @@ LANGUAGE C;
 
 CREATE TABLE IF NOT EXISTS mtm.local_tables(rel_schema name, rel_name name, primary key(rel_schema, rel_name));
 
+CREATE TABLE mtm.referee_decision(key text primary key not null, node_id int);
+
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$
 DECLARE

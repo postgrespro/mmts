@@ -392,6 +392,7 @@ extern MtmConnectionInfo* MtmConnections;
 extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
+extern bool  MtmEnforceLocalTx;
 
 
 extern void  MtmArbiterInitialize(void);

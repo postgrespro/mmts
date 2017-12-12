@@ -2,6 +2,10 @@
 #include "miscadmin.h" /* PostmasterPid */
 #include "multimaster.h"
 #include "state.h"
+#include "executor/spi.h"
+#include "utils/snapmgr.h"
+#include "nodes/makefuncs.h"
+#include "catalog/namespace.h"
 
 char const* const MtmNeighborEventMnem[] =
 {
@@ -27,6 +31,9 @@ char const* const MtmEventMnem[] =
 
 static int  MtmRefereeGetWinner(void);
 static bool MtmRefereeClearWinner(void);
+static int  MtmRefereeReadSaved(void);
+
+static bool mtm_state_initialized;
 
 // XXXX: allocate in context and clean it
 static char *
@@ -434,6 +441,13 @@ MtmRefreshClusterStatus()
 	{
 		int winner_node_id = MtmRefereeGetWinner();
 
+		/* We also can have old value. Do that only from single mtm-monitor process */
+		if (winner_node_id <= 0 && !mtm_state_initialized)
+		{
+			winner_node_id = MtmRefereeReadSaved();
+			mtm_state_initialized = true;
+		}
+
 		if (winner_node_id > 0)
 		{
 			Mtm->refereeWinnerId = winner_node_id;
@@ -555,6 +569,61 @@ MtmRefreshClusterStatus()
 	MtmUnlock();
 }
 
+/*
+ * Referee caches decision in mtm.referee_decision
+ */
+static bool
+MtmRefereeHasLocalTable()
+{
+	RangeVar   *rv;
+	Oid			rel_oid;
+
+	StartTransactionCommand();
+	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "referee_decision", -1);
+	rel_oid = RangeVarGetRelid(rv, NoLock, true);
+	CommitTransactionCommand();
+
+	return OidIsValid(rel_oid);
+}
+
+static int
+MtmRefereeReadSaved(void)
+{
+	int winner = -1;
+	int rc;
+
+	if (!MtmRefereeHasLocalTable())
+		return -1;
+
+	/* Save result locally */
+	StartTransactionCommand();
+	SPI_connect();
+	PushActiveSnapshot(GetTransactionSnapshot());
+	rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
+	if (rc != SPI_OK_SELECT)
+	{
+		MTM_ELOG(WARNING, "Failed to load referee decision");
+	}
+	else if (SPI_processed > 0)
+	{
+		bool isnull;
+		winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
+		Assert(SPI_processed == 1);
+		Assert(!isnull);
+	}
+	else
+	{
+		/* no saved decision found */
+		Assert(SPI_processed == 0);
+	}
+	SPI_finish();
+	PopActiveSnapshot();
+	CommitTransactionCommand();
+
+	MTM_LOG1("Read saved referee decision, winner=%d.", winner);
+	return winner;
+}
+
 static int
 MtmRefereeGetWinner(void)
 {
@@ -562,6 +631,8 @@ MtmRefereeGetWinner(void)
 	PGresult *res;
 	char sql[128];
 	int  winner_node_id;
+	int  old_winner = -1;
+	int  rc;
 
 	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
 	if (PQstatus(conn) != CONNECTION_OK)
@@ -599,6 +670,48 @@ MtmRefereeGetWinner(void)
 	/* Ok, we finally got it! */
 	PQclear(res);
 	PQfinish(conn);
+
+	/* Save result locally */
+	if (MtmRefereeHasLocalTable())
+	{
+		MtmEnforceLocalTx = true;
+		StartTransactionCommand();
+		SPI_connect();
+		PushActiveSnapshot(GetTransactionSnapshot());
+		/* Check old value if any */
+		rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
+		if (rc != SPI_OK_SELECT)
+		{
+			MTM_ELOG(WARNING, "Failed to load previous referee decision");
+		}
+		else if (SPI_processed > 0)
+		{
+			bool isnull;
+			old_winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
+			Assert(SPI_processed == 1);
+			Assert(!isnull);
+		}
+		else
+		{
+			/* no saved decision found */
+			Assert(SPI_processed == 0);
+		}
+		/* Update actual key */
+		sprintf(sql,
+			"insert into mtm.referee_decision values ('winner', %d) on conflict(key) do nothing;",
+			winner_node_id);
+		rc = SPI_execute(sql, false, 0);
+		SPI_finish();
+		if (rc < 0)
+			MTM_ELOG(WARNING, "Failed to save referee decision, but proceeding anyway");
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+		MtmEnforceLocalTx = false;
+
+		if (old_winner > 0 && old_winner != winner_node_id)
+			MTM_LOG1("WARNING Overriding old referee decision (%d) with new one (%d)", old_winner, winner_node_id);
+	}
+
 	MTM_LOG1("Got referee response, winner node_id=%d.", winner_node_id);
 	return winner_node_id;
 }
@@ -609,6 +722,32 @@ MtmRefereeClearWinner(void)
 	PGconn* conn;
 	PGresult *res;
 	char *response;
+	int rc;
+
+	/*
+	 * Delete result locally first.
+	 *
+	 * If we delete decision from referee but fail to delete local cached
+	 * that will be pretty bad -- on the next reboot we can read
+	 * stale referee decision and on next failure end up with two masters.
+	 * So just delete local cache first.
+	 */
+	if (MtmRefereeHasLocalTable())
+	{
+		StartTransactionCommand();
+		SPI_connect();
+		PushActiveSnapshot(GetTransactionSnapshot());
+		rc = SPI_execute("delete from mtm.referee_decision where key = 'winner'", false, 0);
+		SPI_finish();
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+		if (rc < 0)
+		{
+			MTM_ELOG(WARNING, "Failed to save referee decision, proceeding anyway");
+			return false;
+		}
+	}
+
 
 	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
 	if (PQstatus(conn) != CONNECTION_OK)

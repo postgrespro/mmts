@@ -256,6 +256,7 @@ bool  MtmPreserveCommitOrder;
 bool  MtmVolksWagenMode; /* Pretend to be normal postgres. This means skip some NOTICE's and use local sequences */
 bool  MtmMajorNode;
 char* MtmRefereeConnStr;
+bool  MtmEnforceLocalTx;
 
 static char* MtmConnStrs;
 static char* MtmRemoteFunctionsList;
@@ -1110,7 +1111,7 @@ MtmPrePrepareTransaction(MtmCurrentTrans* x)
 	ts->procno = MyProc->pgprocno;
 	ts->votingCompleted = false;
 	ts->participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) & ~Mtm->disabledNodeMask & ~((nodemask_t)1 << (MtmNodeId-1));
-    ts->isLocal = x->isReplicated || !x->containsDML || (ts->participantsMask == 0);
+	ts->isLocal = x->isReplicated || !x->containsDML || (ts->participantsMask == 0) || MtmEnforceLocalTx;
 	ts->nConfigChanges = Mtm->nConfigChanges;
 	ts->votedMask = 0;
 	ts->nSubxids = xactGetCommittedChildren(&subxids);
@@ -3713,8 +3714,14 @@ MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
 	 * unless we are performing recovery of disabled node
 	 * (in this case all transactions should be sent)
 	 */
-	bool res = Mtm->status != MTM_RECOVERY
-		&& (args->origin_id == InvalidRepOriginId
+	/*
+	 * I removed (Mtm->status != MTM_RECOVERY) here since in major
+	 * mode we need to recover from offline node too. Also it seems
+	 * that with amount of nodes >= 3 we also need that. --sk
+	 *
+	 * On a first look this works fine.
+	 */
+	bool res = (args->origin_id == InvalidRepOriginId
 			|| MtmIsRecoveredNode(MtmReplicationNodeId));
 	if (!res) {
 		MTM_LOG2("Filter transaction with origin_id=%d", args->origin_id);
