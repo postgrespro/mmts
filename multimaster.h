@@ -432,6 +432,7 @@ extern void  MtmSetupReplicationHooks(struct PGLogicalHooks* hooks);
 extern bool  MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr);
 extern void  MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN);
 extern void  MtmMakeTableLocal(char const* schema, char const* name);
+extern void  MtmMakeRelationLocal(Oid relid);
 extern void  MtmHandleApplyError(void);
 extern void  MtmUpdateLsnMapping(int nodeId, lsn_t endLsn);
 extern lsn_t MtmGetFlushPosition(int nodeId);

@@ -859,7 +859,7 @@ process_remote_insert(StringInfo s, Relation rel)
 			/* TODO: Report tuple identity in log */
 			ereport(ERROR,
                     (errcode(ERRCODE_UNIQUE_VIOLATION),
-                     MTM_ERRMSG("Unique constraints violated by remotely INSERTed tuple"),
+					 MTM_ERRMSG("Unique constraints violated by remotely INSERTed tuple in %s", RelationGetRelationName(rel)),
                      errdetail("Cannot apply transaction because remotely INSERTed tuple conflicts with a local tuple on UNIQUE constraint and/or PRIMARY KEY")));
 		}
 		CHECK_FOR_INTERRUPTS();

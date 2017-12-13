@@ -577,13 +577,25 @@ MtmRefereeHasLocalTable()
 {
 	RangeVar   *rv;
 	Oid			rel_oid;
+	static bool _has_local_tables;
+
+	/* memoized */
+	if (_has_local_tables)
+		return true;
 
 	StartTransactionCommand();
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "referee_decision", -1);
 	rel_oid = RangeVarGetRelid(rv, NoLock, true);
 	CommitTransactionCommand();
 
-	return OidIsValid(rel_oid);
+	if (OidIsValid(rel_oid))
+	{
+		MtmMakeRelationLocal(rel_oid);
+		_has_local_tables = true;
+		return true;
+	}
+	else
+		return false;
 }
 
 static int

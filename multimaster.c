@@ -2311,7 +2311,7 @@ MtmCreateLocalTableMap(void)
 	return htab;
 }
 
-static void MtmMakeRelationLocal(Oid relid)
+void MtmMakeRelationLocal(Oid relid)
 {
 	if (OidIsValid(relid)) {
 		MtmLock(LW_EXCLUSIVE);
