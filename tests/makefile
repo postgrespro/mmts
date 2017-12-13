@@ -1,17 +1,13 @@
 CXX=g++
-CC=gcc
-CFLAGS=-g -Wall -O0 -pthread 
+CXXFLAGS=-g -Wall -O0 -pthread 
 
-all: dtmbench dtmacid insert
+all: dtmbench dtmacid
 
 dtmbench: dtmbench.cpp
-	$(CXX) $(CFLAGS) -o dtmbench dtmbench.cpp -lpqxx -lpq
+	$(CXX) $(CXXFLAGS) -o dtmbench dtmbench.cpp -lpqxx -lpq
 
 dtmacid: dtmacid.cpp
-	$(CXX) $(CFLAGS) -o dtmacid dtmacid.cpp -lpqxx -lpq
-
-insert: insert.c
-	$(CC) $(CFLAGS) -o insert insert.c -lpq
+	$(CXX) $(CXXFLAGS) -o dtmacid dtmacid.cpp -lpqxx -lpq
 
 clean:
 	rm -f dtmbench dtmacid

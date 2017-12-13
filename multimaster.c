@@ -1707,27 +1707,8 @@ static void MtmBroadcastPollMessage(MtmTransState* ts)
 
 	if (nparts == 1)
 	{
-		int refereeWinnerId = MtmRefereeReadSaved();
-		if (MtmMajorNode || refereeWinnerId == MtmNodeId)
-		{
-			MTM_ELOG(LOG, "%s node commits prepared transaction %s", MtmMajorNode ? "Major" : "Winner", ts->gid);
-			/* we were in major mode and there nobody to ask about status */
-			MtmFinishPreparedTransaction(ts, true);
-		}
-		else
-		{
-			int coordinator = 0;
-			sscanf(ts->gid, "MTM-%d", &coordinator);
-			if (coordinator == MtmNodeId && ts->status == TRANSACTION_STATUS_IN_PROGRESS) {
-				/* it is always safe to rollback self transaction which was not precommitted: it can not be committed anywhere else */
-				MTM_ELOG(LOG, "Coordinator node rollback not precommitted transaction %s", ts->gid);
-				MtmFinishPreparedTransaction(ts, false);
-			}
-			else
-			{
-				MTM_ELOG(WARNING, "Doesn't know waht to do with transaction prepared transaction %s", ts->gid);
-			}
-		}
+		/* we were in major mode and there nobody to ask about status */
+		MtmFinishPreparedTransaction(ts, true);
 		return;
 	}
 
