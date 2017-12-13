@@ -2546,13 +2546,19 @@ static void MtmInitializeRemoteFunctionsMap()
 		}
 		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
 		if (clist == NULL) {
-			MTM_ELOG(ERROR, "Failed to lookup function %s", p);
+			MTM_ELOG(WARNING, "Failed to lookup function %s", p);
 		} else if (clist->next != NULL) {
 			MTM_ELOG(ERROR, "Ambigious function %s", p);
+		} else {
+			hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 		}
-		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 		p = q;
 	} while (p != NULL);
+
+	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true);
+	if (clist != NULL) {
+		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
+	}
 }
 
 /*
@@ -3211,12 +3217,12 @@ _PG_init(void)
 
 	DefineCustomStringVariable(
 		"multimaster.remote_functions",
-		"List of fnuction names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
+		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
 		NULL,
 		&MtmRemoteFunctionsList,
 		"lo_create,lo_unlink",
 		PGC_USERSET, /* context */
-		GUC_LIST_INPUT | GUC_LIST_QUOTE, /* flags */
+		GUC_LIST_INPUT, /* flags */
 		NULL,		 /* GucStringCheckHook check_hook */
 		MtmSetRemoteFunction,		 /* GucStringAssignHook assign_hook */
 		NULL		 /* GucShowHook show_hook */
