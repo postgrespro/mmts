@@ -13,6 +13,7 @@ import multiprocessing
 import logging
 import re
 import pprint
+import uuid
 
 class MtmTxAggregate(object):
 
@@ -80,7 +81,6 @@ class MtmClient(object):
         self.total = 0
         self.aggregates = [{} for e in dsns]
         keep_trying(40, 1, self.initdb, 'self.initdb')
-        self.running = True
         self.nodes_state_fields = ["id", "disabled", "disconnected", "catchUp", "slotLag",
             "avgTransDelay", "lastStatusChange", "oldestSnapshot", "SenderPid",
             "SenderStartTime ", "ReceiverPid", "ReceiverStartTime", "connStr"]
@@ -117,6 +117,7 @@ class MtmClient(object):
         conn.commit()
         cur.execute('drop table if exists bank_test')
         cur.execute('create table bank_test(uid int primary key, amount int)')
+        cur.execute('create table insert_test(id text primary key)')
         cur.execute('''
                 insert into bank_test
                 select *, 0 from generate_series(0, %s)''',
@@ -165,6 +166,19 @@ class MtmClient(object):
 
         print("n_prepared = %d" % (n_prepared))
         return (n_prepared)
+
+    def insert_counts(self):
+        counts = []
+
+        for dsn in self.dsns:
+            con = psycopg2.connect(dsn)
+            cur = con.cursor()
+            cur.execute("select count(*) from insert_test;")
+            counts.append(int(cur.fetchone()[0]))
+            cur.close()
+            con.close()
+
+        return counts
 
     @asyncio.coroutine
     def status(self):
@@ -268,6 +282,11 @@ class MtmClient(object):
         yield from cur.execute('commit')
 
     @asyncio.coroutine
+    def insert_tx(self, conn, cur, agg, conn_i):
+        query = "insert into insert_test values ('%s')" % (uuid.uuid4())
+        yield from cur.execute(query)
+
+    @asyncio.coroutine
     def total_tx(self, conn, cur, agg, conn_i):
         yield from cur.execute("select sum(amount), count(*), count(uid), current_setting('multimaster.node_id') from bank_test")
         total = yield from cur.fetchone()
@@ -289,9 +308,11 @@ class MtmClient(object):
         self.loop = asyncio.get_event_loop()
 
         for i, _ in enumerate(self.dsns):
-            for j in range(3):
+            for j in range(1):
                 asyncio.ensure_future(self.exec_tx(self.transfer_tx, i, 'transfer', j))
             asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
+            for j in range(2):
+                asyncio.ensure_future(self.exec_tx(self.insert_tx, i, 'inserter', j))
 
         asyncio.ensure_future(self.status())
 
@@ -299,6 +320,9 @@ class MtmClient(object):
 
     def bgrun(self):
         print('Starting evloop in different process')
+
+        self.running = True
+
         self.parent_pipe, self.child_pipe = aioprocessing.AioPipe()
         self.evloop_process = multiprocessing.Process(target=self.run, args=())
         self.evloop_process.start()

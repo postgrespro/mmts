@@ -40,15 +40,33 @@ class TestHelper(object):
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
             aggs = self.client.get_aggregates(clean=False, _print=False)
-            # print('=== ',aggs[node_id]['transfer']['finish'])
+            print('=== ',aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
                 break
             time.sleep(5)
             total_sleep += 5
 
+    def awaitOnline(self, dsn):
+        total_sleep = 0
+        one = 0
 
-    def performFailure(self, failure, wait=0, node_wait_for_commit=-1):
+        while total_sleep <= TEST_MAX_RECOVERY_TIME:
+            try:
+                con = psycopg2.connect(dsn + " connect_timeout=1")
+                cur = con.cursor()
+                cur.execute("select 1")
+                one = int(cur.fetchone()[0])
+                cur.close()
+                con.close()
+                print("Online!")
+                break
+            except Exception as e:
+                print('Waiting for online:', str(e))
+                time.sleep(5)
+                total_sleep += 5
+
+    def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
 
         time.sleep(TEST_WARMING_TIME)
          
@@ -72,12 +90,27 @@ class TestHelper(object):
 
         self.client.clean_aggregates()
 
+        if stop_load:
+            time.sleep(3)
+            self.client.get_aggregates(clean=False)
+            self.client.stop()
+
         if node_wait_for_commit >= 0:
             self.awaitCommit(node_wait_for_commit)
         else:
             time.sleep(TEST_RECOVERY_TIME)
 
+        if node_wait_for_online != None:
+            self.awaitOnline(node_wait_for_online)
+        else:
+            time.sleep(TEST_RECOVERY_TIME)
+
+        if stop_load:
+            self.client.bgrun()
+            time.sleep(3)
+
         aggs = self.client.get_aggregates()
+
         return (aggs_failure, aggs)
 
     def nodeExecute(dsn, statements):
