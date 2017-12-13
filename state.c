@@ -31,7 +31,6 @@ char const* const MtmEventMnem[] =
 
 static int  MtmRefereeGetWinner(void);
 static bool MtmRefereeClearWinner(void);
-static int  MtmRefereeReadSaved(void);
 
 static bool mtm_state_initialized;
 
@@ -586,7 +585,7 @@ MtmRefereeHasLocalTable()
 	return OidIsValid(rel_oid);
 }
 
-static int
+int
 MtmRefereeReadSaved(void)
 {
 	int winner = -1;

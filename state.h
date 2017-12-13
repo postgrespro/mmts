@@ -30,6 +30,8 @@ extern void MtmOnNodeDisconnect(int nodeId);
 extern void MtmOnNodeConnect(int nodeId);
 extern void MtmReconnectNode(int nodeId);
 
+extern int  MtmRefereeReadSaved(void);
+
 extern void MtmRefreshClusterStatus(void);
 
 extern int countZeroBits(nodemask_t mask, int nNodes);
