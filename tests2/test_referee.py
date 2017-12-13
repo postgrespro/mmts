@@ -45,6 +45,10 @@ class RefereeTest(unittest.TestCase, TestHelper):
         if cls.client.no_prepared_tx() != 0:
             raise AssertionError('There are some uncommitted tx')
 
+        counts = cls.client.insert_counts()
+        if counts[0] != counts[1]:
+            raise AssertionError('Different number of tuples on nodes: %d / %d' % (counts[0], counts[1]) )
+
         # XXX: check nodes data identity here
         # subprocess.check_call(['docker-compose','down'])
 
@@ -68,9 +72,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
-
 
     def test_node_crash(self):
         print('### test_node_crash ###')
@@ -83,9 +84,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
-
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
 
 
     def test_partition_referee(self):
@@ -100,8 +98,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
 
     def test_double_failure_referee(self):
         print('### test_double_failure_referee ###')
@@ -124,8 +120,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
 
     def test_saved_referee_decision(self):
         print('### test_saved_referee_decision ###')
@@ -198,8 +192,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         self.assertEqual(decisions_count, 0)
 
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
 
     def test_winner_restart(self):
         print('### test_winner_restart ###')
@@ -227,9 +219,6 @@ class RefereeTest(unittest.TestCase, TestHelper):
         docker_api = docker.from_env()
         docker_api.containers.get('node1').start()
         self.awaitCommit(0)
-
-        counts = self.client.insert_counts()
-        self.assertEqual(counts[0], counts[1])
 
 
 if __name__ == '__main__':
