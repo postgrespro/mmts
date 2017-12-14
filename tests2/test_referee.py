@@ -215,10 +215,49 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs[1:])
         self.assertIsolation(aggs)
 
+        self.client.get_aggregates(clean=False)
+        self.client.stop()
+
         # need to start node1 to perform consequent tests
         docker_api = docker.from_env()
         docker_api.containers.get('node1').start()
-        self.awaitCommit(0)
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15432")
+
+        self.client.bgrun()
+        time.sleep(3)
+
+    def test_winner_crash(self):
+        print('### test_winner_crash ###')
+
+        aggs_failure, aggs = self.performFailure(StopNode('node1'))
+
+        self.assertNoCommits(aggs_failure[:1])
+        self.assertCommits(aggs_failure[1:])
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs[:1])
+        self.assertCommits(aggs[1:])
+        self.assertIsolation(aggs)
+
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node2'), node_wait_for_commit=1)
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs[:1])
+        self.assertCommits(aggs[1:])
+        self.assertIsolation(aggs)
+
+        self.client.get_aggregates(clean=False)
+        self.client.stop()
+
+        # need to start node1 to perform consequent tests
+        docker_api = docker.from_env()
+        docker_api.containers.get('node1').start()
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15432")
+
+        self.client.bgrun()
+        time.sleep(3)
 
 
 if __name__ == '__main__':
