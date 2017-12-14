@@ -1699,7 +1699,6 @@ void MtmSend2PCMessage(MtmTransState* ts, MtmMessageCode cmd)
 static void MtmBroadcastPollMessage(MtmTransState* ts)
 {
 	int i;
-	int nparts;
 	MtmArbiterMessage msg;
 
 	MTM_LOG1("MtmBroadcastPollMessage: %s %lld", ts->gid, ts->participantsMask);
