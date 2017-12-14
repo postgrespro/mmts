@@ -466,10 +466,7 @@ MtmRefreshClusterStatus()
 					Mtm->refereeGrant = true;
 					if (countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes) == 1)
 					{
-						// XXXX: that is valid for two nodes. Better idea is to parametrize MtmPollStatus*
-						// functions.
-						int neighbor_node_id = MtmNodeId == 1 ? 2 : 1;
-						MtmPollStatusOfPreparedTransactionsForDisabledNode(neighbor_node_id, true);
+						MtmPollStatusOfPreparedTransactions(true);
 					}
 					MtmEnableNode(MtmNodeId);
 					MtmCheckState();

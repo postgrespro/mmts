@@ -2018,7 +2018,8 @@ void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool
  * This function is called before start of recovery to prevent blocking of recovery process by some
  * prepared transaction which is not recovered
  */
-static void MtmPollStatusOfPreparedTransactions()
+void
+MtmPollStatusOfPreparedTransactions(bool majorMode)
 {
 	MtmTransState *ts;
 	for (ts = Mtm->transListHead; ts != NULL; ts = ts->next) {
@@ -2027,8 +2028,16 @@ static void MtmPollStatusOfPreparedTransactions()
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
-			MTM_LOG1("Poll state of transaction %s (%llu) from node %d", ts->gid, (long64)ts->xid, ts->gtid.node);
-			MtmBroadcastPollMessage(ts);
+
+			if (majorMode)
+			{
+				MtmFinishPreparedTransaction(ts, ts->status != TRANSACTION_STATUS_IN_PROGRESS);
+			}
+			else
+			{
+				MTM_LOG1("Poll state of transaction %s (%llu) from node %d", ts->gid, (long64)ts->xid, ts->gtid.node);
+				MtmBroadcastPollMessage(ts);
+			}
 		} else {
 			MTM_LOG2("Skip prepared transaction %s (%d) with status %s gtid.node=%d gtid.xid=%llu votedMask=%llx",
 					 ts->gid, (long64)ts->xid, MtmTxnStatusMnem[ts->status], ts->gtid.node, (long64)ts->gtid.xid, ts->votedMask);
@@ -3420,7 +3429,7 @@ MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shut
 		{
 			/* Lock on us */
 			Mtm->recoverySlot = nodeId;
-			MtmPollStatusOfPreparedTransactions();
+			MtmPollStatusOfPreparedTransactions(false);
 			MtmUnlock();
 			return REPLMODE_RECOVERY;
 		}
