@@ -2030,7 +2030,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 
 			if (majorMode)
 			{
-				MtmFinishPreparedTransaction(ts, ts->status != TRANSACTION_STATUS_IN_PROGRESS);
+				MtmFinishPreparedTransaction(ts, false);
 			}
 			else
 			{
