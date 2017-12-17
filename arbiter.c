@@ -971,17 +971,18 @@ static void MtmReceiver(Datum arg)
 							XidStatus status;
 
 							MtmUnlock();
+							MTM_LOG1("Request for transaction %s from node %d", msg->gid, node);
 							status = GetLoggedPreparedXactState(msg->gid);
 							MtmLock(LW_EXCLUSIVE);
 
 							if (status == TRANSACTION_STATUS_UNKNOWN)
 							{
-								MTM_ELOG(WARNING, "Request for unexisted transaction %s from node %d", msg->gid, node);
+								MTM_ELOG(WARNING, "Transaction %s from node %d not found", msg->gid, node);
 								msg->status = TRANSACTION_STATUS_ABORTED;
 							}
 							else
 							{
-								MTM_LOG1("Request for existed transaction %s from node %d -> %d", msg->gid, node, status);
+								MTM_LOG1("Transaction %s from node %d has status %d", msg->gid, node, status);
 								msg->status = status;
 							}
 						}
