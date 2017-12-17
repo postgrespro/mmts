@@ -1727,17 +1727,17 @@ static void MtmBroadcastPollMessage(MtmTransState* ts)
 	int i;
 	MtmArbiterMessage msg;
 
-	MTM_LOG1("MtmBroadcastPollMessage: %s %lld", ts->gid, ts->participantsMask);
 	MtmInitMessage(&msg, MSG_POLL_REQUEST);
 	memcpy(msg.gid, ts->gid, MULTIMASTER_MAX_GID_SIZE);
 	ts->votedMask = 0;
 
 	for (i = 0; i < Mtm->nAllNodes; i++)
 	{
-		if (BIT_CHECK(ts->participantsMask, i))
+		// if (BIT_CHECK(ts->participantsMask, i))
+		if (i + 1 != MtmNodeId)
 		{
 			msg.node = i+1;
-			MTM_LOG3("Send request for transaction %s to node %d", msg.gid, msg.node);
+			MTM_LOG1("Sending request for transaction %s to node %d", msg.gid, msg.node);
 			MtmSendMessage(&msg);
 		}
 	}
