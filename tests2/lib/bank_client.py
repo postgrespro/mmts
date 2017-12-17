@@ -311,7 +311,7 @@ class MtmClient(object):
             for j in range(1):
                 asyncio.ensure_future(self.exec_tx(self.transfer_tx, i, 'transfer', j))
             asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
-            for j in range(2):
+            for j in range(10):
                 asyncio.ensure_future(self.exec_tx(self.insert_tx, i, 'inserter', j))
 
         asyncio.ensure_future(self.status())

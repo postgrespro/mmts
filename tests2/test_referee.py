@@ -76,7 +76,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
     def test_node_crash(self):
         print('### test_node_crash ###')
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node2'), node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15433", stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
         self.assertNoCommits(aggs_failure[1:])
@@ -89,7 +89,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
     def test_partition_referee(self):
         print('### test_partition_referee ###')
 
-        aggs_failure, aggs = self.performFailure(SingleNodePartition('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(SingleNodePartition('node2'), node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15433", stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
         self.assertNoCommits(aggs_failure[1:])
@@ -102,7 +102,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
     def test_double_failure_referee(self):
         print('### test_double_failure_referee ###')
 
-        aggs_failure, aggs = self.performFailure(SingleNodePartition('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(SingleNodePartition('node2'), node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15433", stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
         self.assertNoCommits(aggs_failure[1:])
@@ -111,7 +111,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-        aggs_failure, aggs = self.performFailure(SingleNodePartition('node1'), node_wait_for_commit=0)
+        aggs_failure, aggs = self.performFailure(SingleNodePartition('node1'), node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15432", stop_load=True)
 
         self.assertNoCommits(aggs_failure[:1])
         self.assertCommits(aggs_failure[1:])
@@ -172,10 +172,16 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertNoCommits(aggs)
         self.assertIsolation(aggs)
 
+        self.client.get_aggregates(clean=False)
+        self.client.stop()
+
         print('#### up up(winner) || up')
         print('###########################')
         docker_api.containers.get('node2').start()
-        self.awaitCommit(0)
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15432")
+
+        self.client.bgrun()
+        time.sleep(3)
 
         # give it time to clean old decision
         time.sleep(5)
@@ -185,7 +191,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         con = psycopg2.connect("dbname=regression user=postgres host=127.0.0.1 port=15435")
         con.autocommit = True
         cur = con.cursor()
-        cur.execute("select node_id into winner_id from referee.decision where key = 'winner'")
+        cur.execute("select node_id from referee.decision where key = 'winner'")
         decisions_count = cur.rowcount
         cur.close()
         con.close()
