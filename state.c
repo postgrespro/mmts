@@ -83,6 +83,22 @@ MtmSetClusterStatus(MtmNodeStatus status)
 		Mtm->recoveryCount++; /* this will restart replication connection */
 	}
 
+	/*
+	 * Check saved referee decision and clean it
+	 */
+	if (status == MTM_ONLINE)
+	{
+		if (!Mtm->refereeGrant && MtmRefereeReadSaved() > 0)
+		{
+			/*
+			 * We booted after being with refereeGrant,
+			 * but now have ordinary majority.
+			 */
+			MtmPollStatusOfPreparedTransactions(true);
+			MtmRefereeClearWinner();
+		}
+	}
+
 	Mtm->status = status;
 }
 
@@ -482,8 +498,9 @@ MtmRefreshClusterStatus()
 	 * because we can clean old value before failed node starts it recovery and that node
 	 * can get refereeGrant before start of walsender, so it start in recovered mode.
 	 */
-	 if (MtmRefereeConnStr && *MtmRefereeConnStr && Mtm->refereeWinnerId &&
-		countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes) == Mtm->nAllNodes)
+	if (MtmRefereeConnStr && *MtmRefereeConnStr && Mtm->refereeWinnerId &&
+		countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes) == Mtm->nAllNodes &&
+		MtmGetCurrentStatus() == MTM_ONLINE) /* restrict this actions only to major -> online transition */
 	{
 		if (MtmRefereeClearWinner())
 		{
