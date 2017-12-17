@@ -1209,16 +1209,22 @@ MtmVotingCompleted(MtmTransState* ts)
 {
 	nodemask_t liveNodesMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) & ~Mtm->disabledNodeMask & ~((nodemask_t)1 << (MtmNodeId-1));
 
-	if (!ts->isPrepared) { /* We can not just abort precommitted transactions */
-		if (ts->nConfigChanges != Mtm->nConfigChanges)
+	if (ts->nConfigChanges != Mtm->nConfigChanges)
+	{
+		if (MtmGetCurrentStatus() == MTM_ONLINE)
 		{
-			MTM_ELOG(WARNING, "Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx, new mask %llx) since transaction start",
-				 ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask, liveNodesMask);
+			MTM_ELOG(WARNING, "Abort transaction %s {%d} (%llu) because cluster configuration is changed from %d to %d (old mask %llx, new mask %llx) since transaction start",
+				ts->gid, ts->status, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask, liveNodesMask);
 			MtmAbortTransaction(ts);
 			return true;
 		}
-		/* If cluster configuration was not changed, then node mask should not changed as well */
-		Assert(ts->participantsMask == liveNodesMask);
+		else
+		{
+			ts->votingCompleted = true;
+			MtmResetTransaction();
+			MTM_ELOG(ERROR, "Error out %s {%d}  (%llu) because cluster configuration is changed from %d to %d (old mask %llx, new mask %llx) since transaction start and we aren't online",
+				ts->gid, ts->status, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask, liveNodesMask);
+		}
 	}
 
 	if (ts->votingCompleted) {
@@ -1369,10 +1375,20 @@ MtmPostPrepareTransaction(MtmCurrentTrans* x)
 			/* recheck under lock that nothing is changed */
 			if (ts->nConfigChanges != Mtm->nConfigChanges)
 			{
-				MTM_ELOG(WARNING, "XX Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
-					ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
-				MtmAbortTransaction(ts);
-				x->status = TRANSACTION_STATUS_ABORTED;
+				if (Mtm->status == MTM_ONLINE)
+				{
+					MTM_ELOG(WARNING, "XX Abort transaction %s {%d} (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
+						ts->gid, ts->status, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+					MtmAbortTransaction(ts);
+					x->status = TRANSACTION_STATUS_ABORTED;
+				}
+				else
+				{
+					ts->votingCompleted = true;
+					MtmResetTransaction();
+					MTM_ELOG(ERROR, "Error out %s {%d} (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start and we aren't online",
+						ts->gid, ts->status, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+				}
 			}
 		} else {
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
@@ -1451,10 +1467,20 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 			/* recheck under lock that nothing is changed */
 			if (ts->nConfigChanges != Mtm->nConfigChanges)
 			{
-				MTM_ELOG(WARNING, "X Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
-					ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
-				MtmAbortTransaction(ts);
-				x->status = TRANSACTION_STATUS_ABORTED;
+				if (Mtm->status == MTM_ONLINE)
+				{
+					MTM_ELOG(WARNING, "X Abort transaction %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start",
+						ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+					MtmAbortTransaction(ts);
+					x->status = TRANSACTION_STATUS_ABORTED;
+				}
+				else
+				{
+					ts->votingCompleted = true;
+					MtmResetTransaction();
+					MTM_ELOG(ERROR, "Error out %s (%llu) because cluster configuration is changed from %d to %d (old mask %llx) since transaction start and we aren't online",
+						ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
+				}
 			}
 		} else {
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
@@ -2030,7 +2056,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 
 			if (majorMode)
 			{
-				MtmFinishPreparedTransaction(ts, false);
+				MtmFinishPreparedTransaction(ts, ts->status == TRANSACTION_STATUS_UNKNOWN);
 			}
 			else
 			{
