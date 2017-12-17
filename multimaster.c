@@ -369,7 +369,7 @@ void MtmLock(LWLockMode mode)
 		}
 #endif
 		if (mode == LW_EXCLUSIVE) {
-			Assert(MtmLockCount == 0);
+			// Assert(MtmLockCount == 0);
 			Assert(MyProcPid != 0);
 			Mtm->lastLockHolder = MyProcPid;
 			Assert(MyProcPid);
