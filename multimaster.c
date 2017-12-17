@@ -3587,13 +3587,13 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				ulong64 recoveredLSN;
 				sscanf(strVal(elem->arg), "%llx", &recoveredLSN);
 				MTM_LOG1("Recovered position of node %d is %llx", MtmReplicationNodeId, recoveredLSN);
-				if (Mtm->nodes[MtmReplicationNodeId-1].restartLSN < recoveredLSN) {
-					MTM_LOG1("Advance restartLSN for node %d from %llx to %llx (MtmReplicationStartupHook)",
-							 MtmReplicationNodeId, Mtm->nodes[MtmReplicationNodeId-1].restartLSN, recoveredLSN);
-					// Assert(Mtm->nodes[MtmReplicationNodeId-1].restartLSN == INVALID_LSN
-					// 	   || recoveredLSN < Mtm->nodes[MtmReplicationNodeId-1].restartLSN + MtmMaxRecoveryLag);
-					Mtm->nodes[MtmReplicationNodeId-1].restartLSN = recoveredLSN;
-				}
+				// if (Mtm->nodes[MtmReplicationNodeId-1].restartLSN < recoveredLSN) {
+				// 	MTM_LOG1("Advance restartLSN for node %d from %llx to %llx (MtmReplicationStartupHook)",
+				// 			 MtmReplicationNodeId, Mtm->nodes[MtmReplicationNodeId-1].restartLSN, recoveredLSN);
+				// 	// Assert(Mtm->nodes[MtmReplicationNodeId-1].restartLSN == INVALID_LSN
+				// 	// 	   || recoveredLSN < Mtm->nodes[MtmReplicationNodeId-1].restartLSN + MtmMaxRecoveryLag);
+				// 	Mtm->nodes[MtmReplicationNodeId-1].restartLSN = recoveredLSN;
+				// }
 			} else {
 				MTM_ELOG(ERROR, "Recovered position is not specified");
 			}
