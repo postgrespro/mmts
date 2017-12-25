@@ -3587,6 +3587,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	ListCell *param;
 	bool recoveryCompleted = false;
 	ulong64 recoveryStartPos = INVALID_LSN;
+	int i;
 
 	MtmIsRecoverySession = false;
 	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
@@ -3631,6 +3632,28 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	}
 	MTM_LOG1("Startup of logical replication to node %d", MtmReplicationNodeId);
 	MtmLock(LW_EXCLUSIVE);
+
+	/*
+	 * Set proper originId mappings.
+	 *
+	 * This is copypasted from receiver. Better to have normal init method
+	 * to setup all stuff in shared memory. But seems that there is no such
+	 * callback in vanilla pg and adding one will require some carefull thoughts.
+	 */
+	for (i = 0; i < Mtm->nAllNodes; i++)
+	{
+		char	   *originName;
+		RepOriginId originId;
+
+		originName = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
+		originId = replorigin_by_name(originName, true);
+		if (originId == InvalidRepOriginId) {
+			originId = replorigin_create(originName);
+		}
+		CommitTransactionCommand();
+		StartTransactionCommand();
+		Mtm->nodes[i].originId = originId;
+	}
 
 	if (BIT_CHECK(Mtm->stalledNodeMask, MtmReplicationNodeId-1)) {
 		MtmUnlock();
