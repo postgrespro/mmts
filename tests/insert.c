@@ -16,6 +16,7 @@ char const* connection = "dbname=regression host=localhost port=5432 sslmode=dis
 int n_records = 100;
 int n_clients = 100;
 int first_tid;
+int delay = 0;
 long inserts[MAX_THREADS];
 volatile int termination;
 
@@ -53,6 +54,7 @@ void* worker(void* arg)
 			fprintf(stderr, "Insert affect wrong number of tuples: %s\n", PQcmdTuples(res));
 			exit(1);
 		}
+		usleep(delay);
 		inserts[id] += 1;
 		PQclear(res);
 	}
@@ -93,6 +95,9 @@ int main (int argc, char* argv[])
 			  case 'i':
 				initialize = 1;
 				continue;
+			  case 'p':
+				delay = atoi(argv[++i]);
+				continue;
 			  case 'f':
 				first_tid = atoi(argv[++i]);
 				continue;
@@ -101,6 +106,7 @@ int main (int argc, char* argv[])
 		printf("Options:\n"
 			   "\t-i\tinitialize database\n"
 			   "\t-f\tfirst thread ID (default 0)\n"
+			   "\t-p\tdelay (microseconds)\n"
 			   "\t-c\tnumber of client (default 100)\n"
 			   "\t-t\ttest duration (default 10 sec)\n"
 			   "\t-d\tconnection string ('host=localhost port=5432')\n");

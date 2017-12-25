@@ -369,7 +369,6 @@ void MtmLock(LWLockMode mode)
 		}
 #endif
 		if (mode == LW_EXCLUSIVE) {
-			// Assert(MtmLockCount == 0);
 			Assert(MyProcPid != 0);
 			Mtm->lastLockHolder = MyProcPid;
 			Assert(MyProcPid);
@@ -382,12 +381,17 @@ void MtmLock(LWLockMode mode)
 
 void MtmUnlock(void)
 {
-	if (MtmLockCount != 0 && --MtmLockCount != 0) {
-		Assert(Mtm->lastLockHolder == MyProcPid);
-		return;
+	if (Mtm->lastLockHolder == MyProcPid)
+	{
+		if (MtmLockCount != 0 && --MtmLockCount != 0) {
+			return;
+		}
+		Mtm->lastLockHolder = 0;
 	}
-
-	Mtm->lastLockHolder = 0;
+	else
+	{
+		MtmLockCount = 0;
+	}
 
 	/* If we have no PGPROC, then lock was not obtained. */
 	if (MyProc != NULL)
