@@ -2011,8 +2011,13 @@ void MtmHandleApplyError(void)
  */
 void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool commitPrecommited)
 {
-	MtmTransState *ts;
-	for (ts = Mtm->transListHead; ts != NULL; ts = ts->next) {
+	MtmL2List *start = Mtm->activeTransList.next;
+	MtmL2List *cur;
+
+	for (cur = start; cur->next != start; cur = cur->next)
+	{
+		MtmTransState *ts = MtmGetActiveTransaction(cur);
+
 		if (TransactionIdIsValid(ts->gtid.xid)
 			&& ts->gtid.node == disabledNodeId
 			&& ts->votingCompleted
@@ -2050,8 +2055,13 @@ void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool
 void
 MtmPollStatusOfPreparedTransactions(bool majorMode)
 {
-	MtmTransState *ts;
-	for (ts = Mtm->transListHead; ts != NULL; ts = ts->next) {
+	MtmL2List *start = Mtm->activeTransList.next;
+	MtmL2List *cur;
+
+	for (cur = start; cur->next != start; cur = cur->next)
+	{
+		MtmTransState *ts = MtmGetActiveTransaction(cur);
+
 		if (TransactionIdIsValid(ts->gtid.xid)
 			&& ts->votingCompleted /* If voting is not yet completed, then there is some backend coordinating this transaction */
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
