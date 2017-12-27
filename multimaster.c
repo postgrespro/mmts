@@ -1287,7 +1287,7 @@ Mtm2PCVoting(MtmCurrentTrans* x, MtmTransState* ts)
 	{
 		MtmUnlock();
 		MTM_TXTRACE(x, "PostPrepareTransaction WaitLatch Start");
-		result = WaitLatch(&MyProc->procLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout);
+		result = WaitLatch(&MyProc->procLatch, WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatSendTimeout);
 		MTM_TXTRACE(x, "PostPrepareTransaction WaitLatch Finish");
 		/* Emergency bailout if postmaster has died */
 		if (result & WL_POSTMASTER_DEATH) {
@@ -2057,6 +2057,8 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 {
 	MtmL2List *start = Mtm->activeTransList.next;
 	MtmL2List *cur;
+
+	MtmSleep(2*MtmHeartbeatSendTimeout);
 
 	for (cur = start; cur->next != start; cur = cur->next)
 	{
