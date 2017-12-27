@@ -2199,7 +2199,8 @@ bool MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr)
 {
 	bool caughtUp = false;
 	MtmLock(LW_EXCLUSIVE);
-	if (MtmIsRecoveredNode(nodeId) && Mtm->nActiveTransactions == 0) {
+	if (MtmIsRecoveredNode(nodeId))
+	{
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP);
 		caughtUp = true;
 		MtmIsRecoverySession = false;
