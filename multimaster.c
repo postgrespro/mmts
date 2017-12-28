@@ -2058,7 +2058,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	MtmL2List *start = Mtm->activeTransList.next;
 	MtmL2List *cur;
 
-	MtmSleep(2*MtmHeartbeatSendTimeout);
+	MtmSleep(2*MtmHeartbeatSendTimeout*1000);
 
 	for (cur = start; cur->next != start; cur = cur->next)
 	{
