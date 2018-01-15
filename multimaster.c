@@ -2071,11 +2071,15 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	{
 		MtmTransState *ts = MtmGetActiveTransaction(cur);
 
+		// MTM_LOG1("X_MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d, valid=%d, completed=%d", ts->gid, majorMode, ts->status, ts->isPrepared, TransactionIdIsValid(ts->gtid.xid), ts->votingCompleted);
+
 		if (TransactionIdIsValid(ts->gtid.xid)
 			&& ts->votingCompleted /* If voting is not yet completed, then there is some backend coordinating this transaction */
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
+
+			// MTM_LOG1("MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d", ts->gid, majorMode, ts->status, ts->isPrepared);
 
 			if (majorMode)
 			{
@@ -2083,8 +2087,13 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 			}
 			else
 			{
-				MTM_LOG1("Poll state of transaction %s (%llu) from node %d", ts->gid, (long64)ts->xid, ts->gtid.node);
-				MtmBroadcastPollMessage(ts);
+				// MTM_LOG1("Poll state of transaction %s (%llu) from node %d", ts->gid, (long64)ts->xid, ts->gtid.node);
+				// MtmBroadcastPollMessage(ts);
+				if (ts->gtid.node == MtmNodeId && !ts->isPrepared)
+				{
+					MTM_LOG1("Abort our in-progress transaction %s", ts->gid);
+					MtmFinishPreparedTransaction(ts, false);
+				}
 			}
 		} else {
 			MTM_LOG2("Skip prepared transaction %s (%d) with status %s gtid.node=%d gtid.xid=%llu votedMask=%llx",
