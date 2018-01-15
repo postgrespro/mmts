@@ -2058,7 +2058,14 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	MtmL2List *start = Mtm->activeTransList.next;
 	MtmL2List *cur;
 
+	/*
+	 * Backends check cluster config changes every MtmHeartbeatSendTimeout ms,
+	 * so we need here to wait slightly more time to allow them to detect error
+	 * and set votingCompleted flag.
+	 */
+	MtmUnlock();
 	MtmSleep(2*MtmHeartbeatSendTimeout*1000);
+	MtmLock(LW_EXCLUSIVE);
 
 	for (cur = start; cur->next != start; cur = cur->next)
 	{
