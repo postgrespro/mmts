@@ -592,15 +592,23 @@ MtmRefereeHasLocalTable()
 	RangeVar   *rv;
 	Oid			rel_oid;
 	static bool _has_local_tables;
+	bool		txstarted = false;
 
 	/* memoized */
 	if (_has_local_tables)
 		return true;
 
-	StartTransactionCommand();
+	if (!IsTransactionState())
+	{
+		txstarted = true;
+		StartTransactionCommand();
+	}
+
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "referee_decision", -1);
 	rel_oid = RangeVarGetRelid(rv, NoLock, true);
-	CommitTransactionCommand();
+
+	if (txstarted)
+		CommitTransactionCommand();
 
 	if (OidIsValid(rel_oid))
 	{
@@ -617,12 +625,17 @@ MtmRefereeReadSaved(void)
 {
 	int winner = -1;
 	int rc;
+	bool txstarted = false;
 
 	if (!MtmRefereeHasLocalTable())
 		return -1;
 
 	/* Save result locally */
-	StartTransactionCommand();
+	if (!IsTransactionState())
+	{
+		txstarted = true;
+		StartTransactionCommand();
+	}
 	SPI_connect();
 	PushActiveSnapshot(GetTransactionSnapshot());
 	rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
@@ -644,7 +657,8 @@ MtmRefereeReadSaved(void)
 	}
 	SPI_finish();
 	PopActiveSnapshot();
-	CommitTransactionCommand();
+	if (txstarted)
+		CommitTransactionCommand();
 
 	MTM_LOG1("Read saved referee decision, winner=%d.", winner);
 	return winner;
