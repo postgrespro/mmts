@@ -1253,6 +1253,7 @@ MtmVotingCompleted(MtmTransState* ts)
 				ts->votedMask = 0;
 				Assert(replorigin_session_origin == InvalidRepOriginId);
 				MtmUnlock();
+				//MTM_LOG1("SetPreparedTransactionState1 %s", ts->gid);
 				SetPreparedTransactionState(ts->gid, MULTIMASTER_PRECOMMITTED);
 				MtmLock(LW_EXCLUSIVE);
 				return false;
@@ -1463,6 +1464,7 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 			MTM_LOG2("Coordinator of transaction %s sends MSG_PRECOMMIT", ts->gid);
 			Assert(replorigin_session_origin == InvalidRepOriginId);
 			MtmUnlock();
+			// MTM_LOG1("SetPreparedTransactionState2 %s", ts->gid);
 			SetPreparedTransactionState(ts->gid, MULTIMASTER_PRECOMMITTED);
 			MtmLock(LW_EXCLUSIVE);
 
@@ -2063,6 +2065,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	 * so we need here to wait slightly more time to allow them to detect error
 	 * and set votingCompleted flag.
 	 */
+	// MTM_LOG1("X_MtmPollStatusOfPreparedTransactions called");
 	MtmUnlock();
 	MtmSleep(2*MtmHeartbeatSendTimeout*1000);
 	MtmLock(LW_EXCLUSIVE);

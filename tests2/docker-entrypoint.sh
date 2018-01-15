@@ -58,7 +58,7 @@ if [ "$1" = 'postgres' ]; then
 			max_wal_senders = 10
 			shared_preload_libraries = 'multimaster'
 			default_transaction_isolation = 'repeatable read'
-			log_line_prefix = '%m: '
+			log_line_prefix = '%m [%p]: '
 			wal_writer_delay = 1ms
 			# log_statement = all
 
