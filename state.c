@@ -612,7 +612,7 @@ MtmRefereeHasLocalTable()
 
 	if (OidIsValid(rel_oid))
 	{
-		MtmMakeRelationLocal(rel_oid);
+		// MtmMakeRelationLocal(rel_oid);
 		_has_local_tables = true;
 		return true;
 	}

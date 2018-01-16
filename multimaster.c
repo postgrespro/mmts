@@ -3819,13 +3819,25 @@ MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
 	return res;
 }
 
-/**
+/*
  * Filter record corresponding to local (non-distributed) tables
  */
 static bool
 MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
 {
 	bool isDistributed;
+
+	/*
+	 * We have several built-in local tables that shouldn't be replicated.
+	 * It is hard to insert them into MtmLocalTables properly on extension
+	 * creation so we just list them here.
+	 */
+	if (strcmp(args->changed_rel->rd_rel->relname.data, "referee_decision") == 0)
+		return false;
+
+	/*
+	 * Check in shared hash of local tables.
+	 */
 	MtmLock(LW_SHARED);
 	if (!Mtm->localTablesHashLoaded) {
 		MtmUnlock();
@@ -3837,6 +3849,7 @@ MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
 	}
 	isDistributed = hash_search(MtmLocalTables, &RelationGetRelid(args->changed_rel), HASH_FIND, NULL) == NULL;
 	MtmUnlock();
+
 	return isDistributed;
 }
 
