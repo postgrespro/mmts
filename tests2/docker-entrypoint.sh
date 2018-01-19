@@ -51,7 +51,7 @@ if [ "$1" = 'postgres' ]; then
 			listen_addresses='*' 
 			max_prepared_transactions = 100
 			synchronous_commit = on
-			fsync = on
+			fsync = off
 			wal_level = logical
 			max_worker_processes = 30
 			max_replication_slots = 10
@@ -59,7 +59,7 @@ if [ "$1" = 'postgres' ]; then
 			shared_preload_libraries = 'multimaster'
 			default_transaction_isolation = 'repeatable read'
 			log_line_prefix = '%m [%p]: '
-			wal_writer_delay = 1ms
+			wal_writer_delay = 500ms
 			# log_statement = all
 
 			multimaster.max_nodes = 3

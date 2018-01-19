@@ -1775,7 +1775,7 @@ static void	MtmLoadPreparedTransactions(void)
 			MtmActivateTransaction(ts);
 			ts->status = strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0 ? TRANSACTION_STATUS_UNKNOWN : TRANSACTION_STATUS_IN_PROGRESS;
 			ts->isLocal = true;
-			ts->isPrepared = true;
+			ts->isPrepared = strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0;
 			ts->isPinned = false;
 			ts->snapshot = INVALID_CSN;
 			ts->isTwoPhase = false;
@@ -2074,7 +2074,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	{
 		MtmTransState *ts = MtmGetActiveTransaction(cur);
 
-		// MTM_LOG1("X_MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d, valid=%d, completed=%d", ts->gid, majorMode, ts->status, ts->isPrepared, TransactionIdIsValid(ts->gtid.xid), ts->votingCompleted);
+		MTM_LOG1("X_MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d, valid=%d, completed=%d", ts->gid, majorMode, ts->status, ts->isPrepared, TransactionIdIsValid(ts->gtid.xid), ts->votingCompleted);
 
 		if (TransactionIdIsValid(ts->gtid.xid)
 			&& ts->votingCompleted /* If voting is not yet completed, then there is some backend coordinating this transaction */
@@ -2082,7 +2082,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 		{
 			Assert(ts->gid[0]);
 
-			// MTM_LOG1("MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d", ts->gid, majorMode, ts->status, ts->isPrepared);
+			MTM_LOG1("MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d", ts->gid, majorMode, ts->status, ts->isPrepared);
 
 			if (majorMode)
 			{
