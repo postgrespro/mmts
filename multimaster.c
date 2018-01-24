@@ -191,7 +191,7 @@ HTAB* MtmGid2State;
 static HTAB* MtmRemoteFunctions;
 static HTAB* MtmLocalTables;
 
-static bool MtmIsRecoverySession;
+bool MtmIsRecoverySession;
 
 static MtmCurrentTrans MtmTx;
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);

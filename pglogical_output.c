@@ -441,7 +441,17 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 {
 	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
 
-	if (data->api) { 
+	/*
+	 * MtmOutputPluginPrepareWrite send some bytes to downstream,
+	 * so we must avoid calling it in normal (non-recovery) situation.
+	 *
+	 * It's dirty hack to use MtmIsRecoverySession here and better to
+	 * provide also filter-like callback, but we plan to migrate to native
+	 * output plugin, so this code should anyway go away during next
+	 * release.
+	 */
+	if (data->api && MtmIsRecoverySession)
+	{
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
 		MtmOutputPluginWrite(ctx, true, true);

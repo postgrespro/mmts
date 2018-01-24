@@ -393,6 +393,7 @@ extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
 extern bool  MtmEnforceLocalTx;
+extern bool MtmIsRecoverySession;
 
 
 extern void  MtmArbiterInitialize(void);
