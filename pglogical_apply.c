@@ -728,7 +728,7 @@ process_remote_commit(StringInfo in)
 					StartTransactionCommand();
 					MtmSetCurrentTransactionGID(gid);
 					TXFINISH("%s ABORT, PGLOGICAL_PREPARE", gid);
-					FinishPreparedTransaction(gid, false);
+					FinishPreparedTransaction(gid, false, false);
 					CommitTransactionCommand();					
 					Assert(!MtmTransIsActive());
 				}	
@@ -758,7 +758,7 @@ process_remote_commit(StringInfo in)
 				MtmSetCurrentTransactionCSN(csn);
 			MtmSetCurrentTransactionGID(gid);
 			TXFINISH("%s COMMIT, PGLOGICAL_COMMIT_PREPARED csn=%lld", gid, csn);
-			FinishPreparedTransaction(gid, true);
+			FinishPreparedTransaction(gid, true, false);
 			MTM_LOG2("Distributed transaction %s is committed", gid);
 			CommitTransactionCommand();
 			Assert(!MtmTransIsActive());

@@ -3410,7 +3410,7 @@ void MtmRollbackPreparedTransaction(int nodeId, char const* gid)
 		MtmBeginSession(nodeId);
 		MtmSetCurrentTransactionGID(gid);
 		TXFINISH("%s ABORT, MtmRollbackPrepared", gid);
-		FinishPreparedTransaction(gid, false);
+		FinishPreparedTransaction(gid, false, false);
 		MtmTx.isActive = true;
 		CommitTransactionCommand();
 		Assert(!MtmTx.isActive);
@@ -3446,7 +3446,7 @@ void MtmFinishPreparedTransaction(MtmTransState* ts, bool commit)
 	MtmSetCurrentTransactionCSN(ts->csn);
 	MtmSetCurrentTransactionGID(ts->gid);
 	MtmTx.isActive = true;
-	FinishPreparedTransaction(ts->gid, commit);
+	FinishPreparedTransaction(ts->gid, commit, false);
 	if (commit) {
 		MTM_LOG2("Distributed transaction %s (%lld) is committed at %lld with LSN=%lld", ts->gid, (long64)ts->xid, MtmGetCurrentTime(), (long64)GetXLogInsertRecPtr());
 	}
@@ -4734,11 +4734,11 @@ static bool MtmTwoPhaseCommit(MtmCurrentTrans* x)
 					Assert(ts);
 
 					TXFINISH("%s ABORT, MtmTwoPhase", x->gid);
-					FinishPreparedTransaction(x->gid, false);
+					FinishPreparedTransaction(x->gid, false, false);
 					MTM_ELOG(ERROR, "Transaction %s (%llu) is aborted on node %d. Check its log to see error details.", x->gid, (long64)x->xid, ts->abortedByNode);
 				} else {
 					TXFINISH("%s COMMIT, MtmTwoPhase", x->gid);
-					FinishPreparedTransaction(x->gid, true);
+					FinishPreparedTransaction(x->gid, true, false);
 					MTM_TXTRACE(x, "MtmTwoPhaseCommit Committed");
 					MTM_LOG2("Distributed transaction %s (%lld) is committed at %lld with LSN=%lld", x->gid, (long64)x->xid, MtmGetCurrentTime(), (long64)GetXLogInsertRecPtr());
 				}
