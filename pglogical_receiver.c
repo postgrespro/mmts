@@ -305,7 +305,7 @@ pglogical_receiver_main(Datum main_arg)
 		// 	synchronous_twophase = false;
 		// else
 		// 	synchronous_twophase = true;
-		synchronous_twophase = true;
+		// synchronous_twophase = true;
 
 		if (mode == REPLMODE_EXIT)
 		{
