@@ -1,4 +1,4 @@
-FROM pgproent
+FROM pgproee10
 
 RUN mkdir /pg/mmts
 COPY ./ /pg/mmts/
