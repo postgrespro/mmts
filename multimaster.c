@@ -460,15 +460,18 @@ timestamp_t MtmGetCurrentTime(void)
 
 void MtmSleep(timestamp_t interval)
 {
-	struct timespec ts;
-	struct timespec rem;
-	ts.tv_sec = interval/USECS_PER_SEC;
-	ts.tv_nsec = interval%USECS_PER_SEC*1000;
+	timestamp_t waketm = MtmGetCurrentTime() + interval;
+	for (;;)
+	{
+		timestamp_t sleepfor = waketm - MtmGetCurrentTime();
 
-	while (nanosleep(&ts, &rem) < 0) {
-		Assert(errno == EINTR);
-		CHECK_FOR_INTERRUPTS();
-		ts = rem;
+		pg_usleep(sleepfor);
+		if (MtmGetCurrentTime() < waketm)
+		{
+			Assert(errno == EINTR);
+			continue;
+		}
+		break;
 	}
 }
 
