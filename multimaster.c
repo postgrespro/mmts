@@ -468,7 +468,7 @@ void MtmSleep(timestamp_t interval)
 		pg_usleep(sleepfor);
 		if (MtmGetCurrentTime() < waketm)
 		{
-			Assert(errno == EINTR);
+			/* Assert(errno == EINTR); */
 			continue;
 		}
 		break;
