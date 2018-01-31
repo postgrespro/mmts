@@ -9,6 +9,8 @@
 #ifdef WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <netinet/tcp.h>
 #endif
 
 #include <unistd.h>
@@ -16,9 +18,6 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#ifdef HAVE_NETINET_TCP_H
-#include <netinet/tcp.h>
-#endif
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
@@ -276,8 +275,8 @@ static int MtmReadSocket(int sd, void* buf, int buf_size)
 
 static void MtmSetSocketOptions(int sd)
 {
-#ifdef TCP_NODELAY
 	int on = 1;
+#ifdef TCP_NODELAY
 	if (pg_setsockopt(sd, IPPROTO_TCP, TCP_NODELAY, (char const*)&on, sizeof(on), MtmUseRDMA) < 0) {
 		MTM_ELOG(WARNING, "Failed to set TCP_NODELAY: %m");
 	}
