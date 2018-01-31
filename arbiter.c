@@ -5,12 +5,20 @@
  *
  */
 
+
+#ifdef WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 #include <unistd.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#ifdef HAVE_NETINET_TCP_H
 #include <netinet/tcp.h>
+#endif
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
@@ -70,7 +78,7 @@
 
 #if USE_EPOLL
 #include <sys/epoll.h>
-#else
+#elif HAVE_SYS_SELECT_H
 #include <sys/select.h>
 #endif
 
@@ -461,8 +469,7 @@ static int MtmConnectSocket(int node, int port)
 		MTM_ELOG(LOG, "Arbiter failed to create socket: %s", strerror(errno));
 		goto Error;
 	}
-	rc = pg_fcntl(sd, F_SETFL, O_NONBLOCK, MtmUseRDMA);
-	if (rc < 0) {
+	if (pg_set_noblock(sd, MtmUseRDMA)) {
 		MTM_ELOG(LOG, "Arbiter failed to switch socket to non-blocking mode: %s", strerror(errno));
 		goto Error;
 	}
@@ -630,8 +637,8 @@ static void MtmAcceptOneConnection()
 	} else { 	
 		MtmHandshakeMessage req;
 		MtmArbiterMessage resp;		
-		int rc = pg_fcntl(fd, F_SETFL, O_NONBLOCK, MtmUseRDMA);
-		if (rc < 0) {
+		int rc;
+		if (pg_set_noblock(fd,MtmUseRDMA)) {
 			MTM_ELOG(ERROR, "Arbiter failed to switch socket to non-blocking mode: %s", strerror(errno));
 		}
 		rc = MtmReadSocket(fd, &req, sizeof req);

@@ -38,7 +38,6 @@
 #include "replication/origin.h"
 #include "utils/portal.h"
 #include "tcop/pquery.h"
-#include "libpq-int.h"
 
 #include "multimaster.h"
 #include "spill.h"
