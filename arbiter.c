@@ -468,7 +468,7 @@ static int MtmConnectSocket(int node, int port)
 		MTM_ELOG(LOG, "Arbiter failed to create socket: %s", strerror(errno));
 		goto Error;
 	}
-	if (pg_set_noblock(sd, MtmUseRDMA)) {
+	if (!pg_set_noblock(sd, MtmUseRDMA)) {
 		MTM_ELOG(LOG, "Arbiter failed to switch socket to non-blocking mode: %s", strerror(errno));
 		goto Error;
 	}
@@ -637,7 +637,7 @@ static void MtmAcceptOneConnection()
 		MtmHandshakeMessage req;
 		MtmArbiterMessage resp;		
 		int rc;
-		if (pg_set_noblock(fd,MtmUseRDMA)) {
+		if (!pg_set_noblock(fd,MtmUseRDMA)) {
 			MTM_ELOG(ERROR, "Arbiter failed to switch socket to non-blocking mode: %s", strerror(errno));
 		}
 		rc = MtmReadSocket(fd, &req, sizeof req);
