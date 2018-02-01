@@ -39,6 +39,10 @@
 #include "utils/portal.h"
 #include "tcop/pquery.h"
 
+#ifdef WITH_RSOCKET
+#include "libpq-int.h"
+#endif
+
 #include "multimaster.h"
 #include "spill.h"
 #include "state.h"
