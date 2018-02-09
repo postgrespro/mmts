@@ -68,6 +68,10 @@ if [ "$1" = 'postgres' ]; then
 			multimaster.max_recovery_lag = 1GB
 			multimaster.min_recovery_lag = 10kB
 			multimaster.preserve_commit_order = on
+
+			multimaster.volkswagen_mode = on
+			multimaster.ignore_tables_without_pk = on
+			partition_backend = 'internal'
 		EOF
 
 		if [ -n "$NODE_ID" ]; then
