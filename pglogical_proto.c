@@ -485,7 +485,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	uint8 event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
 
 	/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
-	if (MtmIsFilteredTxn)
+	if (MtmIsFilteredTxn && event == PGLOGICAL_PREPARE)
 		return;
 
 	/* send the event fields */
