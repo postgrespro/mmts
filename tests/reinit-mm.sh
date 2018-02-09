@@ -77,9 +77,14 @@ do
         multimaster.arbiter_port = $arbiter_port
         multimaster.max_recovery_lag = 30GB
         multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
-	#multimaster.preserve_commit_order=false
 SQL
-    cp pg_hba.conf tmp_check/node$i
+
+    cat <<CONF >> tmp_check/node$i/pg_hba.conf
+        host all all 0.0.0.0/0 trust
+        host replication all 0.0.0.0/0 trust
+CONF
+
+    # cp pg_hba.conf tmp_check/node$i
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
 done
 
