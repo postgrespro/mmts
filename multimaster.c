@@ -42,6 +42,7 @@
 #include "executor/executor.h"
 #include "access/twophase.h"
 #include "utils/guc.h"
+#include "utils/guc_tables.h"
 #include "utils/hsearch.h"
 #include "utils/timeout.h"
 #include "utils/tqual.h"
@@ -4891,6 +4892,34 @@ static void MtmGucSet(VariableSetStmt *stmt, const char *queryStr)
 	MemoryContextSwitchTo(oldcontext);
 }
 
+static int
+_var_name_cmp(const void *a, const void *b)
+{
+	const struct config_generic *confa = *(struct config_generic * const *) a;
+	const struct config_generic *confb = *(struct config_generic * const *) b;
+
+	return strcmp(confa->name, confb->name);
+}
+
+static struct config_generic *
+fing_guc_conf(const char *name)
+{
+	int num;
+	struct config_generic **vars;
+	const char **key = &name;
+	struct config_generic **res;
+
+	num = GetNumConfigOptions();
+	vars = get_guc_variables();
+
+	res = (struct config_generic **) bsearch((void *) &key,
+										(void *) vars,
+										num, sizeof(struct config_generic *),
+										_var_name_cmp);
+
+	return res ? *res : NULL;
+}
+
 char* MtmGucSerialize(void)
 {
 	StringInfo serialized_gucs;
@@ -4905,6 +4934,7 @@ char* MtmGucSerialize(void)
 	dlist_foreach(iter, &MtmGucList)
 	{
 		MtmGucEntry *cur_entry = dlist_container(MtmGucEntry, list_node, iter.cur);
+		struct config_generic *gconf;
 
 		if (strcmp(cur_entry->key, "search_path") == 0)
 			continue;
@@ -4913,8 +4943,8 @@ char* MtmGucSerialize(void)
 		appendStringInfoString(serialized_gucs, cur_entry->key);
 		appendStringInfoString(serialized_gucs, " TO ");
 
-		/* quite a crutch */
-		if (strstr(cur_entry->key, "_mem") != NULL || *(cur_entry->value) == '\0')
+		gconf = fing_guc_conf(cur_entry->key);
+		if (gconf && (gconf->vartype == PGC_STRING || gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME)))
 		{
 			appendStringInfoString(serialized_gucs, "'");
 			appendStringInfoString(serialized_gucs, cur_entry->value);
