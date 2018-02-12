@@ -167,6 +167,8 @@ static void*  MtmCreateSavepointContext(void);
 static void	  MtmRestoreSavepointContext(void* ctx);
 static void	  MtmReleaseSavepointContext(void* ctx);
 static void   MtmSetRemoteFunction(char const* list, void* extra);
+static void*  MtmSuspendTransaction(void);
+static void   MtmResumeTransaction(void* ctx);
 
 // static void MtmCheckClusterLock(void);
 static void MtmCheckSlots(void);
@@ -219,7 +221,9 @@ static TransactionManager MtmTM =
 	MtmInitializeSequence,
 	MtmCreateSavepointContext,
 	MtmRestoreSavepointContext,
-	MtmReleaseSavepointContext
+	MtmReleaseSavepointContext,
+	MtmSuspendTransaction,
+	MtmResumeTransaction
 };
 
 char const* const MtmNodeStatusMnem[] =
@@ -556,6 +560,22 @@ static void	 MtmRestoreSavepointContext(void* ctx)
 
 static void	 MtmReleaseSavepointContext(void* ctx)
 {
+}
+
+static void* MtmSuspendTransaction(void)
+{
+	MtmCurrentTrans* ctx = malloc(sizeof(MtmCurrentTrans));
+	*ctx = MtmTx;
+	MtmResetTransaction();
+	MtmBeginTransaction(&MtmTx);
+	return ctx;
+}
+
+static void MtmResumeTransaction(void* ctx)
+{
+	MtmTx = *(MtmCurrentTrans*)ctx;
+	MtmInsideTransaction = true;
+	free(ctx);
 }
 
 
@@ -966,6 +986,7 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 		x->isSuspended = false;
 		x->isTwoPhase = false;
 		x->isTransactionBlock = IsTransactionBlock();
+
 		/* Application name can be changed using PGAPPNAME environment variable */
 		if (x->isDistributed && Mtm->status != MTM_ONLINE && strcmp(application_name, MULTIMASTER_ADMIN) != 0
 			&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0
@@ -4717,6 +4738,7 @@ static bool MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	if (!x->isReplicated && x->isDistributed && x->containsDML) {
 		MtmGenerateGid(x->gid);
+
 		if (!x->isTransactionBlock) {
 			BeginTransactionBlock(false);
 			x->isTransactionBlock = true;
