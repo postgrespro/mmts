@@ -87,8 +87,8 @@ is($cluster->is_data_identic( (0,1,2,3) ), 1, "soft stop / resume");
 
 note('Stopping node with slot drop');
 # $cluster->psql(0, 'postgres', "select mtm.stop_node(3,'t')");
-# await for comletion?
 $cluster->{nodes}->[2]->stop('fast');
+$cluster->await_nodes( (0,1,3) );
 
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->pgbench(1, ('-N', '-n', -T => '1') );
