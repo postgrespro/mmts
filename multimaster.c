@@ -4703,7 +4703,7 @@ static void
 MtmGenerateGid(char* gid)
 {
 	static int localCount;
-	sprintf(gid, "MTM-%d-%d-%d-%ld", MtmNodeId, MyProcPid, ++localCount, (int64) GetCurrentTimestamp());
+	sprintf(gid, "MTM-%d-%d-%d-" INT64_FORMAT, MtmNodeId, MyProcPid, ++localCount, (int64) GetCurrentTimestamp());
 }
 
 /*
