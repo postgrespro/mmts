@@ -2,7 +2,7 @@ use strict;
 use warnings;
 use Cluster;
 use TestLib;
-use Test::More tests => 5;
+use Test::More tests => 4;
 
 my $cluster = new Cluster(3);
 $cluster->init();
