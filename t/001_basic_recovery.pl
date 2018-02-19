@@ -35,12 +35,8 @@ is($psql_out, '10', "Check replication while all nodes are up.");
 ###############################################################################
 
 note("stopping node 2");
-if ($cluster->stopid(2, 'fast')) {
-	pass("node 2 stops in fast mode");
-} else {
-	my $name = $cluster->{nodes}->[2]->name;
-	$cluster->bail_out_with_logs("failed to stop $name in fast mode");
-}
+$cluster->{nodes}->[2]->stop;
+$cluster->await_nodes( (0,1) );
 
 note("inserting 2 on node 0");
 $ret = $cluster->psql(0, 'postgres', "insert into t values(2, 20);"); # this transaciton may fail
