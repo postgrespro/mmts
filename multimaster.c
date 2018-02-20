@@ -583,13 +583,14 @@ csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_
 		if (ts != NULL) {
 			*participantsMask = ts->participantsMask;
 			/* If node is disables, then we are in a process of recovery of this node */
-			if (!ts->isLocal && BIT_CHECK(ts->participantsMask|Mtm->disabledNodeMask, nodeId-1)) {
-				snapshot = ts->snapshot;
-				Assert(ts->gtid.node == MtmNodeId || MtmIsRecoverySession);
-			} else {
-				MTM_LOG1("Do not send transaction %s (%llu) to node %d participants mask %llx",
-						 ts->gid, (long64)ts->xid, nodeId, ts->participantsMask);
-			}
+			snapshot = ts->snapshot;
+			// if (!ts->isLocal && BIT_CHECK(ts->participantsMask|Mtm->disabledNodeMask, nodeId-1)) {
+			// 	snapshot = ts->snapshot;
+			// 	Assert(ts->gtid.node == MtmNodeId || MtmIsRecoverySession);
+			// } else {
+			// 	MTM_LOG1("Do not send transaction %s (%llu) to node %d participants mask %llx",
+			// 			 ts->gid, (long64)ts->xid, nodeId, ts->participantsMask);
+			// }
 		}
 	}
 	MtmUnlock();
