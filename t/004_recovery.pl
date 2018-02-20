@@ -42,7 +42,7 @@ is( ($hash0 == $hash1) , 1, "Check that hash is the same before recovery");
 $oldhash = $hash0;
 
 $cluster->{nodes}->[2]->start;
-$cluster->await_nodes( (2) );
+$cluster->await_nodes( (0,1,2) );
 
 $cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
 $cluster->psql(1, 'postgres', $hash_query, stdout => \$hash1);
