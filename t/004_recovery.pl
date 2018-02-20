@@ -99,7 +99,7 @@ $cluster->{nodes}->[2]->start;
 $cluster->pgbench_await($pgb_handle);
 
 # await recovery
-$cluster->await_nodes( (2) );
+$cluster->await_nodes( (0,1,2) );
 
 # check data identity
 $cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
