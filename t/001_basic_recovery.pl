@@ -36,6 +36,8 @@ is($psql_out, '10', "Check replication while all nodes are up.");
 
 note("stopping node 2");
 $cluster->{nodes}->[2]->stop;
+
+sleep($cluster->{recv_timeout});
 $cluster->await_nodes( (0,1) );
 
 note("inserting 2 on node 0");
@@ -66,7 +68,8 @@ is($psql_out, '40', "Check replication after node failure.");
 note("starting node 2");
 $cluster->{nodes}->[2]->start;
 
-$cluster->await_nodes( (0,1,2) );
+# intentionaly start from 2
+$cluster->await_nodes( (2,0,1) );
 
 note("inserting 6 on node 0 (can fail)");
 $cluster->psql(0, 'postgres', "insert into t values(6, 60);"); 

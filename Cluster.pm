@@ -73,6 +73,7 @@ sub new
 	my $self = {
 		nodenum => $nodenum,
 		nodes => $nodes,
+		recv_timeout => 5,
 	};
 
 	bless $self, $class;

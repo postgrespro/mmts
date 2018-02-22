@@ -12,8 +12,7 @@ $cluster->start();
 
 # XXXX: delete all '-n' ?
 
-# await online status
-$cluster->{nodes}->[0]->poll_query_until('postgres', "select 't'");
+$cluster->await_nodes( (0,1,2) );
 
 # init
 $cluster->pgbench(0, ('-i', -s => '10') );
@@ -29,7 +28,8 @@ $cluster->psql(0, 'postgres', "create extension multimaster");
 $cluster->{nodes}->[2]->stop('fast');
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[2]->start;
-$cluster->{nodes}->[2]->poll_query_until('postgres', "select 't'");
+
+$cluster->await_nodes( (2,0,1) );
 is($cluster->is_data_identic( (0,1,2) ), 1, "check auto recovery");
 
 # ################################################################################
@@ -51,7 +51,8 @@ $new_connstr =~ s/'//gms;
 $cluster->psql(0, 'postgres', "SELECT mtm.add_node('$new_connstr')");
 # await for comletion?
 $cluster->{nodes}->[3]->start;
-$cluster->{nodes}->[3]->poll_query_until('postgres', "select 't'");
+
+$cluster->await_nodes( (3,0,1,2) );
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,2,3) ), 1, "basebackup and add node");
@@ -88,6 +89,8 @@ is($cluster->is_data_identic( (0,1,2,3) ), 1, "soft stop / resume");
 note('Stopping node with slot drop');
 # $cluster->psql(0, 'postgres', "select mtm.stop_node(3,'t')");
 $cluster->{nodes}->[2]->stop('fast');
+
+sleep($cluster->{recv_timeout});
 $cluster->await_nodes( (0,1,3) );
 
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
@@ -108,7 +111,7 @@ my $dd = $cluster->{nodes}->[4]->data_dir;
 note("preparing to start $dd");
 
 $cluster->{nodes}->[4]->start;
-$cluster->{nodes}->[4]->poll_query_until('postgres', "select 't'");
+$cluster->await_nodes( (4,0,1,3) );
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->pgbench(1, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );

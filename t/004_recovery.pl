@@ -29,6 +29,7 @@ from
     (select * from pgbench_accounts order by aid) t;";
 
 $cluster->{nodes}->[2]->stop('fast');
+sleep($cluster->{recv_timeout});
 $cluster->await_nodes( (0,1) );
 
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
@@ -42,7 +43,7 @@ is( ($hash0 == $hash1) , 1, "Check that hash is the same before recovery");
 $oldhash = $hash0;
 
 $cluster->{nodes}->[2]->start;
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( (2,0,1) );
 
 $cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
 $cluster->psql(1, 'postgres', $hash_query, stdout => \$hash1);
@@ -70,7 +71,7 @@ $cluster->{nodes}->[2]->stop('fast');
 $cluster->{nodes}->[1]->start;
 $cluster->{nodes}->[2]->start;
 
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( (1,2,0) );
 
 $cluster->psql(0, 'postgres', "select sum(v) from t;", stdout => \$sum0);
 $cluster->psql(1, 'postgres', "select sum(v) from t;", stdout => \$sum1);
@@ -99,7 +100,7 @@ $cluster->{nodes}->[2]->start;
 $cluster->pgbench_await($pgb_handle);
 
 # await recovery
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( (2,0,1) );
 
 # check data identity
 $cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
