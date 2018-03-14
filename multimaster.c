@@ -5454,11 +5454,9 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 		if (relid != InvalidOid) {
 			Oid constraint_oid;
 			Bitmapset* pk = get_primary_key_attnos(relid, true, &constraint_oid);
-			if (pk == NULL && !MtmVolksWagenMode) {
+			if (pk == NULL && !MtmVolksWagenMode && MtmIgnoreTablesWithoutPk) {
 				elog(WARNING,
-					 MtmIgnoreTablesWithoutPk
-					 ? "Table %s.%s without primary will not be replicated"
-					 : "Updates and deletes of table %s.%s without primary will not be replicated",
+					 "Table %s.%s without primary will not be replicated",
 					 create->relation->schemaname ? create->relation->schemaname : "public",
 					 create->relation->relname);
 			}
