@@ -1274,18 +1274,18 @@ void MtmExecutor(void* work, size_t size)
 				s.len = save_len;
 				break;
 			}
-			// case 'N':
-			// {
-			// 	int64 next;
-			// 	Oid relid;
-			// 	Assert(rel != NULL);
-			// 	relid = RelationGetRelid(rel);
-			// 	close_rel(rel);
-			// 	rel = NULL;
-			// 	next = pq_getmsgint64(&s);
-			// 	AdjustSequence(relid, next);
-			// 	break;
-			// }
+			case 'N':
+			{
+				int64 next;
+				Oid relid;
+				Assert(rel != NULL);
+				relid = RelationGetRelid(rel);
+				close_rel(rel);
+				rel = NULL;
+				next = pq_getmsgint64(&s);
+				AdjustSequence(relid, next);
+				break;
+			}
 		    case '0':
 			    Assert(rel != NULL);
 			    heap_truncate_one_rel(rel);

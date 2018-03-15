@@ -77,6 +77,7 @@ do
         multimaster.arbiter_port = $arbiter_port
         multimaster.max_recovery_lag = 30GB
         multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
+        multimaster.monotonic_sequences = on
 SQL
 
     cat <<CONF >> tmp_check/node$i/pg_hba.conf

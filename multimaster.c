@@ -290,7 +290,7 @@ static ExecutorStart_hook_type PreviousExecutorStartHook;
 static ExecutorFinish_hook_type PreviousExecutorFinishHook;
 static ProcessUtility_hook_type PreviousProcessUtilityHook;
 static shmem_startup_hook_type PreviousShmemStartupHook;
-// static seq_nextval_hook_t PreviousSeqNextvalHook;
+static seq_nextval_hook_t PreviousSeqNextvalHook;
 
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
@@ -3390,8 +3390,8 @@ _PG_init(void)
 	PreviousProcessUtilityHook = ProcessUtility_hook;
 	ProcessUtility_hook = MtmProcessUtility;
 
-	// PreviousSeqNextvalHook = SeqNextvalHook;
-	// SeqNextvalHook = MtmSeqNextvalHook;
+	PreviousSeqNextvalHook = SeqNextvalHook;
+	SeqNextvalHook = MtmSeqNextvalHook;
 }
 
 /*
@@ -3403,7 +3403,7 @@ _PG_fini(void)
 	shmem_startup_hook = PreviousShmemStartupHook;
 	ExecutorFinish_hook = PreviousExecutorFinishHook;
 	ProcessUtility_hook = PreviousProcessUtilityHook;
-	// SeqNextvalHook = PreviousSeqNextvalHook;
+	SeqNextvalHook = PreviousSeqNextvalHook;
 }
 
 
@@ -5089,7 +5089,33 @@ static bool MtmFunctionProfileDependsOnTempTable(CreateFunctionStmt* func)
 	return false;
 }
 
+static void
+AdjustCreateSequence(List *options)
+{
+	bool has_increment = false, has_start = false;
+	ListCell   *option;
 
+	foreach(option, options)
+	{
+		DefElem    *defel = (DefElem *) lfirst(option);
+		if (strcmp(defel->defname, "increment") == 0)
+			has_increment = true;
+		else if (strcmp(defel->defname, "start") == 0)
+			has_start = true;
+	}
+
+	if (!has_increment)
+	{
+		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(MtmMaxNodes), -1);
+		options = lappend(options, defel);
+	}
+
+	if (!has_start)
+	{
+		DefElem *defel = makeDefElem("start", (Node *) makeInteger(MtmNodeId), -1);
+		options = lappend(options, defel);
+	}
+}
 
 static void MtmProcessUtility(PlannedStmt *pstmt,
 										  const char *queryString, ProcessUtilityContext context,
@@ -5160,6 +5186,13 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 		case T_CreatedbStmt:
 		case T_DropdbStmt:
 			elog(ERROR, "Multimaster doesn't support creating and dropping databases");
+			break;
+
+		case T_CreateSeqStmt:
+			{
+				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
+				AdjustCreateSequence(stmt->options);
+			}
 			break;
 
 		case T_CreateTableSpaceStmt:
