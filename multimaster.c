@@ -3859,12 +3859,7 @@ MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
 {
 	bool isDistributed;
 
-	/*
-	 * We have several built-in local tables that shouldn't be replicated.
-	 * It is hard to insert them into MtmLocalTables properly on extension
-	 * creation so we just list them here.
-	 */
-	if (strcmp(args->changed_rel->rd_rel->relname.data, "referee_decision") == 0)
+	if (args->changed_rel->rd_islocal)
 		return false;
 
 	/*
