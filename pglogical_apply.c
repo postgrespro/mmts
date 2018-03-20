@@ -881,6 +881,15 @@ process_remote_commit(StringInfo in)
 	MtmUpdateLsnMapping(MtmReplicationNodeId, end_lsn);
 }
 
+static int
+pq_peekmsgbyte(StringInfo msg)
+{
+	return (msg->cursor < msg->len) ? (unsigned char) msg->data[msg->cursor] : EOF;
+}
+
+#define MAX_BUFFERED_TUPLES 1024
+#define MAX_BUFFERED_TUPLES_SIZE 0x10000
+
 static void
 process_remote_insert(StringInfo s, Relation rel)
 {
@@ -891,84 +900,142 @@ process_remote_insert(StringInfo s, Relation rel)
 	ResultRelInfo *relinfo;
 	ScanKey	*index_keys;
 	int	i;
+	TupleDesc tupDesc = RelationGetDescr(rel);
+	HeapTuple tup;
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	estate = create_rel_estate(rel);
 	newslot = ExecInitExtraTupleSlot(estate);
 	oldslot = ExecInitExtraTupleSlot(estate);
-	ExecSetSlotDescriptor(newslot, RelationGetDescr(rel));
-	ExecSetSlotDescriptor(oldslot, RelationGetDescr(rel));
+	ExecSetSlotDescriptor(newslot, tupDesc);
+	ExecSetSlotDescriptor(oldslot, tupDesc);
 
-	read_tuple_parts(s, rel, &new_tuple);
-	{
-		HeapTuple tup;
-		tup = heap_form_tuple(RelationGetDescr(rel),
-							  new_tuple.values, new_tuple.isnull);
-		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
-	}
-
-	// if (rel->rd_rel->relkind != RELKIND_RELATION) // RELKIND_MATVIEW
-	// 	MTM_ELOG(ERROR, "unexpected relkind '%c' rel \"%s\"",
-	// 		 rel->rd_rel->relkind, RelationGetRelationName(rel));
-
-	/* debug output */
-#ifdef VERBOSE_INSERT
-	log_tuple("INSERT:%s", RelationGetDescr(rel), newslot->tts_tuple);
-#endif
-
-	/*
-	 * Search for conflicting tuples.
-	 */
 	ExecOpenIndices(estate->es_result_relation_info, false);
 	relinfo = estate->es_result_relation_info;
-	index_keys = palloc0(relinfo->ri_NumIndices * sizeof(ScanKeyData*));
 
-	build_index_scan_keys(estate, index_keys, &new_tuple);
+	read_tuple_parts(s, rel, &new_tuple);
 
-	/* do a SnapshotDirty search for conflicting tuples */
-	for (i = 0; i < relinfo->ri_NumIndices; i++)
+	if (pq_peekmsgbyte(s) == 'I')
 	{
-		IndexInfo  *ii = relinfo->ri_IndexRelationInfo[i];
-		bool found = false;
+		/* Use bulk insert */
+		BulkInsertState bistate = GetBulkInsertState();
+		HeapTuple bufferedTuples[MAX_BUFFERED_TUPLES];
+		MemoryContext oldcontext;
+		int nBufferedTuples;
+		size_t bufferedTuplesSize;
+		CommandId	mycid = GetCurrentCommandId(true);
+
+		bufferedTuples[0] = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
+		bufferedTuplesSize = bufferedTuples[0]->t_len;
+
+		for (nBufferedTuples = 1; nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE; nBufferedTuples++)
+		{
+			int action = pq_getmsgbyte(s);
+			Assert(action == 'I');
+			read_tuple_parts(s, rel, &new_tuple);
+			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
+											  new_tuple.values, new_tuple.isnull);
+			if (pq_peekmsgbyte(s) != 'I')
+				break;
+		}
+		/*
+		 * heap_multi_insert leaks memory, so switch to short-lived memory context
+		 * before calling it.
+		 */
+		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		heap_multi_insert(rel,
+						  bufferedTuples,
+						  nBufferedTuples,
+						  mycid,
+						  0,
+						  bistate);
+		MemoryContextSwitchTo(oldcontext);
 
 		/*
-		 * Only unique indexes are of interest here, and we can't deal with
-		 * expression indexes so far. FIXME: predicates should be handled
-		 * better.
-		 *
-		 * NB: Needs to match expression in build_index_scan_key
+		 * If there are any indexes, update them for all the inserted tuples, and
+		 * run AFTER ROW INSERT triggers.
 		 */
-		if (!ii->ii_Unique || ii->ii_Expressions != NIL)
-			continue;
-
-		if (index_keys[i] == NULL)
-			continue;
-
-		Assert(ii->ii_Expressions == NIL);
-
-		/* if conflict: wait */
-		found = find_pkey_tuple(index_keys[i],
-								rel, relinfo->ri_IndexRelationDescs[i],
-								oldslot, true, LockTupleExclusive);
-
-		/* alert if there's more than one conflicting unique key */
-		if (found)
+		if (relinfo->ri_NumIndices > 0)
 		{
-			/* TODO: Report tuple identity in log */
-			ereport(ERROR,
-                    (errcode(ERRCODE_UNIQUE_VIOLATION),
-					 MTM_ERRMSG("Unique constraints violated by remotely INSERTed tuple in %s", RelationGetRelationName(rel)),
-                     errdetail("Cannot apply transaction because remotely INSERTed tuple conflicts with a local tuple on UNIQUE constraint and/or PRIMARY KEY")));
+			for (i = 0; i < nBufferedTuples; i++)
+			{
+				List	   *recheckIndexes;
+
+				ExecStoreTuple(bufferedTuples[i], newslot, InvalidBuffer, false);
+				recheckIndexes =
+					ExecInsertIndexTuples(newslot, &bufferedTuples[i]->t_self,
+										  estate, false, NULL, NIL);
+				list_free(recheckIndexes);
+			}
 		}
-		CHECK_FOR_INTERRUPTS();
+
+	    FreeBulkInsertState(bistate);
+	} else {
+        /* Insert single tuple */
+
+	    tup = heap_form_tuple(tupDesc,
+							  new_tuple.values, new_tuple.isnull);
+		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
+
+		// if (rel->rd_rel->relkind != RELKIND_RELATION) // RELKIND_MATVIEW
+		// 	MTM_ELOG(ERROR, "unexpected relkind '%c' rel \"%s\"",
+		// 		 rel->rd_rel->relkind, RelationGetRelationName(rel));
+
+		/* debug output */
+#ifdef VERBOSE_INSERT
+		log_tuple("INSERT:%s", tupDesc, newslot->tts_tuple);
+#endif
+
+		/*
+		 * Search for conflicting tuples.
+		 */
+		index_keys = palloc0(relinfo->ri_NumIndices * sizeof(ScanKeyData*));
+
+		build_index_scan_keys(estate, index_keys, &new_tuple);
+
+		/* do a SnapshotDirty search for conflicting tuples */
+		for (i = 0; i < relinfo->ri_NumIndices; i++)
+		{
+			IndexInfo  *ii = relinfo->ri_IndexRelationInfo[i];
+			bool found = false;
+
+			/*
+			 * Only unique indexes are of interest here, and we can't deal with
+			 * expression indexes so far. FIXME: predicates should be handled
+			 * better.
+			 *
+			 * NB: Needs to match expression in build_index_scan_key
+			 */
+			if (!ii->ii_Unique || ii->ii_Expressions != NIL)
+				continue;
+
+			if (index_keys[i] == NULL)
+				continue;
+
+			Assert(ii->ii_Expressions == NIL);
+
+			/* if conflict: wait */
+			found = find_pkey_tuple(index_keys[i],
+									rel, relinfo->ri_IndexRelationDescs[i],
+									oldslot, true, LockTupleExclusive);
+			/* alert if there's more than one conflicting unique key */
+			if (found)
+			{
+				/* TODO: Report tuple identity in log */
+				ereport(ERROR,
+						(errcode(ERRCODE_UNIQUE_VIOLATION),
+						 MTM_ERRMSG("Unique constraints violated by remotely INSERTed tuple in %s", RelationGetRelationName(rel)),
+						 errdetail("Cannot apply transaction because remotely INSERTed tuple conflicts with a local tuple on UNIQUE constraint and/or PRIMARY KEY")));
+			}
+			CHECK_FOR_INTERRUPTS();
+		}
+
+		simple_heap_insert(rel, newslot->tts_tuple);
+		UserTableUpdateOpenIndexes(estate, newslot);
+
 	}
-
-	simple_heap_insert(rel, newslot->tts_tuple);
-    UserTableUpdateOpenIndexes(estate, newslot);
-
 	ExecCloseIndices(estate->es_result_relation_info);
-
 	if (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
