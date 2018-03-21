@@ -922,20 +922,21 @@ process_remote_insert(StringInfo s, Relation rel)
 		BulkInsertState bistate = GetBulkInsertState();
 		HeapTuple bufferedTuples[MAX_BUFFERED_TUPLES];
 		MemoryContext oldcontext;
-		int nBufferedTuples;
+		int nBufferedTuples = 1;
 		size_t bufferedTuplesSize;
 		CommandId	mycid = GetCurrentCommandId(true);
 
 		bufferedTuples[0] = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
 		bufferedTuplesSize = bufferedTuples[0]->t_len;
 
-		for (nBufferedTuples = 1; nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE; nBufferedTuples++)
+		while (nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE)
 		{
 			int action = pq_getmsgbyte(s);
 			Assert(action == 'I');
 			read_tuple_parts(s, rel, &new_tuple);
 			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
-											  new_tuple.values, new_tuple.isnull);
+															  new_tuple.values, new_tuple.isnull);
+			bufferedTuplesSize += bufferedTuples[nBufferedTuples++]->t_len;
 			if (pq_peekmsgbyte(s) != 'I')
 				break;
 		}
