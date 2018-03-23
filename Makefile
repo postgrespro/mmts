@@ -25,6 +25,6 @@ all: multimaster.so
 
 
 
-check: temp-install
-	$(prove_check)
+#check: temp-install
+#	$(prove_check)
 
