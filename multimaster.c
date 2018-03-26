@@ -5187,7 +5187,8 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 		case T_CreateSeqStmt:
 			{
 				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
-				AdjustCreateSequence(stmt->options);
+				if (!MtmVolksWagenMode)
+					AdjustCreateSequence(stmt->options);
 			}
 			break;
 
