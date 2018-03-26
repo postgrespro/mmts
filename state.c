@@ -88,14 +88,15 @@ MtmSetClusterStatus(MtmNodeStatus status)
 	 */
 	if (status == MTM_ONLINE)
 	{
-		if (!Mtm->refereeGrant && MtmRefereeReadSaved() > 0)
+		int saved_winner_node_id = MtmRefereeReadSaved();
+		if (!Mtm->refereeGrant && saved_winner_node_id > 0)
 		{
 			/*
 			 * We booted after being with refereeGrant,
 			 * but now have ordinary majority.
 			 */
 			MtmPollStatusOfPreparedTransactions(true);
-			MtmRefereeClearWinner();
+			Mtm->refereeWinnerId = saved_winner_node_id;
 		}
 	}
 
@@ -783,7 +784,7 @@ MtmRefereeClearWinner(void)
 		CommitTransactionCommand();
 		if (rc < 0)
 		{
-			MTM_ELOG(WARNING, "Failed to save referee decision, proceeding anyway");
+			MTM_ELOG(WARNING, "Failed to clean referee decision");
 			return false;
 		}
 	}

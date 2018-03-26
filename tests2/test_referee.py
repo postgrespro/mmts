@@ -265,6 +265,84 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.client.bgrun()
         time.sleep(3)
 
+    def test_consequent_shutdown(self):
+        print('### test_consequent_shutdown ###')
+        docker_api = docker.from_env()
+
+
+        print('#### down on(winner) || on')
+        print('##########################')
+        aggs_failure, aggs = self.performFailure(StopNode('node1'))
+
+        self.assertNoCommits(aggs_failure[:1])
+        self.assertCommits(aggs_failure[1:])
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs[:1])
+        self.assertCommits(aggs[1:])
+        self.assertIsolation(aggs)
+
+
+        print('#### down down(winner) || on')
+        print('############################')
+        aggs_failure, aggs = self.performFailure(StopNode('node2'))
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+
+        self.assertNoCommits(aggs)
+        self.assertIsolation(aggs)
+
+
+        print('#### down down(winner) || down')
+        print('##############################')
+        docker_api.containers.get('referee').stop()
+        time.sleep(3)
+
+
+        print('#### up down(winner) || down')
+        print('############################')
+        docker_api.containers.get('node1').start()
+        aggs_failure, aggs = self.performFailure(NoFailure())
+
+        self.assertNoCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+        self.assertNoCommits(aggs)
+        self.assertIsolation(aggs)
+
+        print('#### up up(winner) || down')
+        print('##########################')
+        self.client.get_aggregates(clean=False)
+        self.client.stop()
+        docker_api.containers.get('node2').start()
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15433")
+        self.client.bgrun()
+        time.sleep(3)
+
+        aggs_failure, aggs = self.performFailure(NoFailure())
+
+        self.assertCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
+
+        print('#### up up || up(2 -> 0)')
+        print('########################')
+        docker_api.containers.get('referee').start()
+        time.sleep(5)
+
+        print('#### check that decision is cleaned')
+        print('###################################')
+        con = psycopg2.connect("dbname=regression user=postgres host=127.0.0.1 port=15435")
+        con.autocommit = True
+        cur = con.cursor()
+        cur.execute("select node_id from referee.decision where key = 'winner'")
+        decisions_count = cur.rowcount
+        cur.close()
+        con.close()
+
+        self.assertEqual(decisions_count, 0)
+
 
 if __name__ == '__main__':
     unittest.main()
