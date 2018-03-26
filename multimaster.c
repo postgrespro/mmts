@@ -602,8 +602,9 @@ csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_
 		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
 		if (ts != NULL) {
 			*participantsMask = ts->participantsMask;
-			/* If node is disables, then we are in a process of recovery of this node */
-			snapshot = ts->snapshot;
+			if (!ts->isLocal)
+				snapshot = ts->snapshot;
+			// /* If node is disables, then we are in a process of recovery of this node */
 			// if (!ts->isLocal && BIT_CHECK(ts->participantsMask|Mtm->disabledNodeMask, nodeId-1)) {
 			// 	snapshot = ts->snapshot;
 			// 	Assert(ts->gtid.node == MtmNodeId || MtmIsRecoverySession);
