@@ -84,7 +84,7 @@ CREATE FUNCTION mtm.make_table_local(relation regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_make_table_local'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.broadcast_table(srcTable regclass, dstNodesMask bigint) RETURNS void
+CREATE FUNCTION mtm.broadcast_table(srcTable regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_broadcast_table'
 LANGUAGE C;
 

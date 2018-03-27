@@ -4459,7 +4459,7 @@ Datum mtm_broadcast_table(PG_FUNCTION_ARGS)
 {
 	MtmCopyRequest copy;
 	copy.sourceTable = PG_GETARG_OID(0);
-	copy.targetNodes = PG_GETARG_INT64(1);
+	copy.targetNodes = ~Mtm->disabledNodeMask;
 	LogLogicalMessage("B", (char*)&copy, sizeof(copy), true);
 	MtmTx.containsDML = true;
 	PG_RETURN_VOID();
