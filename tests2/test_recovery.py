@@ -11,60 +11,7 @@ import warnings
 
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
-
-TEST_WARMING_TIME = 5
-TEST_DURATION = 10
-TEST_RECOVERY_TIME = 30
-TEST_SETUP_TIME = 20
-TEST_STOP_DELAY = 5
-
-class TestHelper(object):
-
-    def assertIsolation(self, aggs):
-        isolated = True
-        for conn_id, agg in enumerate(aggs):
-            isolated = isolated and agg['sumtotal']['isolation'] == 0
-        if not isolated:
-            raise AssertionError('Isolation failure')
-
-    def assertCommits(self, aggs):
-        commits = True
-        for conn_id, agg in enumerate(aggs):
-            commits = commits and 'commit' in agg['transfer']['finish']
-        if not commits:
-            print('No commits during aggregation interval')
-            # time.sleep(100000)
-            raise AssertionError('No commits during aggregation interval')
-
-    def assertNoCommits(self, aggs):
-        commits = True
-        for conn_id, agg in enumerate(aggs):
-            commits = commits and 'commit' in agg['transfer']['finish']
-        if commits:
-            raise AssertionError('There are commits during aggregation interval')
-
-    def performFailure(self, failure):
-
-        time.sleep(TEST_WARMING_TIME)
-         
-        print('Simulate failure at ',datetime.datetime.utcnow())
-
-        failure.start()
-
-        self.client.clean_aggregates()
-        time.sleep(TEST_DURATION)
-        aggs_failure = self.client.get_aggregates()
-
-        failure.stop()
-
-        print('Eliminate failure at ',datetime.datetime.utcnow())
-
-        self.client.clean_aggregates()
-        time.sleep(TEST_RECOVERY_TIME)
-        aggs = self.client.get_aggregates()
-
-        return (aggs_failure, aggs)
-
+from lib.test_helper import *
 
 class RecoveryTest(unittest.TestCase, TestHelper):
 
@@ -124,7 +71,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_partition(self):
         print('### test_node_partition ###')
 
-        aggs_failure, aggs = self.performFailure(SingleNodePartition('node3'))
+        aggs_failure, aggs = self.performFailure(SingleNodePartition('node3'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
         self.assertCommits(aggs_failure[:2])
         self.assertNoCommits(aggs_failure[2:])
@@ -148,7 +96,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_restart(self):
         print('### test_node_restart ###')
 
-        aggs_failure, aggs = self.performFailure(RestartNode('node3'))
+        aggs_failure, aggs = self.performFailure(RestartNode('node3'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
         self.assertCommits(aggs_failure[:2])
         self.assertNoCommits(aggs_failure[2:])
@@ -160,7 +109,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_crash(self):
         print('### test_node_crash ###')
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'))
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
         self.assertCommits(aggs_failure[:2])
         self.assertNoCommits(aggs_failure[2:])
@@ -172,7 +122,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_bicrash(self):
         print('### test_node_bicrash ###')
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'))
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
         self.assertCommits(aggs_failure[:2])
         self.assertNoCommits(aggs_failure[2:])
@@ -181,10 +132,11 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'))
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node1'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15432", stop_load=True)
 
-        self.assertCommits(aggs_failure[:2])
-        self.assertNoCommits(aggs_failure[2:])
+        self.assertNoCommits(aggs_failure[0:1])  # [1]
+        self.assertCommits(aggs_failure[1:]) # [2, 3]
         self.assertIsolation(aggs_failure)
 
         self.assertCommits(aggs)
