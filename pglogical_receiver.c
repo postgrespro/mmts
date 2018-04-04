@@ -705,6 +705,7 @@ pglogical_receiver_main(Datum main_arg)
 		continue;
 
 	  OnError:
+		ByteBufferReset(&buf);
 		PQfinish(conn);
 		MtmReleaseRecoverySlot(nodeId);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
