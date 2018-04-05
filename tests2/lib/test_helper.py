@@ -95,11 +95,6 @@ class TestHelper(object):
             self.client.get_aggregates(clean=False)
             self.client.stop()
 
-        if node_wait_for_commit >= 0:
-            self.awaitCommit(node_wait_for_commit)
-        else:
-            time.sleep(TEST_RECOVERY_TIME)
-
         if node_wait_for_online != None:
             self.awaitOnline(node_wait_for_online)
         else:
@@ -108,6 +103,11 @@ class TestHelper(object):
         if stop_load:
             self.client.bgrun()
             time.sleep(3)
+
+        if node_wait_for_commit >= 0:
+            self.awaitCommit(node_wait_for_commit)
+        else:
+            time.sleep(TEST_RECOVERY_TIME)
 
         aggs = self.client.get_aggregates()
 
