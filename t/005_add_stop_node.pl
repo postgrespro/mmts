@@ -3,7 +3,7 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 8;
+use Test::More tests => 7;
 
 my $cluster = new Cluster(3);
 $cluster->init();
@@ -98,25 +98,25 @@ $cluster->pgbench(1, ('-N', '-n', -T => '1') );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 is($cluster->is_data_identic( (0,1,3) ), 1, "hard stop / resume");
 
-$cluster->psql(0, 'postgres', "select mtm.recover_node(3)");
+# $cluster->psql(0, 'postgres', "select mtm.recover_node(3)");
 
-sleep(5);
+# sleep(5);
 
-# now we need to perform backup from live node
-$cluster->add_node(port => $cluster->{nodes}->[2]->{_port},
-    arbiter_port => $cluster->{nodes}->[2]->{arbiter_port},
-    node_id => 3);
+# # now we need to perform backup from live node
+# $cluster->add_node(port => $cluster->{nodes}->[2]->{_port},
+#     arbiter_port => $cluster->{nodes}->[2]->{arbiter_port},
+#     node_id => 3);
 
-my $dd = $cluster->{nodes}->[4]->data_dir;
-note("preparing to start $dd");
+# my $dd = $cluster->{nodes}->[4]->data_dir;
+# note("preparing to start $dd");
 
-$cluster->{nodes}->[4]->start;
-$cluster->await_nodes( (4,0,1,3) );
-$cluster->pgbench(0, ('-N', '-n', -T => '1') );
-$cluster->pgbench(1, ('-N', '-n', -T => '1') );
-$cluster->pgbench(3, ('-N', '-n', -T => '1') );
-$cluster->pgbench(4, ('-N', '-n', -T => '1') );
-is($cluster->is_data_identic( (0,1,3,4) ), 1, "hard stop / resume");
+# $cluster->{nodes}->[4]->start;
+# $cluster->await_nodes( (4,0,1,3) );
+# $cluster->pgbench(0, ('-N', '-n', -T => '1') );
+# $cluster->pgbench(1, ('-N', '-n', -T => '1') );
+# $cluster->pgbench(3, ('-N', '-n', -T => '1') );
+# $cluster->pgbench(4, ('-N', '-n', -T => '1') );
+# is($cluster->is_data_identic( (0,1,3,4) ), 1, "hard stop / resume");
 
 ok($cluster->stop('fast'), "cluster stops");
 
