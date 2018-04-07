@@ -176,7 +176,6 @@ static void MtmAddSubtransactions(MtmTransState* ts, TransactionId *subxids, int
 
 static void MtmShmemStartup(void);
 
-static BgwPool* MtmPoolConstructor(void);
 static bool MtmRunUtilityStmt(PGconn* conn, char const* sql, char **errmsg);
 static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int forceOnNode);
 static void MtmProcessDDLCommand(char const* queryString, bool transactional);
@@ -266,12 +265,12 @@ bool  MtmVolksWagenMode; /* Pretend to be normal postgres. This means skip some 
 bool  MtmMajorNode;
 char* MtmRefereeConnStr;
 bool  MtmEnforceLocalTx;
+int	  MtmWorkers;
 
 static char* MtmConnStrs;
 static char* MtmRemoteFunctionsList;
 static char* MtmClusterName;
 static int	 MtmQueueSize;
-static int	 MtmWorkers;
 static int	 MtmVacuumDelay;
 static int	 MtmMinRecoveryLag;
 static int	 MtmMaxRecoveryLag;
@@ -2558,7 +2557,8 @@ static void MtmInitialize()
 		Mtm->inject2PCError = 0;
 		Mtm->sendQueue = NULL;
 		Mtm->freeQueue = NULL;
-		for (i = 0; i < MtmNodes; i++) {
+		for (i = 0; i < MtmMaxNodes; i++)
+		{
 			Mtm->nodes[i].oldestSnapshot = 0;
 			Mtm->nodes[i].disabledNodeMask = 0;
 			Mtm->nodes[i].connectivityMask = (((nodemask_t)1 << MtmNodes) - 1);
@@ -2576,6 +2576,7 @@ static void MtmInitialize()
 			Mtm->nodes[i].nHeartbeats = 0;
 			Mtm->nodes[i].manualRecovery = false;
 			Mtm->nodes[i].slotDeleted = false;
+			BgwPoolInit(&Mtm->nodes[i].pool, MtmExecutor, MtmDatabaseName, MtmDatabaseUser, MtmQueueSize, 0);
 		}
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
@@ -2583,7 +2584,6 @@ static void MtmInitialize()
 		Mtm->sendSemaphore = PGSemaphoreCreate();
 		PGSemaphoreReset(Mtm->sendSemaphore);
 		SpinLockInit(&Mtm->queueSpinlock);
-		BgwPoolInit(&Mtm->pool, MtmExecutor, MtmDatabaseName, MtmDatabaseUser, MtmQueueSize, MtmWorkers);
 		RegisterXactCallback(MtmXactCallback, NULL);
 		MtmTx.snapshot = INVALID_CSN;
 		MtmTx.xid = InvalidTransactionId;
@@ -2754,7 +2754,7 @@ static void MtmSplitConnStrs(void)
 		MTM_ELOG(ERROR, "More than %d nodes are specified", MtmMaxNodes);
 	}
 	MtmNodes = i;
-	MtmConnections = (MtmConnectionInfo*)palloc(MtmMaxNodes*sizeof(MtmConnectionInfo));
+	MtmConnections = (MtmConnectionInfo*)palloc0(MtmMaxNodes*sizeof(MtmConnectionInfo));
 
 	if (f != NULL) {
 		fseek(f, SEEK_SET, 0);
@@ -3369,10 +3369,8 @@ _PG_init(void)
 	 * the postmaster process.)	 We'll allocate or attach to the shared
 	 * resources in mtm_shmem_startup().
 	 */
-	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmQueueSize);
+	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize);
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2);
-
-	BgwPoolStart(MtmWorkers, MtmPoolConstructor);
 
 	MtmArbiterInitialize();
 
@@ -4313,7 +4311,19 @@ mtm_get_cluster_state(PG_FUNCTION_ARGS)
 	TupleDesc desc;
 	Datum	  values[Natts_mtm_cluster_state];
 	bool	  nulls[Natts_mtm_cluster_state] = {false};
+	int		  i,
+			  pool_active = 0,
+			  pool_pending = 0,
+			  pool_queue_size = 0;
+
 	get_call_result_type(fcinfo, NULL, &desc);
+
+	for (i = 0; i < Mtm->nAllNodes; i++)
+	{
+		pool_active += (int) Mtm->nodes[i].pool.active;
+		pool_pending += (int) Mtm->nodes[i].pool.pending;
+		pool_queue_size += (int) BgwPoolGetQueueSize(&Mtm->nodes[i].pool);
+	}
 
 	values[0] = Int32GetDatum(MtmNodeId);
 	values[1] = CStringGetTextDatum(MtmNodeStatusMnem[Mtm->status]);
@@ -4322,9 +4332,9 @@ mtm_get_cluster_state(PG_FUNCTION_ARGS)
 	values[4] = Int64GetDatum(Mtm->originLockNodeMask);
 	values[5] = Int32GetDatum(Mtm->nLiveNodes);
 	values[6] = Int32GetDatum(Mtm->nAllNodes);
-	values[7] = Int32GetDatum((int)Mtm->pool.active);
-	values[8] = Int32GetDatum((int)Mtm->pool.pending);
-	values[9] = Int64GetDatum(BgwPoolGetQueueSize(&Mtm->pool));
+	values[7] = Int32GetDatum(pool_active);
+	values[8] = Int32GetDatum(pool_pending);
+	values[9] = Int64GetDatum(pool_queue_size);
 	values[10] = Int64GetDatum(Mtm->transCount);
 	values[11] = Int64GetDatum(Mtm->timeShift);
 	values[12] = Int32GetDatum(Mtm->recoverySlot);
@@ -5610,28 +5620,6 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next)
 
 /*
  * -------------------------------------------
- * Executor pool interface
- * -------------------------------------------
- */
-
-void MtmExecute(void* work, int size)
-{
-	if (Mtm->status == MTM_RECOVERY) {
-		/* During recovery apply changes sequentially to preserve commit order */
-		MtmExecutor(work, size);
-	} else {
-		BgwPoolExecute(&Mtm->pool, work, size);
-	}
-}
-
-static BgwPool*
-MtmPoolConstructor(void)
-{
-	return &Mtm->pool;
-}
-
-/*
- * -------------------------------------------
  * Deadlock detection
  * -------------------------------------------
  */
@@ -5743,21 +5731,21 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 		MtmGetGtid(xid, &gtid);
 		hasDeadlock = MtmGraphFindLoop(&graph, &gtid);
 		MTM_ELOG(LOG, "Distributed deadlock check by backend %d for %u:%llu = %d", MyProcPid, gtid.node, (long64)gtid.xid, hasDeadlock);
-		if (!hasDeadlock) {
-			/* There is no deadlock loop in graph, but deadlock can be caused by lack of apply workers: if all of them are busy, then some transactions
-			 * can not be appied just because there are no vacant workers and it cause additional dependency between transactions which is not
-			 * refelected in lock graph
-			 */
-			timestamp_t lastPeekTime = BgwGetLastPeekTime(&Mtm->pool);
-			if (lastPeekTime != 0 && MtmGetSystemTime() - lastPeekTime >= MSEC_TO_USEC(DeadlockTimeout)) {
-				hasDeadlock = true;
-				MTM_ELOG(WARNING, "Apply workers were blocked more than %d msec",
-					 (int)USEC_TO_MSEC(MtmGetSystemTime() - lastPeekTime));
-			} else {
-				MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
-				enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-			}
-		}
+		// if (!hasDeadlock) {
+		// 	/* There is no deadlock loop in graph, but deadlock can be caused by lack of apply workers: if all of them are busy, then some transactions
+		// 	 * can not be appied just because there are no vacant workers and it cause additional dependency between transactions which is not
+		// 	 * refelected in lock graph
+		// 	 */
+		// 	timestamp_t lastPeekTime = minBgwGetLastPeekTime(&Mtm->pool);
+		// 	if (lastPeekTime != 0 && MtmGetSystemTime() - lastPeekTime >= MSEC_TO_USEC(DeadlockTimeout)) {
+		// 		hasDeadlock = true;
+		// 		MTM_ELOG(WARNING, "Apply workers were blocked more than %d msec",
+		// 			 (int)USEC_TO_MSEC(MtmGetSystemTime() - lastPeekTime));
+		// 	} else {
+		// 		MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
+		// 		enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
+		// 	}
+		// }
 	}
 	return hasDeadlock;
 }

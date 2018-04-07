@@ -13,6 +13,7 @@ typedef ulong64 timestamp_t;
 
 #define MAX_DBNAME_LEN 30
 #define MAX_DBUSER_LEN 30
+#define MAX_NAME_LEN 30
 #define MULTIMASTER_BGW_RESTART_TIMEOUT BGW_NEVER_RESTART /* seconds */
 
 extern timestamp_t MtmGetSystemTime(void);   /* non-adjusted current system time */
@@ -37,6 +38,7 @@ typedef struct
 	timestamp_t lastDynamicWorkerStartTime;
     bool   producerBlocked;
 	bool   shutdown;
+	char   poolName[MAX_NAME_LEN];
     char   dbname[MAX_DBNAME_LEN];
 	char   dbuser[MAX_DBUSER_LEN];
     char*  queue;
@@ -44,7 +46,7 @@ typedef struct
 
 typedef BgwPool*(*BgwPoolConstructor)(void);
 
-extern void BgwPoolStart(int nWorkers, BgwPoolConstructor constructor);
+extern void BgwPoolStart(BgwPool* pool, char *poolName);
 
 extern void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname, char const* dbuser, size_t queueSize, size_t nWorkers);
 

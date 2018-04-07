@@ -223,6 +223,8 @@ typedef struct
 typedef struct
 {
 	MtmConnectionInfo con;
+	/* Pool of background workers for applying logical replication */
+	BgwPool pool;
 	timestamp_t transDelay;
 	timestamp_t lastStatusChangeTime;
 	timestamp_t receiverStartTime;
@@ -338,7 +340,6 @@ typedef struct
 	MtmMessageQueue* sendQueue;        /* Messages to be sent by arbiter sender */
 	MtmMessageQueue* freeQueue;        /* Free messages */
 	lsn_t recoveredLSN;           /* LSN at the moment of recovery completion */
-	BgwPool pool;                      /* Pool of background workers for applying logical replication patches */
 	MtmNodeInfo nodes[1];              /* [Mtm->nAllNodes]: per-node data */
 } MtmState;
 
@@ -394,6 +395,7 @@ extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
 extern bool  MtmEnforceLocalTx;
 extern bool MtmIsRecoverySession;
+extern int MtmWorkers;
 
 
 extern void  MtmArbiterInitialize(void);
@@ -404,7 +406,6 @@ extern csn_t MtmAssignCSN(void);
 extern csn_t MtmSyncClock(csn_t csn);
 extern void  MtmJoinTransaction(GlobalTransactionId* gtid, csn_t snapshot, nodemask_t participantsMask);
 extern MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shutdown);
-extern void  MtmExecute(void* work, int size);
 extern void  MtmExecutor(void* work, size_t size);
 extern void  MtmSend2PCMessage(MtmTransState* ts, MtmMessageCode cmd);
 extern void  MtmSendMessage(MtmArbiterMessage* msg);

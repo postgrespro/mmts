@@ -212,6 +212,17 @@ static char const* const MtmReplicationModeName[] =
 	"open_existed" /* normal mode: use existed slot or create new one and start receiving data from it from the rememered position */
 };
 
+static void
+MtmExecute(void* work, int size)
+{
+	/* During recovery apply changes sequentially to preserve commit order */
+	if (Mtm->status == MTM_RECOVERY)
+		MtmExecutor(work, size);
+	else
+		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size);
+}
+
+
 void
 pglogical_receiver_main(Datum main_arg)
 {
@@ -252,7 +263,7 @@ pglogical_receiver_main(Datum main_arg)
 	Mtm->nodes[nodeId-1].receiverStartTime = MtmGetSystemTime();
 	MtmReplicationNodeId = nodeId;
 
-	sprintf(worker_proc, "mtm_pglogical_receiver_%d_%d", MtmNodeId, nodeId);
+	snprintf(worker_proc, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d", MtmNodeId, nodeId);
 
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
@@ -262,6 +273,8 @@ pglogical_receiver_main(Datum main_arg)
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
+
+	BgwPoolStart(&Mtm->nodes[nodeId-1].pool, worker_proc);
 
 	/*
 	 * Set proper restartLsn for all origins
@@ -427,7 +440,7 @@ pglogical_receiver_main(Datum main_arg)
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 			{
-				BgwPoolStop(&Mtm->pool);
+				BgwPoolStop(&Mtm->nodes[nodeId-1].pool);
 				proc_exit(1);
 			}
 
@@ -729,7 +742,7 @@ void MtmStartReceiver(int nodeId, bool dynamic)
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 
 	/* Worker parameter and registration */
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm_pglogical_receiver_%d_%d", MtmNodeId, nodeId);
+	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d", MtmNodeId, nodeId);
 
 	worker.bgw_main_arg = Int32GetDatum(nodeId);
 	if (dynamic) {

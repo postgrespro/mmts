@@ -26,7 +26,7 @@ void BgwPoolDynamicWorkerMainLoop(Datum arg);
 
 static void BgwShutdownWorker(int sig)
 {
-	MTM_LOG1("Background worker %d receive shutdown request", MyProcPid);
+	MTM_LOG1("Background worker %d received shutdown request", MyProcPid);
 	if (MtmPool) { 
 		BgwPoolStop(MtmPool);
 	}
@@ -137,16 +137,15 @@ timestamp_t BgwGetLastPeekTime(BgwPool* pool)
 
 void BgwPoolStaticWorkerMainLoop(Datum arg)
 {
-	BgwPoolConstructor constructor = (BgwPoolConstructor)DatumGetPointer(arg);
-    BgwPoolMainLoop(constructor());
+	BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
 }
 
 void BgwPoolDynamicWorkerMainLoop(Datum arg)
 {
-    BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
+	BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
 }
 
-void BgwPoolStart(int nWorkers, BgwPoolConstructor constructor)
+void BgwPoolStart(BgwPool* pool, char *poolName)
 {
     int i;
 	BackgroundWorker worker;
@@ -158,9 +157,12 @@ void BgwPoolStart(int nWorkers, BgwPoolConstructor constructor)
 	sprintf(worker.bgw_function_name, "BgwPoolStaticWorkerMainLoop");
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 
-    for (i = 0; i < nWorkers; i++) { 
-        snprintf(worker.bgw_name, BGW_MAXLEN, "bgw_pool_worker_%d", i+1);
-        worker.bgw_main_arg = PointerGetDatum(constructor);
+	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
+
+	for (i = 0; i < pool->nWorkers; i++)
+	{
+		snprintf(worker.bgw_name, BGW_MAXLEN, "%s_worker_%d", pool->poolName, i+1);
+		worker.bgw_main_arg = PointerGetDatum(pool);
         RegisterBackgroundWorker(&worker);
     }
 }
@@ -189,7 +191,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 			sprintf(worker.bgw_library_name, "multimaster");
 			sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
 			worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
-			snprintf(worker.bgw_name, BGW_MAXLEN, "bgw_pool_dynworker_%d", (int)++pool->nWorkers);
+			snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int)++pool->nWorkers);
 			worker.bgw_main_arg = PointerGetDatum(pool);
 			pool->lastDynamicWorkerStartTime = now;
 			if (!RegisterDynamicBackgroundWorker(&worker, &handle)) { 
