@@ -61,15 +61,16 @@ countZeroBits(nodemask_t mask, int nNodes)
 }
 
 static void
-MtmSetClusterStatus(MtmNodeStatus status)
+MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 {
 	if (Mtm->status == status)
 		return;
 
 	Mtm->nConfigChanges += 1; /* this will restart backends */
 
-	MTM_LOG1("[STATE]   Switching status from %s to %s status",
-		MtmNodeStatusMnem[Mtm->status], MtmNodeStatusMnem[status]);
+	MTM_LOG1("[STATE]   Switching status from %s to %s status: %s",
+			 MtmNodeStatusMnem[Mtm->status], MtmNodeStatusMnem[status],
+			 statusReason);
 
 	/*
 	 * Do some actions on specific status transitions.
@@ -101,6 +102,7 @@ MtmSetClusterStatus(MtmNodeStatus status)
 	}
 
 	Mtm->status = status;
+	Mtm->statusReason = statusReason;
 }
 
 static void
@@ -108,6 +110,7 @@ MtmCheckState(void)
 {
 	// int nVotingNodes = MtmGetNumberOfVotingNodes();
 	bool isEnabledState;
+	char *statusReason = "node is disabled by default";
 	MtmNodeStatus old_status;
 	int nEnabled   = countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes);
 	int nConnected = countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes);
@@ -126,19 +129,31 @@ MtmCheckState(void)
 		(MtmMajorNode || Mtm->refereeGrant),
 		maskToString(Mtm->stoppedNodeMask, Mtm->nAllNodes));
 
-	isEnabledState =
-		( (nConnected >= Mtm->nAllNodes/2+1)							/* majority */
-			// XXXX: should we restrict major with two nodes setup?
-			|| (nConnected == Mtm->nAllNodes/2 && MtmMajorNode)			/* or half + major node */
-			|| (nConnected == Mtm->nAllNodes/2 && Mtm->refereeGrant) )  /* or half + referee */
-		&& (BIT_CHECK(Mtm->clique, MtmNodeId-1) || Mtm->refereeGrant)	/* in clique when non-major */
-		&& !BIT_CHECK(Mtm->stoppedNodeMask, MtmNodeId-1);				/* is not stopped */
+#define ENABLE_IF(cond, reason) if (!(condition) && !isEnabledState) { \
+	isEnabledState = true; statusReason = reason; }
+#define DISABLE_IF(cond, reason) if ((condition) && isEnabledState) { \
+	isEnabledState = false; statusReason = reason; }
+
+	isEnabledState = false;
+	ENABLE_IF(nConnected >= Mtm->nAllNodes/2+1,
+			  "node belongs to the majority group");
+	ENABLE_IF(nConnected == Mtm->nAllNodes/2 && MtmMajorNode,
+			  "node is a major node");
+	ENABLE_IF(nConnected == Mtm->nAllNodes/2 && Mtm->refereeGrant,
+			  "node has a referee grant");
+	DISABLE_IF(!BIT_CHECK(Mtm->clique, MtmNodeId-1) && !Mtm->refereeGrant,
+			   "node is not in clique and has no referree grant");
+	DISABLE_IF(BIT_CHECK(Mtm->stoppedNodeMask, MtmNodeId-1),
+			   "node is stopped manually");
+
+#undef ENABLE_IF
+#undef DISABLE_IF
 
 	/* ANY -> MTM_DISABLED */
 	if (!isEnabledState)
 	{
 		// BIT_SET(Mtm->disabledNodeMask, MtmNodeId-1);
-		MtmSetClusterStatus(MTM_DISABLED);
+		MtmSetClusterStatus(MTM_DISABLED, statusReason);
 		MtmDisableNode(MtmNodeId);
 		return;
 	}
@@ -146,22 +161,18 @@ MtmCheckState(void)
 	switch (Mtm->status)
 	{
 		case MTM_DISABLED:
-			if (isEnabledState)
-			{
-				MtmSetClusterStatus(MTM_RECOVERY);
+			MtmSetClusterStatus(MTM_RECOVERY, statusReason);
 
-				if (old_status != Mtm->status)
-					MtmCheckState();
-				return;
-			}
-			break;
+			if (old_status != Mtm->status)
+				MtmCheckState();
+			return;
 
 		case MTM_RECOVERY:
 			if (!BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId-1))
 			{
 				MTM_LOG1("[LOCK] set lock on MTM_RECOVERY switch");
 				BIT_SET(Mtm->originLockNodeMask, MtmNodeId-1); // kk trick, XXXX: log that
-				MtmSetClusterStatus(MTM_RECOVERED);
+				MtmSetClusterStatus(MTM_RECOVERED, statusReason);
 
 				if (old_status != Mtm->status)
 					MtmCheckState();
@@ -186,7 +197,7 @@ MtmCheckState(void)
 				 */
 				MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
 				BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
-				MtmSetClusterStatus(MTM_ONLINE);
+				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
 				if (old_status != Mtm->status)
 					MtmCheckState();

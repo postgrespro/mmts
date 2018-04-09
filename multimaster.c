@@ -995,7 +995,9 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 			 * Allow execution of transaction by bg-workers to make it possible to perform recovery.
 			 */
 			MtmUnlock();
-			MTM_ELOG(MtmBreakConnection ? FATAL : ERROR, "Multimaster node is not online: current status %s", MtmNodeStatusMnem[Mtm->status]);
+			MTM_ELOG(MtmBreakConnection ? FATAL : ERROR,
+					"Multimaster node is not online: current status %s: %s",
+					MtmNodeStatusMnem[Mtm->status], Mtm->statusReason);
 		}
 		x->containsDML = false;
 		x->gtid.xid = InvalidTransactionId;

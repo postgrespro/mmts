@@ -292,6 +292,8 @@ typedef struct {
 typedef struct
 {
 	MtmNodeStatus status;              /* Status of this node */
+	/* A human-readable description of why the current status was set */
+	char *statusReason;
 	int recoverySlot;                  /* NodeId of recovery slot or 0 if none */
 	volatile slock_t queueSpinlock;    /* spinlock used to protect sender queue */
 	PGSemaphore sendSemaphore;     /* semaphore used to notify mtm-sender about new responses to coordinator */
