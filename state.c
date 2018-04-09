@@ -129,9 +129,9 @@ MtmCheckState(void)
 		(MtmMajorNode || Mtm->refereeGrant),
 		maskToString(Mtm->stoppedNodeMask, Mtm->nAllNodes));
 
-#define ENABLE_IF(cond, reason) if (!(condition) && !isEnabledState) { \
+#define ENABLE_IF(cond, reason) if (!(cond) && !isEnabledState) { \
 	isEnabledState = true; statusReason = reason; }
-#define DISABLE_IF(cond, reason) if ((condition) && isEnabledState) { \
+#define DISABLE_IF(cond, reason) if ((cond) && isEnabledState) { \
 	isEnabledState = false; statusReason = reason; }
 
 	isEnabledState = false;
@@ -161,11 +161,15 @@ MtmCheckState(void)
 	switch (Mtm->status)
 	{
 		case MTM_DISABLED:
-			MtmSetClusterStatus(MTM_RECOVERY, statusReason);
+			if (isEnabledState)
+			{
+				MtmSetClusterStatus(MTM_RECOVERY, statusReason);
 
-			if (old_status != Mtm->status)
-				MtmCheckState();
-			return;
+				if (old_status != Mtm->status)
+					MtmCheckState();
+				return;
+			}
+			break;
 
 		case MTM_RECOVERY:
 			if (!BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId-1))
