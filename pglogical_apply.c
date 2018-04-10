@@ -119,7 +119,9 @@ retry:
 				continue;
 			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not null */
 				break;
-			else if (!datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen))
+			else if (!(att->attlen == -1
+					   ? datumIsEqual(PointerGetDatum(PG_DETOAST_DATUM_PACKED(tup->values[i])), PointerGetDatum(PG_DETOAST_DATUM_PACKED(values[i])), att->attbyval, -1)
+					   : datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen)))
 				break;
 		}
 		if (i == natts)
@@ -168,6 +170,7 @@ retry:
 					ereport(LOG,
 							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
 							 MTM_ERRMSG("concurrent update, retrying")));
+					heap_rescan(scan, NULL);
 					goto retry;
 				  default:
 					MTM_ELOG(ERROR, "unexpected HTSU_Result after locking: %u", res);

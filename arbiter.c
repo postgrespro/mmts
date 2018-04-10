@@ -355,9 +355,23 @@ static void MtmCheckResponse(MtmArbiterMessage* resp)
 	}
 }
 
+#include <execinfo.h>
+
 static void MtmScheduleHeartbeat()
 {
-	if (!stop) { 
+	if (last_sent_heartbeat != 0 && last_sent_heartbeat + MSEC_TO_USEC(MtmHeartbeatSendTimeout)*2 < now) { 
+#define MCO_MAX_BACK_TRACE_DEPTH 256
+		int sp;
+        void* back_trace[MCO_MAX_BACK_TRACE_DEPTH];
+        int depth = backtrace(back_trace, MCO_MAX_BACK_TRACE_DEPTH);
+		char** bt = backtrace_symbols(back_trace, depth);
+		MTM_LOG1("Hearbeat interrupt: more than %lld microseconds since last heartbeat", now - last_sent_heartbeat);
+		for (sp = 0; sp < depth; sp++) {
+			MTM_LOG1("\t%s", bt[sp]);
+		}
+		free(bt);
+	}
+	if (!stop) {
 		enable_timeout_after(heartbeat_timer, MtmHeartbeatSendTimeout);
 		send_heartbeat = true;
 	}
