@@ -5138,18 +5138,24 @@ AdjustCreateSequence(List *options)
 }
 
 static void MtmProcessUtility(PlannedStmt *pstmt,
-										  const char *queryString, ProcessUtilityContext context,
-										  ParamListInfo params,
-										  QueryEnvironment *queryEnv,
-										  DestReceiver *dest, char *completionTag)
+							  const char *queryString, ProcessUtilityContext context,
+							  ParamListInfo params,
+							  QueryEnvironment *queryEnv,
+							  DestReceiver *dest, char *completionTag)
 {
 	bool skipCommand = false;
 	bool executed = false;
 	bool prevMyXactAccessedTempRel;
 	Node *parsetree = pstmt->utilityStmt;
+	int stmt_start = pstmt->stmt_location > 0 ? pstmt->stmt_location : 0;
+	int stmt_len = pstmt->stmt_len > 0 ? pstmt->stmt_len : strlen(queryString + stmt_start);
+	char *stmt_string = palloc(stmt_len + 1);
 
-	MTM_LOG2("%d: Process utility statement tag=%d, context=%d, issubtrans=%d, creating_extension=%d, query=%s",
-			 MyProcPid, nodeTag(parsetree), context, IsSubTransaction(), creating_extension, queryString);
+	strncpy(stmt_string, queryString + stmt_start, stmt_len);
+	stmt_string[stmt_len] = 0;
+
+	MTM_LOG2("%d: Process utility statement tag=%d, context=%d, issubtrans=%d, creating_extension=%d, statement=%s",
+			 MyProcPid, nodeTag(parsetree), context, IsSubTransaction(), creating_extension, stmt_string);
 	switch (nodeTag(parsetree))
 	{
 		case T_TransactionStmt:
@@ -5230,7 +5236,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 				else
 				{
 					skipCommand = true;
-					MtmProcessDDLCommand(queryString, false);
+					MtmProcessDDLCommand(stmt_string, false);
 				}
 			}
 			break;
@@ -5242,7 +5248,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 			if (!MtmVolksWagenMode)
 			{
 				if (context == PROCESS_UTILITY_TOPLEVEL) {
-					MtmProcessDDLCommand(queryString, false);
+					MtmProcessDDLCommand(stmt_string, false);
 					MtmTx.isDistributed = false;
 				} else if (MtmApplyContext != NULL) {
 					MemoryContext oldContext = MemoryContextSwitchTo(MtmApplyContext);
@@ -5335,7 +5341,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 				if (!IsTransactionBlock())
 				{
 					skipCommand = true;
-					MtmGucSet(stmt, queryString);
+					MtmGucSet(stmt, stmt_string);
 				}
 			}
 			break;
@@ -5346,7 +5352,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 				if (indexStmt->concurrent)
 				{
 					 if (context == PROCESS_UTILITY_TOPLEVEL) {
-						 MtmProcessDDLCommand(queryString, false);
+						 MtmProcessDDLCommand(stmt_string, false);
 						 MtmTx.isDistributed = false;
 						 skipCommand = true;
 						 /*
@@ -5378,7 +5384,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
 				{
 					if (context == PROCESS_UTILITY_TOPLEVEL) {
-						MtmProcessDDLCommand(queryString, false);
+						MtmProcessDDLCommand(stmt_string, false);
 						MtmTx.isDistributed = false;
 						skipCommand = true;
 					} else if (MtmApplyContext != NULL) {
@@ -5448,12 +5454,14 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 
 	if (!skipCommand && !MtmTx.isReplicated && !MtmDDLStatement)
 	{
-		MTM_LOG3("Process DDL statement '%s', MtmTx.isReplicated=%d, MtmIsLogicalReceiver=%d", queryString, MtmTx.isReplicated, MtmIsLogicalReceiver);
-		MtmProcessDDLCommand(queryString, true);
+		MTM_LOG3("Process DDL statement '%s', MtmTx.isReplicated=%d, "
+				 "MtmIsLogicalReceiver=%d", stmt_string, MtmTx.isReplicated,
+				 MtmIsLogicalReceiver);
+		MtmProcessDDLCommand(stmt_string, true);
 		executed = true;
-		MtmDDLStatement = queryString;
+		MtmDDLStatement = stmt_string;
 	}
-	else MTM_LOG3("Skip utility statement '%s': skip=%d, insideDDL=%d", queryString, skipCommand, MtmDDLStatement != NULL);
+	else MTM_LOG3("Skip utility statement '%s': skip=%d, insideDDL=%d", stmt_string, skipCommand, MtmDDLStatement != NULL);
 
 	prevMyXactAccessedTempRel = MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL;
 
@@ -5491,7 +5499,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 	}
 	if (MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL)
 	{
-		MTM_LOG1("Xact accessed temp table, stopping replication of statement '%s'", queryString);
+		MTM_LOG1("Xact accessed temp table, stopping replication of statement '%s'", stmt_string);
 		MtmTx.isDistributed = false; /* Skip */
 		MtmTx.snapshot = INVALID_CSN;
 	}
