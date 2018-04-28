@@ -1025,7 +1025,7 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 
 		MtmUnlock();
 
-		MTM_LOG3("%d: MtmLocalTransaction: %s transaction %u uses local snapshot %llu",
+		MTM_LOG3("%d: MtmLocalTransaction: %s transaction "XID_FMT" uses local snapshot %llu",
 				 MyProcPid, x->isDistributed ? "distributed" : "local", x->xid, x->snapshot);
 	} else {
 		Assert(MtmInsideTransaction);
@@ -1166,8 +1166,9 @@ MtmPrePrepareTransaction(MtmCurrentTrans* x)
 
 	MtmTransactionListAppend(ts);
 	MtmAddSubtransactions(ts, subxids, ts->nSubxids);
-	MTM_LOG3("%d: MtmPrePrepareTransaction prepare commit of %d (gtid.xid=%d, gtid.node=%d, CSN=%lld)",
-			 MyProcPid, x->xid, ts->gtid.xid, ts->gtid.node, ts->csn);
+	MTM_LOG3("%d: MtmPrePrepareTransaction prepare commit of "
+				XID_FMT" (gtid.xid="XID_FMT", gtid.node=%d, CSN=%lld)",
+				MyProcPid, x->xid, ts->gtid.xid, ts->gtid.node, ts->csn);
 	MtmUnlock();
 	MTM_TXTRACE(x, "PrePrepareTransaction Finish");
 }
@@ -1363,7 +1364,7 @@ Mtm2PCVoting(MtmCurrentTrans* x, MtmTransState* ts)
 		}
 	}
 	x->status = ts->status;
-	MTM_LOG3("%d: Result of vote: %d", MyProcPid, MtmTxnStatusMnem[ts->status]);
+	MTM_LOG3("%d: Result of vote: %s", MyProcPid, MtmTxnStatusMnem[ts->status]);
 }
 
 static void MtmStopTransaction(void)
@@ -1394,7 +1395,7 @@ MtmPostPrepareTransaction(MtmCurrentTrans* x)
 	ts = (MtmTransState*)hash_search(MtmXid2State, &x->xid, HASH_FIND, NULL);
 	Assert(ts != NULL);
 	if (!MtmIsCoordinator(ts) || Mtm->status == MTM_RECOVERY) {
-		MTM_LOG3("Preparing transaction %d (%s) at %lld", x->xid, x->gid, MtmGetCurrentTime());
+		MTM_LOG3("Preparing transaction "XID_FMT" (%s) at %lld", x->xid, x->gid, MtmGetCurrentTime());
 		Assert(x->gid[0]);
 		ts->votingCompleted = true;
 		if (Mtm->status != MTM_RECOVERY/* || Mtm->recoverySlot != MtmReplicationNodeId*/) {
@@ -1487,7 +1488,7 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 		// 	return;
 		// }
 
-		MTM_LOG3("Commit prepared transaction %d with gid='%s'", x->xid, x->gid);
+		MTM_LOG3("Commit prepared transaction "XID_FMT" with gid='%s'", x->xid, x->gid);
 		ts = tm->state;
 
 		Assert(MtmIsCoordinator(ts));
@@ -1608,7 +1609,8 @@ MtmEndTransaction(MtmCurrentTrans* x, bool commit)
 		}
 		if (ts != NULL) {
 			if (*ts->gid)
-				MTM_LOG2("TRANSLOG: %s transaction gid=%s xid=%d node=%d dxid=%d status %s",
+				MTM_LOG2("TRANSLOG: %s transaction gid=%s xid="XID_FMT
+						 " node=%d dxid="XID_FMT" status %s",
 						 (commit ? "commit" : "rollback"), ts->gid, ts->xid, ts->gtid.node, ts->gtid.xid, MtmTxnStatusMnem[ts->status]);
 			if (commit) {
 				if (!(ts->status == TRANSACTION_STATUS_UNKNOWN
@@ -1901,7 +1903,7 @@ void MtmJoinTransaction(GlobalTransactionId* gtid, csn_t globalSnapshot, nodemas
 
 void  MtmSetCurrentTransactionGID(char const* gid)
 {
-	MTM_LOG3("Set current transaction xid=%d GID %s", MtmTx.xid, gid);
+	MTM_LOG3("Set current transaction xid="XID_FMT" GID %s", MtmTx.xid, gid);
 	strcpy(MtmTx.gid, gid);
 	MtmTx.isDistributed = true;
 	MtmTx.isReplicated = true;
@@ -2133,8 +2135,8 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 				}
 			}
 		} else {
-			MTM_LOG2("Skip prepared transaction %s (%d) with status %s gtid.node=%d gtid.xid=%llu votedMask=%llx",
-					 ts->gid, (long64)ts->xid, MtmTxnStatusMnem[ts->status], ts->gtid.node, (long64)ts->gtid.xid, ts->votedMask);
+			MTM_LOG2("Skip prepared transaction %s ("XID_FMT") with status %s gtid.node=%d gtid.xid=%llu votedMask=%llx",
+					 ts->gid, ts->xid, MtmTxnStatusMnem[ts->status], ts->gtid.node, (long64)ts->gtid.xid, ts->votedMask);
 		}
 	}
 }
@@ -2236,8 +2238,11 @@ void MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN)
 			BIT_SET(Mtm->originLockNodeMask, nodeId-1); // XXXX: log that
 		} else {
 			MTM_LOG2("Continue recovery of node %d, slot position %llx, WAL position %llx,"
-					 " WAL sender position %llx, lockers %llx, active transactions %d", nodeId, slotLSN,
-					 walLSN, MyWalSnd->sentPtr, Mtm->orinLockNodeMask, Mtm->nActiveTransactions);
+					 " WAL sender position %llx, lockers %llx, active transactions %d",
+					 nodeId, (long long unsigned int) slotLSN,
+					 (long long unsigned int) walLSN,
+					 (long long unsigned int) MyWalSnd->sentPtr,
+					 Mtm->originLockNodeMask, Mtm->nActiveTransactions);
 		}
 	}
 	MtmUnlock();
@@ -3999,7 +4004,9 @@ void MtmBeginSession(int nodeId)
 void MtmEndSession(int nodeId, bool unlock)
 {
 	if (replorigin_session_origin != InvalidRepOriginId) {
-		MTM_LOG2("%d: Begin reset replorigin session for node %d: %d, progress %llx", MyProcPid, nodeId, replorigin_session_origin, replorigin_session_get_progress(false));
+		MTM_LOG2("%d: Begin reset replorigin session for node %d: %d, progress %llx",
+				 MyProcPid, nodeId, replorigin_session_origin,
+				 (long long unsigned int) replorigin_session_get_progress(false));
 		replorigin_session_origin = InvalidRepOriginId;
 		replorigin_session_origin_lsn = INVALID_LSN;
 		replorigin_session_origin_timestamp = 0;
@@ -5676,7 +5683,9 @@ MtmSerializeLock(PROCLOCK* proclock, void* arg)
 						{
 							if ((proclock->holdMask & LOCKBIT_ON(lm)) && (conflictMask & LOCKBIT_ON(lm)))
 							{
-								MTM_LOG3("%d: %u(%u) waits for %u(%u)", MyProcPid, srcPgXact->xid, proc->pid, dstPgXact->xid, proclock->tag.myProc->pid);
+								MTM_LOG3("%d: "XID_FMT"(%u) waits for "XID_FMT"(%u)",
+										 MyProcPid, srcPgXact->xid, proc->pid,
+										 dstPgXact->xid, proclock->tag.myProc->pid);
 								MtmGetGtid(dstPgXact->xid, &gtid); /* transaction holding lock */
 								ByteBufferAppend(buf, &gtid, sizeof(gtid));
 								break;
