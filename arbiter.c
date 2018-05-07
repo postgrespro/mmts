@@ -911,6 +911,7 @@ void MtmReceiver(Datum arg)
 				MtmDisconnect(i);
 			} 
 		}
+		now = MtmGetSystemTime();
 		for (j = 0; j < n; j++) {
 			if (events[j].events & EPOLLIN)  
 #else
@@ -935,6 +936,7 @@ void MtmReceiver(Datum arg)
 		if (n < 0) {
 			MTM_ELOG(ERROR, "Arbiter failed to select sockets: %s", strerror(errno));
 		}
+		now = MtmGetSystemTime();
 		for (i = 0; i < nNodes; i++) { 
 			if (sockets[i] >= 0 && FD_ISSET(sockets[i], &events)) 
 #endif
@@ -1188,7 +1190,6 @@ void MtmReceiver(Datum arg)
 			}
 		}
 		if (Mtm->status == MTM_ONLINE) { 
-			now = MtmGetSystemTime();
 			/* Check for heartbeats only in case of timeout expiration: it means that we do not have non-processed events.
 			 * It helps to avoid false node failure detection because of blocking receiver.
 			 */
