@@ -4987,7 +4987,7 @@ char* MtmGucSerialize(void)
 		appendStringInfoString(serialized_gucs, " TO ");
 
 		gconf = fing_guc_conf(cur_entry->key);
-		if (gconf && (gconf->vartype == PGC_STRING || gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME)))
+		if (gconf && (gconf->vartype == PGC_STRING || gconf->vartype == PGC_ENUM || (gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME))))
 		{
 			appendStringInfoString(serialized_gucs, "'");
 			appendStringInfoString(serialized_gucs, cur_entry->value);
