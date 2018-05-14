@@ -412,7 +412,10 @@ static void MtmSendHeartbeat()
 					}
 					MTM_LOG4("Send heartbeat to node %d with timestamp %lld", i+1, now);    
 				}
-			} else { 
+			} else {
+				if (last_heartbeat_to_node[i] + MSEC_TO_USEC(MtmHeartbeatSendTimeout)*2 < now) { 
+					MTM_LOG1("Heartbeat is not sent to node %d during %lld microseconds because socket is busy", i+1, now - last_heartbeat_to_node[i]);
+				}
 				MTM_LOG2("Do not send heartbeat to node %d, busy mask %lld, status %s", i+1, busy_mask, MtmNodeStatusMnem[Mtm->status]);
 			}
 		}
