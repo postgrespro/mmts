@@ -73,7 +73,7 @@ sub new
 	my $self = {
 		nodenum => $nodenum,
 		nodes => $nodes,
-		recv_timeout => 5,
+		recv_timeout => 9,
 	};
 
 	bless $self, $class;
@@ -136,7 +136,7 @@ sub configure
 			multimaster.workers = 1
 			multimaster.node_id = $id
 			multimaster.conn_strings = '$connstr'
-			multimaster.heartbeat_recv_timeout = 4050
+			multimaster.heartbeat_recv_timeout = 8050
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_nodes = 6
 			multimaster.ignore_tables_without_pk = false
