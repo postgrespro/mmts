@@ -744,13 +744,14 @@ read_rel(StringInfo s, LOCKMODE mode)
 		old_context = MemoryContextSwitchTo(TopMemoryContext);
 		pglogical_relid_map_put(remote_relid, local_relid);
 		MemoryContextSwitchTo(old_context);
+		return heap_open(local_relid, NoLock);
 	} else { 
 		nspnamelen = pq_getmsgbyte(s);
 		s->cursor += nspnamelen;
 		relnamelen = pq_getmsgbyte(s);
 		s->cursor += relnamelen;
+		return heap_open(local_relid, mode);
 	}
-	return heap_open(local_relid, NoLock);
 }
 
 static void
