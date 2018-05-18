@@ -116,7 +116,7 @@ sub configure
 		my $unix_sock_dir = $ENV{PGHOST};
 
 		$node->append_conf("postgresql.conf", qq(
-			log_statement = none
+			log_statement = all
 			listen_addresses = '$host'
 			unix_socket_directories = '$unix_sock_dir'
 			port = $pgport
@@ -141,7 +141,7 @@ sub configure
 			multimaster.max_nodes = 6
 			multimaster.ignore_tables_without_pk = false
 			multimaster.queue_size = 4194304
-			log_line_prefix = '%t: '
+			log_line_prefix = '%t [%p]: '
 		));
 
 		$node->append_conf("pg_hba.conf", qq(
