@@ -663,7 +663,8 @@ pglogical_receiver_main(Datum main_arg)
 				timeout.tv_usec = usecs;
 				timeoutptr = &timeout;
 
-				r = pg_select(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr, conn->isRsocket);
+				r = PQselect(PQsocket(conn) + 1, &input_mask, NULL, NULL, timeoutptr,
+							 PQisRsocket(conn));
 				if (r == 0)
 				{
 					int64 now = feGetCurrentTimestamp();
