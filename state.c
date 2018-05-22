@@ -247,9 +247,9 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 			 */
 			if (!BIT_CHECK(Mtm->disabledNodeMask, node_id-1))
 			{
-				BIT_SET(Mtm->disabledNodeMask, node_id-1);
+				MTM_LOG1("[WARN] node %d started recovery, but it wasn't disabled", node_id);
+				MtmOnNodeDisconnect(node_id-1);
 			}
-			// BIT_SET(Mtm->pglogicalSenderMask, node_id - 1);
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED:
