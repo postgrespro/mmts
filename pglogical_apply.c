@@ -1067,8 +1067,8 @@ process_remote_update(StringInfo s, Relation rel)
 	bool		    found_tuple;
 	TupleData       old_tuple;
 	TupleData       new_tuple;
-	Oid			    idxoid;
-	Relation	    idxrel = InvalidOid;
+	Oid			    idxoid = InvalidOid;
+	Relation	    idxrel;
 	TupleDesc	    tupDesc = RelationGetDescr(rel);
 	ScanKeyData     skey[INDEX_MAX_KEYS];
 	HeapTuple	    remote_tuple = NULL;
@@ -1168,7 +1168,7 @@ process_remote_update(StringInfo s, Relation rel)
 	}
 
     /* release locks upon commit */
-	if (OidIsValid(idxrel))
+	if (OidIsValid(idxoid))
 		index_close(idxrel, NoLock);
 
 	PopActiveSnapshot();
