@@ -248,7 +248,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 			if (!BIT_CHECK(Mtm->disabledNodeMask, node_id-1))
 			{
 				MTM_LOG1("[WARN] node %d started recovery, but it wasn't disabled", node_id);
-				MtmOnNodeDisconnect(node_id-1);
+				MtmOnNodeDisconnect(node_id);
 			}
 			break;
 
