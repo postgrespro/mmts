@@ -5715,7 +5715,7 @@ static bool
 MtmDetectGlobalDeadLockForXid(TransactionId xid)
 {
 	bool hasDeadlock = false;
-	if (TransactionIdIsValid(xid)) {
+	if (TransactionIdIsValid(xid) && Mtm->status == MTM_ONLINE) {
 		ByteBuffer buf;
 		MtmGraph graph;
 		GlobalTransactionId gtid;
