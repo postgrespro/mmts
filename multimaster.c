@@ -5807,8 +5807,10 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 
 		if (!hasDeadlock)
 		{
+			TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
 			MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
 			enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
+			set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
 		}
 	}
 	return hasDeadlock;
