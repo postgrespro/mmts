@@ -5,6 +5,7 @@ export PATH=$BASEDIR/tmp_install/usr/local/pgsql/bin/:$PATH
 export DESTDIR=$BASEDIR/tmp_install
 export PGHOST=127.0.0.1
 export LD_LIBRARY_PATH=$BASEDIR/tmp_install/usr/local/pgsql/lib/:$LD_LIBRARY_PATH
+export DYLD_LIBRARY_PATH=$BASEDIR/tmp_install/usr/local/pgsql/lib/:$DYLD_LIBRARY_PATH
 
 n_nodes=3
 ulimit -c unlimited
