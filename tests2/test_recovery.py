@@ -84,7 +84,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_edge_partition(self):
         print('### test_edge_partition ###')
 
-        aggs_failure, aggs = self.performFailure(EdgePartition('node2', 'node3'))
+        aggs_failure, aggs = self.performFailure(EdgePartition('node2', 'node3'),
+            node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
         self.assertTrue( ('commit' in aggs_failure[1]['transfer']['finish']) or ('commit' in aggs_failure[2]['transfer']['finish']) )
         self.assertCommits(aggs_failure[0:1]) # first node
