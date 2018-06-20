@@ -2133,6 +2133,11 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 					MTM_LOG1("Abort our in-progress transaction %s", ts->gid);
 					MtmFinishPreparedTransaction(ts, false);
 				}
+				else
+				{
+					MTM_LOG1("Ask neighbours for help with transaction %s", ts->gid);
+					MtmBroadcastPollMessage(ts);
+				}
 			}
 		} else {
 			MTM_LOG2("Skip prepared transaction %s ("XID_FMT") with status %s gtid.node=%d gtid.xid=%llu votedMask=%llx",
