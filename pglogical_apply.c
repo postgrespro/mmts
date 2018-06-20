@@ -791,7 +791,7 @@ process_remote_commit(StringInfo in)
 	{
 	    case PGLOGICAL_PRECOMMIT_PREPARED:
 		{
-			Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
+			// Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MTM_LOG2("%d: PGLOGICAL_PRECOMMIT_PREPARED %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			MtmBeginSession(origin_node);
@@ -874,7 +874,7 @@ process_remote_commit(StringInfo in)
 		}
 		case PGLOGICAL_ABORT_PREPARED:
 		{
-			Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
+			// Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			/* MtmRollbackPreparedTransaction will set origin session itself */
 			MTM_LOG1("Receive ABORT_PREPARED logical message for transaction %s from node %d", gid, origin_node);
