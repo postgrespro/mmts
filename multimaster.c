@@ -1621,7 +1621,7 @@ MtmEndTransaction(MtmCurrentTrans* x, bool commit)
 					  || (ts->status == TRANSACTION_STATUS_IN_PROGRESS && Mtm->status <= MTM_RECOVERY)))
 				{
 					MtmUnlock();
-					MTM_ELOG(ERROR, "Attempt to commit %s transaction %s (%llu)",
+					MTM_ELOG(WARNING, "Attempt to commit %s transaction %s (%llu)",
 						 MtmTxnStatusMnem[ts->status], ts->gid, (long64)ts->xid);
 				}
 				if (x->csn > ts->csn || Mtm->status == MTM_RECOVERY) {
