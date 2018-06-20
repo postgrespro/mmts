@@ -1248,6 +1248,8 @@ MtmVotingCompleted(MtmTransState* ts)
 {
 	nodemask_t liveNodesMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) & ~Mtm->disabledNodeMask & ~((nodemask_t)1 << (MtmNodeId-1));
 
+	Assert(ts->gtid.node == MtmNodeId);
+
 	if (ts->nConfigChanges != Mtm->nConfigChanges)
 	{
 		if (MtmGetCurrentStatus() == MTM_ONLINE)
@@ -1273,6 +1275,7 @@ MtmVotingCompleted(MtmTransState* ts)
 		&& (ts->participantsMask & ~Mtm->disabledNodeMask & ~ts->votedMask) == 0) /* all live participants voted */
 	{
 		if (ts->isPrepared) {
+			Assert(ts->isTwoPhase || !MtmUseDtm);
 			ts->csn = MtmAssignCSN();
 			ts->votingCompleted = true;
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
@@ -1282,6 +1285,7 @@ MtmVotingCompleted(MtmTransState* ts)
 					 ts->gid, MtmTxnStatusMnem[ts->status], ts->participantsMask, Mtm->disabledNodeMask, ts->votedMask);
 			ts->isPrepared = true;
 			if (ts->isTwoPhase) {
+				Assert(false);
 				ts->votingCompleted = true;
 				return true;
 			} else if (MtmUseDtm) {
@@ -2110,15 +2114,11 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 	{
 		MtmTransState *ts = MtmGetActiveTransaction(cur);
 
-		MTM_LOG1("X_MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d, valid=%d, completed=%d", ts->gid, majorMode, ts->status, ts->isPrepared, TransactionIdIsValid(ts->gtid.xid), ts->votingCompleted);
-
 		if (TransactionIdIsValid(ts->gtid.xid)
 			&& ts->votingCompleted /* If voting is not yet completed, then there is some backend coordinating this transaction */
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
-
-			MTM_LOG1("MtmPollStatusOfPreparedTransactions %s, major=%d, status=%d, isPrepared=%d", ts->gid, majorMode, ts->status, ts->isPrepared);
 
 			if (majorMode)
 			{

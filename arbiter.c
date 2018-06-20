@@ -1022,6 +1022,7 @@ void MtmReceiver(Datum arg)
 						continue;
 					  case MSG_POLL_STATUS:
 						Assert(*msg->gid);
+						MTM_LOG1("Got response for transaction %s -> %s", msg->gid, MtmTxnStatusMnem[msg->status]);
 						tm = (MtmTransMap*)hash_search(MtmGid2State, msg->gid, HASH_FIND, NULL);
 						if (tm == NULL || tm->state == NULL) { 
 							MTM_ELOG(WARNING, "Response for non-existing transaction %s from node %d", msg->gid, node);

@@ -578,6 +578,11 @@ process_remote_message(StringInfo s)
 					MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN %llx <= %llx", 
 							 msg->gid, origin_node, msg->origin_lsn, Mtm->nodes[origin_node-1].restartLSN);
 				}
+				else
+				{
+					MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN is invalid", 
+							 msg->gid, origin_node);
+				}
 			}
 			standalone = true;
 			break;
