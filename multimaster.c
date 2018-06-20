@@ -3740,6 +3740,11 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		MTM_ELOG(ERROR, "Stopped node %d tries to connect", MtmReplicationNodeId);
 	}
 
+	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1)) {
+		MtmUnlock();
+		MTM_ELOG(ERROR, "Out-of-clique node %d tries to connect", MtmReplicationNodeId);
+	}
+
 	if (MtmIsRecoverySession) {
 		MTM_LOG1("%d: Node %d start recovery of node %d at position %llx", MyProcPid, MtmNodeId, MtmReplicationNodeId, recoveryStartPos);
 		Assert(MyReplicationSlot != NULL);
