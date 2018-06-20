@@ -383,14 +383,9 @@ void MtmOnNodeDisconnect(int nodeId)
 	 */
 
 	MtmLock(LW_EXCLUSIVE);
-	MtmDisableNode(nodeId);
 	BIT_SET(SELF_CONNECTIVITY_MASK, nodeId-1);
-	BIT_SET(Mtm->reconnectMask, nodeId-1);
-	Mtm->nConfigChanges += 1;
 	MtmCheckState();
 	MtmUnlock();
-
-	// MtmRefreshClusterStatus();
 }
 
 // XXXX: make that event too
