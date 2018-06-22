@@ -11,7 +11,6 @@ with Cluster(3).start().install() as cluster:
         node_id += 1
 
         print("Node #{}".format(node_id))
-        print("\t-> pid: {}".format(node.get_pid()))
         print("\t-> port: {}".format(node.port))
         print("\t-> arbiter port: {}".format(node.mm_port))
         print("\t-> dir: {}".format(node.base_dir))

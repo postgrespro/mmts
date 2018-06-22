@@ -5,12 +5,14 @@
 #
 # Execute this file in order to run 3-node mm cluster
 
+import time
 
 from testgres import PostgresNode, NodeStatus, NodeBackup
 from testgres import reserve_port, release_port
-from testgres import default_username
-from testgres import DEFAULT_XLOG_METHOD
+from testgres.defaults import default_username
+from testgres.enums import XLogMethod
 
+DEFAULT_XLOG_METHOD = XLogMethod.fetch
 
 # track important changes
 __version__ = 0.1
@@ -127,6 +129,11 @@ class Cluster(object):
 
         return self
 
+    def print_conninfo(self):
+        print(self._build_mm_conn_strings(self.ports,
+                                            self.dbname,
+                                            self.username))
+
     def install(self):
         self.node_any().poll_query_until(dbname=self.dbname,
                                          username=self.username,
@@ -189,6 +196,19 @@ class Cluster(object):
                                        query=query,
                                        commit=commit)
 
+    def await_online(self, node_ids):
+        # await for heartbeat timeout
+        time.sleep(5)
+
+        for node_id in node_ids:
+            self.nodes[node_id].poll_query_until(dbname=self.dbname,
+                                    username=self.username,
+                                    query="select true",
+                                    raise_programming_error=False,
+                                    raise_internal_error=False,
+                                    expected=True)
+        return self
+
     def node_any(self, status=NodeStatus.Running):
         for node in self.nodes:
             if node.status():
@@ -244,9 +264,7 @@ class ClusterNode(PostgresNode):
 
         super(ClusterNode, self).__init__(name=name,
                                           port=pg_port,
-                                          base_dir=base_dir,
-                                          use_logging=use_logging,
-                                          master=master)
+                                          base_dir=base_dir)
 
         self.mm_port = mm_port
 
