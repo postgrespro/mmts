@@ -5028,9 +5028,6 @@ char* MtmGucSerialize(void)
 
 static void MtmProcessDDLCommand(char const* queryString, bool transactional)
 {
-	if (MtmTx.isReplicated)
-		return;
-
 	if (transactional)
 	{
 		char *gucCtx = MtmGucSerialize();
@@ -5462,7 +5459,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 			break;
 	}
 
-	if (!skipCommand && !MtmTx.isReplicated && !MtmDDLStatement)
+	if (!skipCommand && !MtmDDLStatement)
 	{
 		MTM_LOG3("Process DDL statement '%s', MtmTx.isReplicated=%d, "
 				 "MtmIsLogicalReceiver=%d", stmt_string, MtmTx.isReplicated,
