@@ -328,6 +328,9 @@ MtmStateProcessEvent(MtmEvent ev)
  */
 void MtmDisableNode(int nodeId)
 {
+	if (BIT_CHECK(Mtm->disabledNodeMask, nodeId-1))
+		return;
+
 	MTM_LOG1("[STATE] Node %i: disabled", nodeId);
 
 	BIT_SET(Mtm->disabledNodeMask, nodeId-1);
