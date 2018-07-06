@@ -667,14 +667,23 @@ static void MtmAcceptOneConnection()
 			if (!MtmWriteSocket(fd, &resp, sizeof resp)) { 
 				MTM_ELOG(WARNING, "Arbiter failed to write response for handshake message to node %d", node+1);
 				pg_closesocket(fd, MtmUseRDMA);
-			} else { 
-				MTM_LOG1("Arbiter established connection with node %d", node+1); 
-				if (sockets[node] >= 0) { 
-					MtmUnregisterSocket(sockets[node]);
+			} else {
+				/* One extra check that socket wasn't already closed by peer */
+				rc = pg_recv(fd, &req, sizeof(req), MSG_PEEK, MtmUseRDMA);
+				if (rc == 0)
+				{
+					MTM_LOG1("Bad connection request from %d: peer already closed connection", node+1);
+					pg_closesocket(fd, MtmUseRDMA);
 				}
-				sockets[node] = fd;
-				MtmRegisterSocket(fd, node);
-				MtmOnNodeConnect(node+1);
+				else
+				{
+					MTM_LOG1("Arbiter accepted connection from node %d fd=%d", node+1, fd);
+					if (sockets[node] >= 0)
+						MtmDisconnect(node);
+					sockets[node] = fd;
+					MtmRegisterSocket(fd, node);
+					MtmOnNodeConnect(node+1);
+				}
 			}
 		}
 	}
