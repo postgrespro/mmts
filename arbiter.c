@@ -262,7 +262,7 @@ static int MtmReadSocket(int sd, void* buf, int buf_size)
 {
 	int rc;
 	while ((rc = pg_recv(sd, buf, buf_size, 0, MtmUseRDMA)) < 0 && errno == EINTR);			
-	if (rc <= 0 && (errno == EAGAIN || errno == EINPROGRESS)) { 
+	if (rc < 0 && (errno == EAGAIN || errno == EINPROGRESS)) {
 		rc = MtmWaitSocket(sd, false, MtmHeartbeatSendTimeout);
 		if (rc == 1) { 
 			while ((rc = pg_recv(sd, buf, buf_size, 0, MtmUseRDMA)) < 0 && errno == EINTR);			
