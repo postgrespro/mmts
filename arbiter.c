@@ -86,7 +86,7 @@
 #include "state.h"
 
 #define MAX_ROUTES       16
-#define INIT_BUFFER_SIZE 1024
+#define INIT_BUFFER_SIZE 30*1024
 #define HANDSHAKE_MAGIC  0xCAFEDEED
 
 static int*        sockets;
