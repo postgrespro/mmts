@@ -68,7 +68,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 
 	Mtm->nConfigChanges += 1; /* this will restart backends */
 
-	MTM_LOG1("[STATE]   Switching status from %s to %s status: %s",
+	MTM_LOG1("[STATE]   Switching status from %s to %s: %s",
 			 MtmNodeStatusMnem[Mtm->status], MtmNodeStatusMnem[status],
 			 statusReason);
 
@@ -142,7 +142,7 @@ MtmCheckState(void)
 	ENABLE_IF(nConnected == Mtm->nAllNodes/2 && Mtm->refereeGrant,
 			  "node has a referee grant");
 	DISABLE_IF(!BIT_CHECK(Mtm->clique, MtmNodeId-1) && !Mtm->refereeGrant,
-			   "node is not in clique and has no referree grant");
+			   "node is not in clique and has no referee grant");
 	DISABLE_IF(BIT_CHECK(Mtm->stoppedNodeMask, MtmNodeId-1),
 			   "node is stopped manually");
 
