@@ -451,7 +451,7 @@ MtmBuildConnectivityMatrix(nodemask_t* matrix)
 void
 MtmRefreshClusterStatus()
 {
-	nodemask_t newClique, oldClique;
+	nodemask_t newClique;
 	nodemask_t matrix[MAX_NODES];
 	nodemask_t trivialClique = ~SELF_CONNECTIVITY_MASK & (((nodemask_t)1 << Mtm->nAllNodes)-1);
 	int cliqueSize;
@@ -529,38 +529,25 @@ MtmRefreshClusterStatus()
 
 	/*
 	 * Check for clique.
+	 *
+	 * Sleep is added to make sure that will detect all failures that we can.
+	 * Otherwise if we will receive information about dead node from our peer
+	 * before we detect that ourself we can disable innocent node.
 	 */
+	MtmSleep(2*MSEC_TO_USEC(MtmHeartbeatRecvTimeout));
 	MtmBuildConnectivityMatrix(matrix);
 	newClique = MtmFindMaxClique(matrix, Mtm->nAllNodes, &cliqueSize);
 
 	if (newClique == Mtm->clique)
 		return;
 
-	MTM_LOG1("[STATE] Old clique: %s", maskToString(Mtm->clique, Mtm->nAllNodes));
-
-	/*
-	 * Otherwise make sure that all nodes have a chance to replicate their connectivity
-	 * mask and we have the "consistent" picture. Obviously we can not get true consistent
-	 * snapshot, but at least try to wait heartbeat send timeout is expired and
-	 * connectivity graph is stabilized.
-	 */
-	do {
-		oldClique = newClique;
-		/*
-		 * Double timeout to consider the worst case when heartbeat receive interval is added
-		 * with refresh cluster status interval.
-		 */
-		MtmSleep(MSEC_TO_USEC(MtmHeartbeatRecvTimeout)*2);
-		MtmBuildConnectivityMatrix(matrix);
-		newClique = MtmFindMaxClique(matrix, Mtm->nAllNodes, &cliqueSize);
-	} while (newClique != oldClique);
-
-	MTM_LOG1("[STATE] New clique: %s", maskToString(oldClique, Mtm->nAllNodes));
-
-	if (newClique != trivialClique)
-	{
-		MTM_LOG1("[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique, Mtm->nAllNodes)); // XXXX some false-positives, fixme
-	}
+	MTM_LOG1("[STATE] Changed clique: %s -> %s ({%s, %s, %s}, %s)",
+				maskToString(Mtm->clique, Mtm->nAllNodes),
+				maskToString(newClique, Mtm->nAllNodes),
+				maskToString(~Mtm->nodes[0].connectivityMask, Mtm->nAllNodes),
+				maskToString(~Mtm->nodes[1].connectivityMask, Mtm->nAllNodes),
+				maskToString(~Mtm->nodes[2].connectivityMask, Mtm->nAllNodes),
+				newClique == trivialClique ? "trivial" : "non-trivial");
 
 	/*
 	 * We are using clique only to disable nodes.
