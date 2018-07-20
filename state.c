@@ -854,7 +854,7 @@ MtmGetCurrentStatus()
 }
 
 /*
- * Mtm current status accessor.
+ * Mtm current disabledMask accessor.
  */
 nodemask_t
 MtmGetDisabledNodeMask()
