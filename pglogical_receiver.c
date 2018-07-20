@@ -330,6 +330,16 @@ pglogical_receiver_main(Datum main_arg)
 		timeline = Mtm->nodes[nodeId-1].timeline;
 		count = Mtm->recoveryCount;
 
+
+		/* Set proper restartLSN for filtering */
+		for (i = 0; i < Mtm->nAllNodes; i++)
+		{
+			if (i == MtmNodeId - 1)
+				continue;
+			Mtm->nodes[i].restartLSN = replorigin_get_progress(Mtm->nodes[i].originId, false);
+			MTM_LOG1("Node %d restartLSN -> %llx", i + 1, Mtm->nodes[i].restartLSN);
+		}
+
 		/* Establish connection to remote server */
 		conn = PQconnectdb_safe(connString, 0);
 		status = PQstatus(conn);
@@ -343,7 +353,7 @@ pglogical_receiver_main(Datum main_arg)
 		query = createPQExpBuffer();
 
 		/* Start logical replication at specified position */
-		originStartPos = replorigin_get_progress(Mtm->nodes[nodeId-1].originId, false);
+		originStartPos = Mtm->nodes[nodeId-1].restartLSN;
 		if (originStartPos == INVALID_LSN || Mtm->nodes[nodeId-1].manualRecovery) {
 			/*
 			 * We are just creating new replication slot.
@@ -367,12 +377,6 @@ pglogical_receiver_main(Datum main_arg)
 			PQclear(res);
 			resetPQExpBuffer(query);
 			Mtm->nodes[nodeId-1].manualRecovery = false;
-		} else {
-			if (Mtm->nodes[nodeId-1].restartLSN < originStartPos) {
-				MTM_LOG1("Advance restartLSN for node %d: from %llx to %llx (pglogical_receiver_main)", nodeId, Mtm->nodes[nodeId-1].restartLSN, originStartPos);
-				Mtm->nodes[nodeId-1].restartLSN = originStartPos;
-			}
-			MTM_LOG1("Restart logical receiver at position %llx from node %d", originStartPos, nodeId);
 		}
 
 		MTM_LOG1("Start replication on slot %s from node %d at position %llx, mode %s, recovered lsn %llx",
