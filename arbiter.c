@@ -1050,7 +1050,7 @@ void MtmReceiver(Datum arg)
 									MTM_ELOG(LOG, "Abort prepared transaction %s because it is in state %s at node %d",
 										 msg->gid, MtmTxnStatusMnem[msg->status], node);
 
-									replorigin_session_origin = DoNotReplicateId;
+									replorigin_session_origin = InvalidRepOriginId;
 									TXFINISH("%s ABORT, MSG_POLL_STATUS", msg->gid);
 									MtmFinishPreparedTransaction(ts, false);
 									replorigin_session_origin = InvalidRepOriginId;
@@ -1064,7 +1064,7 @@ void MtmReceiver(Datum arg)
 									if ((ts->participantsMask & ~Mtm->disabledNodeMask & ~ts->votedMask) == 0) {
 										MTM_ELOG(LOG, "Commit transaction %s because it is prepared at all live nodes", msg->gid);		
 
-										replorigin_session_origin = DoNotReplicateId;
+										replorigin_session_origin = InvalidRepOriginId;
 										TXFINISH("%s COMMIT, MSG_POLL_STATUS", msg->gid);
 										MtmFinishPreparedTransaction(ts, true);
 										replorigin_session_origin = InvalidRepOriginId;
