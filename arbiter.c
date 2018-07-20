@@ -971,6 +971,13 @@ void MtmReceiver(Datum arg)
 				
 				MtmLock(LW_EXCLUSIVE);						
 
+				// XXX: This helps with taking us offline after long SIGSTOP/SIGCONT,
+				// but expectedly leads to fals positive failure detections due to
+				// blocked receiver. This shoudl be uncommented if one sunny day we'll
+				// have non-blocking receiver.
+				//
+				// MtmWatchdog(MtmGetSystemTime());
+
 				for (j = 0; j < nResponses; j++) { 
 					MtmArbiterMessage* msg = &rxBuffer[i].data[j];
 					MtmTransState* ts;
