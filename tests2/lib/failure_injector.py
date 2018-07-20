@@ -63,6 +63,19 @@ class RestartNode(FailureInjector):
         self.docker_api.containers.get(self.node).start()
 
 
+class FreezeNode(FailureInjector):
+
+    def __init__(self, node):
+        self.node = node
+        super().__init__()
+
+    def start(self):
+        self.docker_api.containers.get(self.node).pause()
+
+    def stop(self):
+        self.docker_api.containers.get(self.node).unpause()
+
+
 class CrashRecoverNode(FailureInjector):
 
     def __init__(self, node):

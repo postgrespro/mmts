@@ -120,6 +120,19 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
+    # def test_node_pause(self):
+    #     print('### test_node_pause ###')
+
+    #     aggs_failure, aggs = self.performFailure(FreezeNode('node3'),
+    #         node_wait_for_commit=2, stop_load=True)
+
+    #     self.assertCommits(aggs_failure[:2])
+    #     self.assertNoCommits(aggs_failure[2:])
+    #     self.assertIsolation(aggs_failure)
+
+    #     self.assertCommits(aggs)
+    #     self.assertIsolation(aggs)
+
     def test_node_bicrash(self):
         print('### test_node_bicrash ###')
 
