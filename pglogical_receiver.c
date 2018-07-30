@@ -213,10 +213,10 @@ static char const* const MtmReplicationModeName[] =
 };
 
 static void
-MtmExecute(void* work, int size)
+MtmExecute(void* work, int size, MtmReplicationMode mode)
 {
 	/* During recovery apply changes sequentially to preserve commit order */
-	if (Mtm->status == MTM_RECOVERY)
+	if (mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED)
 		MtmExecutor(work, size);
 	else
 		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size);
@@ -308,6 +308,8 @@ pglogical_receiver_main(Datum main_arg)
 		ConnStatusType status;
 		lsn_t originStartPos;
 		int timeline;
+
+		ByteBufferReset(&buf);
 
 		/*
 		 * Determine when and how we should open replication slot.
@@ -581,7 +583,7 @@ pglogical_receiver_main(Datum main_arg)
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'A' || stmt[1] == 'C'))) {
 						MTM_LOG3("Process '%c' message from %d", stmt[1], nodeId);
 						if (stmt[0] == 'M' && stmt[1] == 'C') { /* concurrent DDL should be executed by parallel workers */
-							MtmExecute(stmt, msg_len);
+							MtmExecute(stmt, msg_len, mode);
 						} else {
 							MtmExecutor(stmt, msg_len); /* all other messages can be processed by receiver itself */
 						}
@@ -597,7 +599,7 @@ pglogical_receiver_main(Datum main_arg)
 									pq_sendint(&spill_info, buf.used, 4);
 									MtmSpillToFile(spill_file, buf.data, buf.used);
 									MtmCloseSpillFile(spill_file);
-									MtmExecute(spill_info.data, spill_info.len);
+									MtmExecute(spill_info.data, spill_info.len, mode);
 									spill_file = -1;
 									resetStringInfo(&spill_info);
 								} else {
@@ -612,7 +614,7 @@ pglogical_receiver_main(Datum main_arg)
 									} else {
 										/* all other commits should be applied in place */
 										// Assert(stmt[1] == PGLOGICAL_PREPARE || stmt[1] == PGLOGICAL_COMMIT || stmt[1] == PGLOGICAL_PRECOMMIT_PREPARED);
-										MtmExecute(buf.data, buf.used);
+										MtmExecute(buf.data, buf.used, mode);
 									}
 								}
 							} else if (spill_file >= 0) {
