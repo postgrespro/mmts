@@ -1261,6 +1261,17 @@ MtmVotingCompleted(MtmTransState* ts)
 			MTM_ELOG(WARNING, "Abort transaction %s {%d} (%llu) because cluster configuration is changed from %d to %d (old mask %llx, new mask %llx) since transaction start",
 				ts->gid, ts->status, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask, liveNodesMask);
 			MtmAbortTransaction(ts);
+			// also set vot compl?
+			return true;
+		}
+		else if (ts->status == TRANSACTION_STATUS_ABORTED)
+		{
+			/*
+			 * We can became offline just after abort arrival. Then this tx
+			 * will remain forever as PollState will skip it. So just proceed
+			 * and abort this tx in ordinary way.
+			 */
+			ts->votingCompleted = true;
 			return true;
 		}
 		else
