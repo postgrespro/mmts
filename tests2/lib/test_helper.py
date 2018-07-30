@@ -66,6 +66,18 @@ class TestHelper(object):
                 time.sleep(5)
                 total_sleep += 5
 
+    def assertDataSync(self):
+        self.client.stop()
+
+        if not self.client.is_data_identic():
+            raise AssertionError('Different data on nodes')
+
+        if self.client.no_prepared_tx() != 0:
+            raise AssertionError('There are some uncommitted tx')
+
+        self.client.bgrun()
+
+
     def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
 
         time.sleep(TEST_WARMING_TIME)

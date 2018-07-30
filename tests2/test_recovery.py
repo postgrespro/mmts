@@ -84,11 +84,11 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_edge_partition(self):
         print('### test_edge_partition ###')
 
-        aggs_failure, aggs = self.performFailure(EdgePartition('node2', 'node3'),
+        aggs_failure, aggs = self.performFailure(EdgePartition('node1', 'node3'),
             node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
-        self.assertTrue( ('commit' in aggs_failure[1]['transfer']['finish']) or ('commit' in aggs_failure[2]['transfer']['finish']) )
-        self.assertCommits(aggs_failure[0:1]) # first node
+        self.assertTrue( ('commit' in aggs_failure[0]['transfer']['finish']) or ('commit' in aggs_failure[2]['transfer']['finish']) )
+        self.assertCommits(aggs_failure[1:2]) # second node
         self.assertIsolation(aggs_failure)
 
         self.assertCommits(aggs)
@@ -136,25 +136,30 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_bicrash(self):
         print('### test_node_bicrash ###')
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
-            node_wait_for_commit=2, stop_load=True)
+        for _ in range(10):
+            aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
+                node_wait_for_commit=2, stop_load=True)
 
-        self.assertCommits(aggs_failure[:2])
-        self.assertNoCommits(aggs_failure[2:])
-        self.assertIsolation(aggs_failure)
+            self.assertCommits(aggs_failure[:2])
+            self.assertNoCommits(aggs_failure[2:])
+            self.assertIsolation(aggs_failure)
 
-        self.assertCommits(aggs)
-        self.assertIsolation(aggs)
+            self.assertCommits(aggs)
+            self.assertIsolation(aggs)
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node1'),
-            node_wait_for_commit=0, stop_load=True)
+            aggs_failure, aggs = self.performFailure(CrashRecoverNode('node1'),
+                node_wait_for_commit=0, stop_load=True)
 
-        self.assertNoCommits(aggs_failure[0:1])  # [1]
-        self.assertCommits(aggs_failure[1:]) # [2, 3]
-        self.assertIsolation(aggs_failure)
+            self.assertNoCommits(aggs_failure[0:1])  # [1]
+            self.assertCommits(aggs_failure[1:]) # [2, 3]
+            self.assertIsolation(aggs_failure)
 
-        self.assertCommits(aggs)
-        self.assertIsolation(aggs)
+            self.assertCommits(aggs)
+            self.assertIsolation(aggs)
+
+            self.assertDataSync()
+            print('### iteration okay ###')
+
 
 if __name__ == '__main__':
     unittest.main()
