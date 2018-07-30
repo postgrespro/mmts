@@ -180,6 +180,8 @@ static bool MtmRunUtilityStmt(PGconn* conn, char const* sql, char **errmsg);
 static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int forceOnNode);
 static void MtmProcessDDLCommand(char const* queryString, bool transactional);
 
+static int  MtmGidParseNodeId(const char* gid);
+
 // static void MtmLockCluster(void);
 // static void MtmUnlockCluster(void);
 
@@ -1060,6 +1062,8 @@ MtmCreateTransState(MtmCurrentTrans* x)
 	}
 	strcpy(ts->gid, x->gid);
 	x->isActive = true;
+
+	Assert(ts->gid[0] == '\0' || MtmGidParseNodeId(ts->gid) == ts->gtid.node);
 	return ts;
 }
 
@@ -1807,7 +1811,7 @@ static void	MtmLoadPreparedTransactions(void)
 		if (!found || tm->state == NULL) {
 			TransactionId xid = GetNewTransactionId(false);
 			MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_ENTER, &found);
-			MTM_LOG1("Recover prepared transaction %s (%llu) state=%s", gid, (long64)xid, pxacts[i].state_3pc);
+			MTM_LOG1("Load prepared transaction %s (%llu) state=%s", gid, (long64)xid, pxacts[i].state_3pc);
 			MyPgXact->xid = InvalidTransactionId; /* dirty hack:((( */
 			Assert(!found);
 			ts->isEnqueued = false;
@@ -1820,7 +1824,7 @@ static void	MtmLoadPreparedTransactions(void)
 			ts->snapshot = INVALID_CSN;
 			ts->isTwoPhase = false;
 			ts->csn = 0; /* should be replaced with real CSN by poll result */
-			ts->gtid.node = MtmNodeId;
+			ts->gtid.node = MtmGidParseNodeId(gid);
 			ts->gtid.xid = xid;
 			ts->nSubxids = 0;
 			ts->votingCompleted = true;
@@ -1911,6 +1915,7 @@ void  MtmSetCurrentTransactionGID(char const* gid)
 	strcpy(MtmTx.gid, gid);
 	MtmTx.isDistributed = true;
 	MtmTx.isReplicated = true;
+	MtmTx.gtid.node = MtmGidParseNodeId(gid);
 }
 
 TransactionId MtmGetCurrentTransactionId(void)
@@ -2066,6 +2071,8 @@ void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
+			Assert(MtmGidParseNodeId(ts->gid) == ts->gtid.node);
+
 			if (ts->status == TRANSACTION_STATUS_IN_PROGRESS) {
 				MTM_ELOG(LOG, "Abort transaction %s because its coordinator is disabled and it is not prepared at node %d", ts->gid, MtmNodeId);
 				TXFINISH("%s ABORT, PollStatusOfPrepared", ts->gid);
@@ -2119,6 +2126,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
+			Assert(MtmGidParseNodeId(ts->gid) == ts->gtid.node);
 
 			if (majorMode)
 			{
@@ -2130,7 +2138,7 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 				// MtmBroadcastPollMessage(ts);
 				if (ts->gtid.node == MtmNodeId && !ts->isPrepared)
 				{
-					MTM_LOG1("Abort our in-progress transaction %s", ts->gid);
+					MTM_LOG1("Abort our in-progress transaction %s (%d, %d)", ts->gid, ts->gtid.node, MtmNodeId);
 					MtmFinishPreparedTransaction(ts, false);
 				}
 				else
@@ -4756,6 +4764,15 @@ MtmGenerateGid(char* gid)
 {
 	static int localCount;
 	sprintf(gid, "MTM-%d-%d-%d-" INT64_FORMAT, MtmNodeId, MyProcPid, ++localCount, (int64) GetCurrentTimestamp());
+	// MTM_LOG1("MtmGenerateGid: %s", gid);
+}
+
+static int
+MtmGidParseNodeId(const char* gid)
+{
+	int MtmNodeId;
+	sscanf(gid, "MTM-%d-%*d-%*d-%*d", &MtmNodeId);
+	return MtmNodeId;
 }
 
 /*
