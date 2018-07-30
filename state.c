@@ -213,6 +213,20 @@ MtmCheckState(void)
 			break;
 
 		case MTM_ONLINE:
+			{
+				int nEnabled = countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes);
+				// Assert( (nEnabled >= Mtm->nAllNodes/2+1) ||
+				// 		(nEnabled == Mtm->nAllNodes/2 && Mtm->refereeGrant));
+				if ( !((nEnabled >= Mtm->nAllNodes/2+1) ||
+						(nEnabled == Mtm->nAllNodes/2 && Mtm->refereeGrant)) )
+				{
+					MTM_LOG1("[STATE] disable myself, nEnabled less then majority");
+					MtmSetClusterStatus(MTM_DISABLED, statusReason);
+					MtmDisableNode(MtmNodeId);
+					/* do not recur */
+					return;
+				}
+			}
 			break;
 	}
 
