@@ -4495,16 +4495,20 @@ mtm_collect_cluster_info(PG_FUNCTION_ARGS)
 		result = PQexec(conn, "select * from mtm.get_cluster_state()");
 
 		if (PQresultStatus(result) != PGRES_TUPLES_OK || PQntuples(result) != 1) {
-			MTM_ELOG(ERROR, "Failed to receive data from %d", usrfctx->nodeId);
+			MTM_ELOG(WARNING, "Failed to receive data from %d", usrfctx->nodeId);
+			PQclear(result);
+			PQfinish(conn);
+			SRF_RETURN_NEXT_NULL(funcctx);
 		}
-
-		for (i = 0; i < Natts_mtm_cluster_state; i++) {
-			values[i] = PQgetvalue(result, 0, i);
+		else
+		{
+			for (i = 0; i < Natts_mtm_cluster_state; i++)
+				values[i] = PQgetvalue(result, 0, i);
+			tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
+			PQclear(result);
+			PQfinish(conn);
+			SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
 		}
-		tuple = BuildTupleFromCStrings(funcctx->attinmeta, values);
-		PQclear(result);
-		PQfinish(conn);
-		SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(tuple));
 	}
 }
 
