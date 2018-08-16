@@ -108,15 +108,18 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 static void
 MtmCheckState(void)
 {
+	// int nVotingNodes = MtmGetNumberOfVotingNodes();
 	bool isEnabledState;
 	char *statusReason = "node is disabled by default";
 	MtmNodeStatus old_status;
-	int nConnected = countZeroBits(EFFECTIVE_CONNECTIVITY_MASK, Mtm->nAllNodes);
+	int nEnabled   = countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes);
+	int nConnected = countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes);
+	int nReceivers = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalReceiverMask, Mtm->nAllNodes);
+	int nSenders   = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalSenderMask, Mtm->nAllNodes);
 
 	old_status = Mtm->status;
 
-	MTM_LOG1("[STATE]   %s: (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
-		MtmNodeStatusMnem[Mtm->status],
+	MTM_LOG1("[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
 		maskToString(Mtm->disabledNodeMask, Mtm->nAllNodes),
 		maskToString(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes),
 		maskToString(Mtm->clique, Mtm->nAllNodes),
@@ -189,26 +192,20 @@ MtmCheckState(void)
 		 * in MTM_RECOVERED state.
 		 */
 		case MTM_RECOVERED:
+			if (nReceivers == nEnabled-1 && nSenders == nEnabled-1 && nEnabled == nConnected)
 			{
-				int nEnabled   = countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes);
-				int nReceivers = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalReceiverMask, Mtm->nAllNodes);
-				int nSenders   = Mtm->nAllNodes - countZeroBits(Mtm->pglogicalSenderMask, Mtm->nAllNodes);
+				/*
+				 * It should be already cleaned by RECOVERY_CAUGHTUP, but
+				 * in major mode or with referee we can be working alone
+				 * so nobody will clean it.
+				 */
+				MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
+				BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
+				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
-				if (nReceivers == nEnabled-1 && nSenders == nEnabled-1 && nEnabled == nConnected)
-				{
-					/*
-					* It should be already cleaned by RECOVERY_CAUGHTUP, but
-					* in major mode or with referee we can be working alone
-					* so nobody will clean it.
-					*/
-					MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
-					BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
-					MtmSetClusterStatus(MTM_ONLINE, statusReason);
-
-					if (old_status != Mtm->status)
-						MtmCheckState();
-					return;
-				}
+				if (old_status != Mtm->status)
+					MtmCheckState();
+				return;
 			}
 			break;
 
