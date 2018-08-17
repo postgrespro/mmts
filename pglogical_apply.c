@@ -514,7 +514,7 @@ process_remote_message(StringInfo s)
 					ExecVacuum(MtmVacuumStmt, 1);
 				} else if (MtmIndexStmt != NULL) {
 					Oid relid =	RangeVarGetRelidExtended(MtmIndexStmt->relation, ShareUpdateExclusiveLock,
-														 false, false,
+														 0,
 														 NULL,
 														 NULL);
 					/* Run parse analysis ... */
@@ -523,12 +523,14 @@ process_remote_message(StringInfo s)
 					DefineIndex(relid,		/* OID of heap relation */
 								MtmIndexStmt,
 								InvalidOid, /* no predefined OID */
+								InvalidOid, /* no parent index */
+								InvalidOid, /* no parent constraint */
 								false,		/* is_alter_table */
 								true,		/* check_rights */
 								true,		/* check_not_in_use */
 								false,		/* skip_build */
 								false);		/* quiet */
-					
+
 				}
 				else if (MtmDropStmt != NULL)
 				{
@@ -631,7 +633,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 
 	for (i = 0; i < desc->natts; i++)
 	{
-		Form_pg_attribute att = desc->attrs[i];
+		Form_pg_attribute att = TupleDescAttr(desc, i);
 		char		kind;
 		const char *data;
 		int			len;
@@ -745,7 +747,7 @@ read_rel(StringInfo s, LOCKMODE mode)
 		relnamelen = pq_getmsgbyte(s);
 		rv->relname = (char *) pq_getmsgbytes(s, relnamelen);
 		
-		local_relid = RangeVarGetRelidExtended(rv, mode, false, false, NULL, NULL);
+		local_relid = RangeVarGetRelidExtended(rv, mode, 0, NULL, NULL);
 		old_context = MemoryContextSwitchTo(TopMemoryContext);
 		pglogical_relid_map_put(remote_relid, local_relid);
 		MemoryContextSwitchTo(old_context);
@@ -820,7 +822,7 @@ process_remote_commit(StringInfo in)
 				AbortCurrentTransaction();
 			} else { 				
 				/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
-				BeginTransactionBlock(false);
+				BeginTransactionBlock();
 				CommitTransactionCommand();
 				StartTransactionCommand();
 				
@@ -915,8 +917,8 @@ process_remote_insert(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	estate = create_rel_estate(rel);
-	newslot = ExecInitExtraTupleSlot(estate);
-	oldslot = ExecInitExtraTupleSlot(estate);
+	newslot = ExecInitExtraTupleSlot(estate, NULL);
+	oldslot = ExecInitExtraTupleSlot(estate, NULL);
 	ExecSetSlotDescriptor(newslot, tupDesc);
 	ExecSetSlotDescriptor(oldslot, tupDesc);
 
@@ -1086,9 +1088,9 @@ process_remote_update(StringInfo s, Relation rel)
 			 action);
 
 	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate);
+	oldslot = ExecInitExtraTupleSlot(estate, NULL);
 	ExecSetSlotDescriptor(oldslot, tupDesc);
-	newslot = ExecInitExtraTupleSlot(estate);
+	newslot = ExecInitExtraTupleSlot(estate, NULL);
 	ExecSetSlotDescriptor(newslot, tupDesc);
 
 	if (action == 'K')
@@ -1196,7 +1198,7 @@ process_remote_delete(StringInfo s, Relation rel)
 	bool		found_old;
 
 	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate);
+	oldslot = ExecInitExtraTupleSlot(estate, NULL);
 	ExecSetSlotDescriptor(oldslot, tupDesc);
 
 	read_tuple_parts(s, rel, &oldtup);
@@ -1277,9 +1279,7 @@ void MtmExecutor(void* work, size_t size)
     if (MtmApplyContext == NULL) {
         MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
 												"ApplyContext",
-												ALLOCSET_DEFAULT_MINSIZE,
-												ALLOCSET_DEFAULT_INITSIZE,
-												ALLOCSET_DEFAULT_MAXSIZE);
+												ALLOCSET_DEFAULT_SIZES);
     }
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;

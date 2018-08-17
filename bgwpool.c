@@ -50,7 +50,7 @@ static void BgwPoolMainLoop(BgwPool* pool)
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
     BackgroundWorkerUnblockSignals();
-	BackgroundWorkerInitializeConnection(pool->dbname, pool->dbuser);
+	BackgroundWorkerInitializeConnection(pool->dbname, pool->dbuser, 0);
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";

@@ -631,7 +631,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 
 	for (i = 0; i < desc->natts; i++)
 	{
-		if (desc->attrs[i]->attisdropped)
+		if (TupleDescAttr(desc, i)->attisdropped)
 			continue;
 		nliveatts++;
 	}
@@ -652,7 +652,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 	{
 		HeapTuple	typtup;
 		Form_pg_type typclass;
-		Form_pg_attribute att = desc->attrs[i];
+		Form_pg_attribute att = TupleDescAttr(desc, i);
 		char		transfer_type;
 
 		/* skip dropped columns */

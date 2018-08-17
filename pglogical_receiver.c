@@ -16,10 +16,12 @@
 /* Some general headers for custom bgworker facility */
 
 #include <unistd.h>
+#include <sys/time.h>
+
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "common/pg_socket.h"
+// #include "common/pg_socket.h"
 #include "pqexpbuffer.h"
 #include "access/xact.h"
 #include "access/clog.h"
@@ -47,6 +49,7 @@
 #include "spill.h"
 #include "state.h"
 #include "bgwpool.h"
+#include "compat.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
@@ -269,7 +272,7 @@ pglogical_receiver_main(Datum main_arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to a database */
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, MtmDatabaseUser);
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, MtmDatabaseUser, 0);
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";

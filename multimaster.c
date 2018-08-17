@@ -13,7 +13,7 @@
 #include "funcapi.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "common/pg_socket.h"
+// #include "common/pg_socket.h"
 #include "pgstat.h"
 #include "utils/regproc.h"
 
@@ -67,7 +67,7 @@
 #include "access/htup_details.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
-#include "catalog/pg_constraint_fn.h"
+#include "catalog/pg_constraint.h"
 #include "catalog/pg_proc.h"
 #include "pglogical_output/hooks.h"
 #include "parser/analyze.h"
@@ -82,6 +82,8 @@
 #include "multimaster.h"
 #include "ddd.h"
 #include "state.h"
+
+#include "compat.h"
 
 typedef struct {
 	TransactionId xid;	  /* local transaction ID	*/
@@ -206,16 +208,7 @@ static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
 static TransactionManager MtmTM =
 {
-	PgTransactionIdGetStatus,
-	PgTransactionIdSetTreeStatus,
-	MtmGetSnapshot,
-	PgGetNewTransactionId,
-	MtmGetOldestXmin,
-	PgTransactionIdIsInProgress,
-	PgGetGlobalTransactionId,
-	PgXidInMVCCSnapshot,
 	MtmDetectGlobalDeadLock,
-	MtmGetName,
 	MtmGetTransactionStateSize,
 	MtmSerializeTransactionState,
 	MtmDeserializeTransactionState,
@@ -630,7 +623,7 @@ void MtmSetSnapshot(csn_t globalSnapshot)
 
 Snapshot MtmGetSnapshot(Snapshot snapshot)
 {
-	snapshot = PgGetSnapshotData(snapshot);
+	snapshot = GetSnapshotData(snapshot);
 	if (XactIsoLevel == XACT_READ_COMMITTED && MtmTx.snapshot != INVALID_CSN) {
 		MtmTx.snapshot = MtmGetCurrentTime();
 		if (TransactionIdIsValid(GetCurrentTransactionIdIfAny())) {
@@ -644,7 +637,7 @@ Snapshot MtmGetSnapshot(Snapshot snapshot)
 
 TransactionId MtmGetOldestXmin(Relation rel, int flags)
 {
-	TransactionId xmin = PgGetOldestXmin(rel, flags); /* consider all backends */
+	TransactionId xmin = GetOldestXmin(rel, flags); /* consider all backends */
 	// if (TransactionIdIsValid(xmin)) {
 	// 	MtmLock(LW_EXCLUSIVE);
 	// 	xmin = MtmAdjustOldestXid(xmin);
@@ -4802,7 +4795,7 @@ static bool MtmTwoPhaseCommit(MtmCurrentTrans* x)
 		MtmGenerateGid(x->gid);
 
 		if (!x->isTransactionBlock) {
-			BeginTransactionBlock(false);
+			BeginTransactionBlock();
 			x->isTransactionBlock = true;
 			CommitTransactionCommand();
 			StartTransactionCommand();
@@ -5807,10 +5800,10 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 
 		if (!hasDeadlock)
 		{
-			TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
+			// TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
 			MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
 			enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-			set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
+			// set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
 		}
 	}
 	return hasDeadlock;

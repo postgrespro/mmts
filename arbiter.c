@@ -27,7 +27,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-#include "common/pg_socket.h"
+// #include "common/pg_socket.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
 #include "storage/s_lock.h"
@@ -66,6 +66,7 @@
 #include "common/ip.h"
 #include "pgstat.h"
 
+#include "compat.h"
 
 #ifndef USE_EPOLL
 #ifdef __linux__
@@ -119,6 +120,7 @@ char const* const MtmMessageKindMnem[] =
 
 static BackgroundWorker MtmSenderWorker = {
 	"mtm-sender",
+	"mtm",
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
@@ -132,6 +134,7 @@ static BackgroundWorker MtmSenderWorker = {
 
 static BackgroundWorker MtmRecevierWorker = {
 	"mtm-receiver",
+	"mtm",
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
@@ -145,6 +148,7 @@ static BackgroundWorker MtmRecevierWorker = {
 
 static BackgroundWorker MtmMonitorWorker = {
 	"mtm-monitor",
+	"mtm",
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
@@ -763,7 +767,7 @@ void MtmSender(Datum arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to a database */
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL);
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
 	/* Start heartbeat times */
 	heartbeat_timer = RegisterTimeout(USER_TIMEOUT, MtmScheduleHeartbeat);
@@ -851,7 +855,7 @@ void MtmMonitor(Datum arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to a database */
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL);
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
 	while (!stop) {
 		int rc = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH, MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
@@ -898,7 +902,7 @@ void MtmReceiver(Datum arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to a database */
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL);
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
 	MtmAcceptIncomingConnections();
 

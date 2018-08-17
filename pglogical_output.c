@@ -209,9 +209,7 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 
 	data->context = AllocSetContextCreate(TopMemoryContext,
 										  "pglogical conversion context",
-										  ALLOCSET_DEFAULT_MINSIZE,
-										  ALLOCSET_DEFAULT_INITSIZE,
-										  ALLOCSET_DEFAULT_MAXSIZE);
+										  ALLOCSET_DEFAULT_SIZES);
 	data->allow_internal_basetypes = true;
 	data->allow_binary_basetypes = true;
 
@@ -407,9 +405,7 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 
 			data->hooks_mctxt = AllocSetContextCreate(ctx->context,
 					"pglogical_output hooks context",
-					ALLOCSET_SMALL_MINSIZE,
-					ALLOCSET_SMALL_INITSIZE,
-					ALLOCSET_SMALL_MAXSIZE);
+					ALLOCSET_DEFAULT_SIZES);
 
 			load_hooks(data);
 			call_startup_hook(data, ctx->output_plugin_options);

@@ -67,8 +67,7 @@ int MtmCreateSpillFile(int node_id, int* file_id)
 	sprintf(path, "pg_mtm/%d/txn-%d.snap", 
 			node_id, ++spill_file_id);
 	fd = OpenTransientFile(path,
-						   O_CREAT | O_TRUNC | O_WRONLY | O_APPEND | PG_BINARY,
-						   S_IRUSR | S_IWUSR);
+						   O_CREAT | O_TRUNC | O_WRONLY | O_APPEND | PG_BINARY);
 	if (fd < 0) { 
 		ereport(PANIC,
 				(errcode_for_file_access(),
@@ -87,8 +86,7 @@ int MtmOpenSpillFile(int node_id, int file_id)
 	sprintf(path, "pg_mtm/%d/txn-%d.snap", 
 			node_id, file_id);
 	fd = OpenTransientFile(path,
-						   O_RDONLY | PG_BINARY,
-						   S_IRUSR | S_IWUSR);
+						   O_RDONLY | PG_BINARY);
 	if (fd < 0) { 
 		ereport(PANIC,
 				(errcode_for_file_access(),
