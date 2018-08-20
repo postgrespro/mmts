@@ -143,7 +143,6 @@ PG_FUNCTION_INFO_V1(mtm_referee_poll);
 PG_FUNCTION_INFO_V1(mtm_broadcast_table);
 PG_FUNCTION_INFO_V1(mtm_copy_table);
 
-static Snapshot MtmGetSnapshot(Snapshot snapshot);
 static void MtmInitialize(void);
 static void MtmXactCallback(XactEvent event, void *arg);
 static void MtmBeginTransaction(MtmCurrentTrans* x);
@@ -154,13 +153,10 @@ static void MtmPreCommitPreparedTransaction(MtmCurrentTrans* x);
 static void MtmEndTransaction(MtmCurrentTrans* x, bool commit);
 static bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 
-static TransactionId MtmGetOldestXmin(Relation rel, int flags);
-//static bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);
 static void MtmAdjustOldestXid(void);
 
 static bool MtmDetectGlobalDeadLock(PGPROC* proc);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId* subxids, int nSubxids);
-static char const* MtmGetName(void);
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
 static void	  MtmDeserializeTransactionState(void* ctx);
@@ -503,10 +499,6 @@ csn_t MtmSyncClock(csn_t global_csn)
 /*
  * Distribute transaction manager functions
  */
-static char const* MtmGetName(void)
-{
-	return MULTIMASTER_NAME;
-}
 
 static size_t
 MtmGetTransactionStateSize(void)
@@ -619,151 +611,6 @@ void MtmSetSnapshot(csn_t globalSnapshot)
 	MtmTx.snapshot = globalSnapshot;
 	MtmUnlock();
 }
-
-
-Snapshot MtmGetSnapshot(Snapshot snapshot)
-{
-	snapshot = GetSnapshotData(snapshot);
-	if (XactIsoLevel == XACT_READ_COMMITTED && MtmTx.snapshot != INVALID_CSN) {
-		MtmTx.snapshot = MtmGetCurrentTime();
-		if (TransactionIdIsValid(GetCurrentTransactionIdIfAny())) {
-			LogLogicalMessage("S", (char*)&MtmTx.snapshot, sizeof(MtmTx.snapshot), true);
-		}
-	}
-	// RecentGlobalDataXmin = RecentGlobalXmin = Mtm->oldestXid;
-	return snapshot;
-}
-
-
-TransactionId MtmGetOldestXmin(Relation rel, int flags)
-{
-	TransactionId xmin = GetOldestXmin(rel, flags); /* consider all backends */
-	// if (TransactionIdIsValid(xmin)) {
-	// 	MtmLock(LW_EXCLUSIVE);
-	// 	xmin = MtmAdjustOldestXid(xmin);
-	// 	MtmUnlock();
-	// }
-	return xmin;
-}
-
-// bool MtmXidInMVCCSnapshot(TransactionId xid, Snapshot snapshot)
-// {
-// #if TRACE_SLEEP_TIME
-// 	static timestamp_t firstReportTime;
-// 	static timestamp_t prevReportTime;
-// 	static timestamp_t totalSleepTime;
-// 	static timestamp_t maxSleepTime;
-// #endif
-// 	timestamp_t delay = MIN_WAIT_TIMEOUT;
-// 	int i;
-// #if DEBUG_LEVEL > 1
-// 	timestamp_t start = MtmGetSystemTime();
-// #endif
-
-// 	Assert(xid != InvalidTransactionId);
-
-// 	if (!MtmUseDtm || TransactionIdPrecedes(xid, Mtm->oldestXid)) {
-// 		return PgXidInMVCCSnapshot(xid, snapshot);
-// 	}
-// 	MtmLock(LW_SHARED);
-
-// #if TRACE_SLEEP_TIME
-// 	if (firstReportTime == 0) {
-// 		firstReportTime = MtmGetCurrentTime();
-// 	}
-// #endif
-
-// 	for (i = 0; i < MAX_WAIT_LOOPS; i++)
-// 	{
-// 		csn_t csn;
-// 		RepOriginId reporigin_id;
-// 		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
-// 		if (ts != NULL /*&& ts->status != TRANSACTION_STATUS_IN_PROGRESS*/)
-// 		{
-
-// 			if (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS)
-// 				csn = ts->csn;
-// 			else
-// 				TransactionIdGetCommitTsData(xid, &csn, &reporigin_id);
-
-// 			if (ts->csn != csn && ts->status != TRANSACTION_STATUS_ABORTED)
-// 			{
-// 				MTM_LOG1("WOW! %d: tuple with xid=%lld(csn=%ld / %ld) woes in snapshot %ld (s=%d)", MyProcPid, (long64)xid, csn, ts->csn, MtmTx.snapshot, ts->status);
-// 			}
-
-// 			if (csn > MtmTx.snapshot) {
-// 				MTM_LOG4("%d: tuple with xid=%lld(csn=%lld) is invisible in snapshot %lld",
-// 						 MyProcPid, (long64)xid, ts->csn, MtmTx.snapshot);
-// #if DEBUG_LEVEL > 1
-// 				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
-// 					MTM_ELOG(WARNING, "Backend %d waits for transaction %s (%llu) status %lld usecs", MyProcPid, ts->gid, (long64)xid, MtmGetSystemTime() - start);
-// 				}
-// #endif
-// 				MtmUnlock();
-// 				return true;
-// 			}
-// 			if (ts->status == TRANSACTION_STATUS_UNKNOWN)
-// 			{
-// 				MTM_LOG3("%d: wait for in-doubt transaction %u in snapshot %llu", MyProcPid, xid, MtmTx.snapshot);
-// 				MtmUnlock();
-// #if TRACE_SLEEP_TIME
-// 				{
-// 				timestamp_t delta, now = MtmGetCurrentTime();
-// #endif
-// 				MtmSleep(delay);
-// #if TRACE_SLEEP_TIME
-// 				delta = MtmGetCurrentTime() - now;
-// 				totalSleepTime += delta;
-// 				if (delta > maxSleepTime) {
-// 					maxSleepTime = delta;
-// 				}
-// 				if (now > prevReportTime + USECS_PER_SEC*10) {
-// 					prevReportTime = now;
-// 					if (firstReportTime == 0) {
-// 						firstReportTime = now;
-// 					} else {
-// 						MTM_LOG3("Snapshot sleep %llu of %llu usec (%f%%), maximum=%llu", totalSleepTime, now - firstReportTime, totalSleepTime*100.0/(now - firstReportTime), maxSleepTime);
-// 					}
-// 				}
-// 				}
-// #endif
-// 				if (delay*2 <= MAX_WAIT_TIMEOUT) {
-// 					delay *= 2;
-// 				}
-// 				MtmLock(LW_SHARED);
-// 			}
-// 			else
-// 			{
-// 				bool invisible = ts->status != TRANSACTION_STATUS_COMMITTED;
-// 				MTM_LOG4("%d: tuple with xid=%lld(csn= %lld) is %s in snapshot %lld",
-// 						 MyProcPid, (long64)xid, ts->csn, invisible ? "rollbacked" : "committed", MtmTx.snapshot);
-// 				MtmUnlock();
-// #if DEBUG_LEVEL > 1
-// 				if (MtmGetSystemTime() - start > USECS_PER_SEC) {
-// 					MTM_ELOG(WARNING, "Backend %d waits for %s transaction %s (%llu) %lld usecs", MyProcPid, invisible ? "rollbacked" : "committed",
-// 						 ts->gid, (long64)xid, MtmGetSystemTime() - start);
-// 				}
-// #endif
-// 				return invisible;
-// 			}
-// 		}
-// 		else
-// 		{
-// 			MTM_LOG4("%d: visibility check is skipped for transaction %llu in snapshot %llu", MyProcPid, (long64)xid, MtmTx.snapshot);
-// 			MtmUnlock();
-// 			return PgXidInMVCCSnapshot(xid, snapshot);
-// 		}
-// 	}
-// 	MtmUnlock();
-// #if DEBUG_LEVEL > 1
-// 	MTM_ELOG(ERROR, "Failed to get status of XID %llu in %lld usec", (long64)xid, MtmGetSystemTime() - start);
-// #else
-// 	MTM_ELOG(ERROR, "Failed to get status of XID %llu", (long64)xid);
-// #endif
-// 	return true;
-// }
-
-
 
 /*
  * There can be different oldest XIDs at different cluster node.
