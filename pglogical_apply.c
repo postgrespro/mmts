@@ -501,8 +501,10 @@ process_remote_message(StringInfo s)
 			MtmIndexStmt = NULL;
 			MtmDropStmt = NULL;
 			MtmTablespaceStmt = NULL;
-
+			debug_query_string = messageBody;
 			rc = SPI_execute(messageBody, false, 0);
+			debug_query_string = NULL;
+
 			SPI_finish();
 			if (rc < 0) { 
 				MTM_ELOG(ERROR, "Failed to execute utility statement %s", messageBody);
