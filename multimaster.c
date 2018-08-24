@@ -2455,10 +2455,10 @@ static void MtmInitialize()
 		Mtm->sendSemaphore = PGSemaphoreCreate();
 		PGSemaphoreReset(Mtm->sendSemaphore);
 		SpinLockInit(&Mtm->queueSpinlock);
-		RegisterXactCallback(MtmXactCallback, NULL);
 		MtmTx.snapshot = INVALID_CSN;
 		MtmTx.xid = InvalidTransactionId;
 	}
+	RegisterXactCallback(MtmXactCallback, NULL);
 	MtmXid2State = MtmCreateXidMap();
 	MtmGid2State = MtmCreateGidMap();
 	MtmLocalTables = MtmCreateLocalTableMap();
