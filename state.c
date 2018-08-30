@@ -106,7 +106,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 }
 
 static void
-MtmCheckState(void)
+MtmCheckState(int severity)
 {
 	// int nVotingNodes = MtmGetNumberOfVotingNodes();
 	bool isEnabledState;
@@ -119,7 +119,7 @@ MtmCheckState(void)
 
 	old_status = Mtm->status;
 
-	MTM_LOG1("[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
+	MTM_ELOG(severity, "[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
 		maskToString(Mtm->disabledNodeMask, Mtm->nAllNodes),
 		maskToString(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes),
 		maskToString(Mtm->clique, Mtm->nAllNodes),
@@ -166,7 +166,7 @@ MtmCheckState(void)
 				MtmSetClusterStatus(MTM_RECOVERY, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState();
+					MtmCheckState(LOG);
 				return;
 			}
 			break;
@@ -179,7 +179,7 @@ MtmCheckState(void)
 				MtmSetClusterStatus(MTM_RECOVERED, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState();
+					MtmCheckState(LOG);
 				return;
 			}
 			break;
@@ -204,7 +204,7 @@ MtmCheckState(void)
 				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState();
+					MtmCheckState(LOG);
 				return;
 			}
 			break;
@@ -278,7 +278,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 			break;
 
 	}
-	MtmCheckState();
+	MtmCheckState(LOG);
 	MtmUnlock();
 }
 
@@ -330,7 +330,7 @@ MtmStateProcessEvent(MtmEvent ev)
 			break;
 	}
 
-	MtmCheckState();
+	MtmCheckState(LOG);
 	MtmUnlock();
 
 }
@@ -404,7 +404,7 @@ void MtmOnNodeDisconnect(int nodeId)
 	MtmDisableNode(nodeId);
 	Mtm->nConfigChanges += 1;
 	BIT_SET(Mtm->reconnectMask, nodeId-1);
-	MtmCheckState();
+	MtmCheckState(LOG);
 	MtmUnlock();
 }
 
@@ -420,7 +420,7 @@ void MtmOnNodeConnect(int nodeId)
 	BIT_CLEAR(SELF_CONNECTIVITY_MASK, nodeId-1);
 	BIT_SET(Mtm->reconnectMask, nodeId-1);
 
-	MtmCheckState();
+	MtmCheckState(LOG);
 	MtmUnlock();
 
 	// MtmRefreshClusterStatus();
@@ -476,7 +476,7 @@ MtmRefreshClusterStatus()
 	 * See comment to MTM_RECOVERED -> MTM_ONLINE transition in MtmCheckState()
 	 */
 	MtmLock(LW_EXCLUSIVE);
-	MtmCheckState();
+	MtmCheckState(DEBUG1);
 	MtmUnlock();
 
 	/*
@@ -516,7 +516,7 @@ MtmRefreshClusterStatus()
 						MtmPollStatusOfPreparedTransactions(true);
 					}
 					MtmEnableNode(MtmNodeId);
-					MtmCheckState();
+					MtmCheckState(LOG);
 				}
 				MtmUnlock();
 			}
@@ -610,7 +610,7 @@ MtmRefreshClusterStatus()
 		}
 	}
 
-	MtmCheckState();
+	MtmCheckState(LOG);
 	MtmUnlock();
 }
 
