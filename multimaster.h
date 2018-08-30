@@ -100,7 +100,7 @@ typedef ulong64 csn_t; /* commit serial number */
 typedef ulong64 lsn_t;
 #define INVALID_LSN  InvalidXLogRecPtr
 
-typedef char pgid_t[MULTIMASTER_MAX_GID_SIZE];
+typedef char pgid_t[GIDSIZE];
 
 #define SELF_CONNECTIVITY_MASK  (Mtm->nodes[MtmNodeId-1].connectivityMask)
 #define EFFECTIVE_CONNECTIVITY_MASK  ( SELF_CONNECTIVITY_MASK | Mtm->stoppedNodeMask | ~Mtm->clique )

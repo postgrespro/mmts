@@ -523,7 +523,7 @@ static int MtmConnectSocket(int node, int port)
 	req.hdr.dxid = HANDSHAKE_MAGIC;
 	req.hdr.sxid = ShmemVariableCache->nextXid;
 	req.hdr.csn  = MtmGetCurrentTime();
-	strcpy(req.connStr, Mtm->nodes[MtmNodeId-1].con.connStr);
+	strncpy(req.connStr, Mtm->nodes[MtmNodeId-1].con.connStr, MULTIMASTER_MAX_CONN_STR_SIZE);
 	if (!MtmWriteSocket(sd, &req, sizeof req)) { 
 		MTM_ELOG(WARNING, "Arbiter failed to send handshake message to %s:%d: %s", host, port, strerror(errno));
 		pg_closesocket(sd, MtmUseRDMA);

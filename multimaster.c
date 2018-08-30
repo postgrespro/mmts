@@ -900,7 +900,7 @@ MtmCreateTransState(MtmCurrentTrans* x)
 		ts->gtid.xid = x->xid;
 		ts->gtid.node = MtmNodeId;
 	}
-	strcpy(ts->gid, x->gid);
+	strncpy(ts->gid, x->gid, GIDSIZE);
 	x->isActive = true;
 
 	Assert(ts->gid[0] == '\0' || MtmGidParseNodeId(ts->gid) == ts->gtid.node);
@@ -1430,7 +1430,7 @@ MtmLogAbortLogicalMessage(int nodeId, char const* gid)
 {
 	MtmAbortLogicalMessage msg;
 	lsn_t lsn;
-	strcpy(msg.gid, gid);
+	strncpy(msg.gid, gid, GIDSIZE);
 	msg.origin_node = nodeId;
 	msg.origin_lsn = replorigin_session_origin_lsn;
 	lsn = LogLogicalMessage("A", (char*)&msg, sizeof msg, false);
@@ -1525,7 +1525,7 @@ MtmEndTransaction(MtmCurrentTrans* x, bool commit)
 				ts->gtid = x->gtid;
 				ts->nSubxids = 0;
 				ts->votingCompleted = true;
-				strcpy(ts->gid, x->gid);
+				strncpy(ts->gid, x->gid, GIDSIZE);
 				MtmTransactionListAppend(ts);
 				if (*x->gid) {
 					replorigin_session_origin_lsn = INVALID_LSN;
@@ -1682,7 +1682,7 @@ static void	MtmLoadPreparedTransactions(void)
 			ts->participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) & ~((nodemask_t)1 << (MtmNodeId-1));
 			ts->nConfigChanges = Mtm->nConfigChanges;
 			ts->votedMask = 0;
-			strcpy(ts->gid, gid);
+			strncpy(ts->gid, gid, GIDSIZE);
 			MtmTransactionListAppend(ts);
 			tm->status = ts->status;
 			tm->state = ts;
@@ -1763,7 +1763,7 @@ void MtmJoinTransaction(GlobalTransactionId* gtid, csn_t globalSnapshot, nodemas
 void  MtmSetCurrentTransactionGID(char const* gid)
 {
 	MTM_LOG3("Set current transaction xid="XID_FMT" GID %s", MtmTx.xid, gid);
-	strcpy(MtmTx.gid, gid);
+	strncpy(MtmTx.gid, gid, GIDSIZE);
 	MtmTx.isDistributed = true;
 	MtmTx.isReplicated = true;
 	MtmTx.gtid.node = MtmGidParseNodeId(gid);
@@ -2546,7 +2546,7 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 	while(isspace(*connStr))
 		connStr++;
 
-	strcpy(conn->connStr, connStr);
+	strncpy(conn->connStr, connStr, MULTIMASTER_MAX_CONN_STR_SIZE);
 
 	host = strstr(connStr, "host=");
 	if (host == NULL) {
@@ -5053,12 +5053,12 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 					break;
 				case TRANS_STMT_PREPARE:
 					MtmTx.isTwoPhase = true;
-					strcpy(MtmTx.gid, stmt->gid);
+					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
 					break;
 				case TRANS_STMT_COMMIT_PREPARED:
 				case TRANS_STMT_ROLLBACK_PREPARED:
 					Assert(!MtmTx.isTwoPhase);
-					strcpy(MtmTx.gid, stmt->gid);
+					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
 					break;
 				default:
 					break;
