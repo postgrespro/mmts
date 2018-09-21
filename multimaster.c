@@ -4222,8 +4222,7 @@ mtm_get_cluster_state(PG_FUNCTION_ARGS)
 	values[16] = Int32GetDatum(Mtm->nConfigChanges);
 	values[17] = Int64GetDatum(Mtm->stalledNodeMask);
 	values[18] = Int64GetDatum(Mtm->stoppedNodeMask);
-	values[19] = Int64GetDatum(Mtm->deadNodeMask);
-	values[20] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[MtmNodeId-1].lastStatusChangeTime/USECS_PER_SEC));
+	values[19] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[MtmNodeId-1].lastStatusChangeTime/USECS_PER_SEC));
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
 }

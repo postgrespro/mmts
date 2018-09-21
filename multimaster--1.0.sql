@@ -97,7 +97,6 @@ CREATE TYPE mtm.cluster_state AS (
     "config_changes" integer,
     "stalled_node_mask" bigint,
     "stopped_node_mask" bigint,
-    "dead_node_mask" bigint,
     "last_status_change" timestamp
 );
 
