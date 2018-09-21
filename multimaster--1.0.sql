@@ -138,11 +138,11 @@ CREATE FUNCTION mtm.make_table_local(relation regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_make_table_local'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.broadcast_table(srcTable regclass) RETURNS void
+CREATE FUNCTION mtm.broadcast_table(source_table regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_broadcast_table'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.copy_table(srcTable regclass, dstNode integer) RETURNS void
+CREATE FUNCTION mtm.copy_table(source_table regclass, target_node_id integer) RETURNS void
 AS 'MODULE_PATHNAME','mtm_copy_table'
 LANGUAGE C;
 
@@ -150,7 +150,7 @@ CREATE FUNCTION mtm.dump_lock_graph() RETURNS text
 AS 'MODULE_PATHNAME','mtm_dump_lock_graph'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.poll_node(nodeId integer, noWait boolean default FALSE) RETURNS boolean
+CREATE FUNCTION mtm.poll_node(node_id integer, no_wait boolean default FALSE) RETURNS boolean
 AS 'MODULE_PATHNAME','mtm_poll_node'
 LANGUAGE C;
 
