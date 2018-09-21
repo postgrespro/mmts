@@ -53,16 +53,71 @@ CREATE FUNCTION mtm.get_last_csn() RETURNS bigint
 AS 'MODULE_PATHNAME','mtm_get_last_csn'
 LANGUAGE C;
 
-CREATE TYPE mtm.node_state AS ("id" integer, "enabled" bool, "connected" bool, "slot_active" bool, "stopped" bool, "catchUp" bool, "slotLag" bigint, "avgTransDelay" bigint, "lastStatusChange" timestamp, "oldestSnapshot" bigint, "SenderPid" integer, "SenderStartTime" timestamp, "ReceiverPid" integer, "ReceiverStartTime" timestamp, "connStr" text, "connectivityMask" bigint, "nHeartbeats" bigint);
+CREATE TYPE mtm.node_state AS (
+    "id" integer,
+    "enabled" bool,
+    "connected" bool,
+    "slot_active" bool,
+    "stopped" bool,
+    "catch_up" bool,
+    "slot_lag" bigint,
+    "avg_trans_delay" bigint,
+    "last_status_change" timestamp,
+    "oldest_snapshot" bigint,
+    "sender_pid" integer,
+    "sender_start_time" timestamp,
+    "receiver_pid" integer,
+    "receiver_start_time" timestamp,
+    "conn_str" text,
+    "connectivity_mask" bigint,
+    "n_heartbeats" bigint
+);
 
 CREATE FUNCTION mtm.get_nodes_state() RETURNS SETOF mtm.node_state
 AS 'MODULE_PATHNAME','mtm_get_nodes_state'
 LANGUAGE C;
 
-CREATE TYPE mtm.cluster_state AS ("id" integer, "status" text, "disabledNodeMask" bigint, "disconnectedNodeMask" bigint, "catchUpNodeMask" bigint, "liveNodes" integer, "allNodes" integer, "nActiveQueries" integer, "nPendingQueries" integer, "queueSize" bigint, "transCount" bigint, "timeShift" bigint, "recoverySlot" integer,
-"xidHashSize" bigint, "gidHashSize" bigint, "oldestXid" bigint, "configChanges" integer, "stalledNodeMask" bigint, "stoppedNodeMask" bigint, "deadNodeMask" bigint, "lastStatusChange" timestamp);
+CREATE TYPE mtm.cluster_state AS (
+    "id" integer,
+    "status" text,
+    "disabled_node_mask" bigint,
+    "disconnected_node_mask" bigint,
+    "catch_up_node_mask" bigint,
+    "live_nodes" integer,
+    "all_nodes" integer,
+    "n_active_queries" integer,
+    "n_pending_queries" integer,
+    "queue_size" bigint,
+    "trans_count" bigint,
+    "time_shift" bigint,
+    "recovery_slot" integer,
+    "xid_hash_size" bigint,
+    "gid_hash_size" bigint,
+    "oldest_xid" bigint,
+    "config_changes" integer,
+    "stalled_node_mask" bigint,
+    "stopped_node_mask" bigint,
+    "dead_node_mask" bigint,
+    "last_status_change" timestamp
+);
 
-CREATE TYPE mtm.trans_state AS ("status" text, "gid" text, "xid" bigint, "coordinator" integer, "gxid" bigint, "csn" timestamp, "snapshot" timestamp, "local" boolean, "prepared" boolean, "active" boolean, "twophase" boolean, "votingCompleted" boolean, "participants" bigint, "voted" bigint, "configChanges" integer);
+CREATE TYPE mtm.trans_state AS (
+    "status" text,
+    "gid" text,
+    "xid" bigint,
+    "coordinator" integer,
+    "gxid" bigint,
+    "csn" timestamp,
+    "snapshot" timestamp,
+    "local" boolean,
+    "prepared" boolean,
+    "active" boolean,
+    "twophase" boolean,
+    "voting_completed" boolean,
+    "participants" bigint,
+    "voted" bigint,
+    "config_changes" integer
+);
 
 CREATE FUNCTION mtm.get_trans_by_gid(git text) RETURNS mtm.trans_state
 AS 'MODULE_PATHNAME','mtm_get_trans_by_gid'
