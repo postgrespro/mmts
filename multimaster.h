@@ -463,5 +463,6 @@ extern void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeI
 extern void MtmPollStatusOfPreparedTransactions(bool majorMode);
 extern int MtmGetNumberOfVotingNodes(void);
 extern void MtmToggleDML(void);
+extern void MtmUpdateControlFile(void);
 
 #endif

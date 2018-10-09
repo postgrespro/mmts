@@ -101,6 +101,15 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 		}
 	}
 
+	if (status == MTM_RECOVERED)
+	{
+        /*
+		 * Update control file and donor node id after completion of recovery of new node from donor node 
+		 * to enable further recovery from any cluster node
+		 */
+		MtmUpdateControlFile();
+	}
+
 	Mtm->status = status;
 	Mtm->statusReason = statusReason;
 }

@@ -2374,6 +2374,27 @@ static void MtmCheckControlFile(void)
 }
 
 /*
+ * Update control file and donor node id to enable recovery from any node
+ * after syncing new node with its donor
+ */
+void MtmUpdateControlFile()
+{
+	if (Mtm->donorNodeId != MtmNodeId)
+	{
+		char controlFilePath[MAXPGPATH];
+		FILE* f;
+
+		Mtm->donorNodeId = MtmNodeId;
+		snprintf(controlFilePath, MAXPGPATH, "%s/global/mmts_control", DataDir);
+		f = fopen(controlFilePath, "w");
+		if (f == NULL) {
+			MTM_ELOG(FATAL, "Failed to create mmts_control file: %m");
+		}
+		fprintf(f, "%s:%d\n", MtmClusterName, Mtm->donorNodeId);
+		fclose(f);
+	}
+}
+/*
  * Perform initialization of multimaster state.
  * This function is called from shared memory startup hook (after completion of initialization of shared memory)
  */
