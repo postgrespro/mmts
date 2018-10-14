@@ -137,8 +137,8 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 					  ReorderBufferTXN *txn)
 {
 	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
-	nodemask_t participantsMask;
-	csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &participantsMask);
+	nodemask_t participantsMask = 0;
+	csn_t csn = 42; //MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &participantsMask);
 
 	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
 
@@ -513,9 +513,9 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	uint8 event = PGLOGICAL_COMMIT_PREPARED;
-	nodemask_t partisipantsMask;
+	// nodemask_t partisipantsMask = 0;
 	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
-	csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
+	csn_t csn = 42; //MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
 
 	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
 
@@ -551,9 +551,9 @@ pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	uint8 event = PGLOGICAL_ABORT_PREPARED;
-	nodemask_t partisipantsMask;
+	// nodemask_t partisipantsMask = 0;
 	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
-	csn_t csn = MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
+	csn_t csn = 42; //MtmDistributedTransactionSnapshot(txn->xid, MtmReplicationNodeId, &partisipantsMask);
 
 	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
 

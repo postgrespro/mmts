@@ -17,23 +17,23 @@ make install
 cd $BASEDIR/contrib/mmts
 make clean && make install
 
-cd $BASEDIR/contrib/referee
-make clean && make install
+# cd $BASEDIR/contrib/referee
+# make clean && make install
 
 cd $BASEDIR/contrib/mmts/tests
 
 rm -rf tmp_check *.log
 
-###############################################################################
+# ###############################################################################
 
-initdb tmp_check/referee
-cat <<SQL > tmp_check/referee/postgresql.conf
-    listen_addresses='*'
-    port = '5440'
-SQL
-pg_ctl -w -D tmp_check/referee -l referee.log start
-createdb -p 5440
-psql -p 5440 -c 'create extension referee'
+# initdb tmp_check/referee
+# cat <<SQL > tmp_check/referee/postgresql.conf
+#     listen_addresses='*'
+#     port = '5440'
+# SQL
+# pg_ctl -w -D tmp_check/referee -l referee.log start
+# createdb -p 5440
+# psql -p 5440 -c 'create extension referee'
 
 ###############################################################################
 
@@ -43,11 +43,17 @@ for ((i=1;i<=n_nodes;i++))
 do    
     port=$((5431 + i))
     arbiter_port=$((7000 + i))
-    conn_str="$conn_str${sep} dbname=$USER host=127.0.0.1 port=$port arbiter_port=$arbiter_port sslmode=disable"
+    conn_str="$conn_str${sep} dbname=$USER host=127.0.0.1 port=$port sslmode=disable"
     sep=","
     initdb tmp_check/node$i
+
+    cat <<SQL > tmp_check/node$i/postgresql.conf
+        listen_addresses='*'
+        port = '$port'
+SQL
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
-    createdb
+    createdb -p $port
+    psql -p $port -c 'create extension multimaster'
     pg_ctl -w -D tmp_check/node$i -l node$i.log stop
 done
 
@@ -77,7 +83,7 @@ do
         multimaster.node_id = $i
         multimaster.arbiter_port = $arbiter_port
         multimaster.max_recovery_lag = 30GB
-        multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
+        # multimaster.referee_connstring = 'dbname=$USER host=127.0.0.1 port=5440 sslmode=disable'
         multimaster.monotonic_sequences = on
 SQL
 
@@ -86,12 +92,16 @@ SQL
         host replication all 0.0.0.0/0 trust
 CONF
 
+done
+
+for ((i=1;i<=n_nodes;i++))
+do
     # cp pg_hba.conf tmp_check/node$i
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
 done
 
-sleep 10
-psql < regress.sql
-psql -c 'create extension multimaster'
+# sleep 10
+# psql < regress.sql
+# psql -c 'create extension multimaster'
 
 echo Done

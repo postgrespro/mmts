@@ -85,23 +85,6 @@
 
 #include "common/pg_socket.h"
 
-typedef struct {
-	TransactionId xid;	  /* local transaction ID	*/
-	GlobalTransactionId gtid; /* global transaction ID assigned by coordinator of transaction */
-	bool  isTwoPhase;	  /* user level 2PC */
-	bool  isReplicated;	  /* transaction on replica */
-	bool  isDistributed;  /* transaction performed INSERT/UPDATE/DELETE and has to be replicated to other nodes */
-	bool  isPrepared;	  /* transaction is prepared at first stage of 2PC */
-	bool  isSuspended;	  /* prepared transaction is suspended because coordinator node is switch to offline */
-	bool  isTransactionBlock; /* is transaction block */
-	bool  containsDML;	  /* transaction contains DML statements */
-	bool  isActive;		  /* transaction is active (nActiveTransaction counter is incremented) */
-	XidStatus status;	  /* transaction status */
-	csn_t snapshot;		  /* transaction snapshot */
-	csn_t csn;			  /* CSN */
-	pgid_t gid;			  /* global transaction identifier (used by 2pc) */
-} MtmCurrentTrans;
-
 typedef enum
 {
 	MTM_STATE_LOCK_ID
@@ -151,7 +134,7 @@ static void MtmPostPrepareTransaction(MtmCurrentTrans* x);
 static void MtmAbortPreparedTransaction(MtmCurrentTrans* x);
 static void MtmPreCommitPreparedTransaction(MtmCurrentTrans* x);
 static void MtmEndTransaction(MtmCurrentTrans* x, bool commit);
-static bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
+static bool MtmTwoPhaseCommit0(MtmCurrentTrans* x);
 
 static void MtmAdjustOldestXid(void);
 
@@ -199,7 +182,6 @@ static HTAB* MtmLocalTables;
 
 bool MtmIsRecoverySession;
 
-static MtmCurrentTrans MtmTx;
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
 static TransactionManager MtmTM =
@@ -765,7 +747,7 @@ MtmXactCallback(XactEvent event, void *arg)
 /*
  * Check if this is "normal" user transaction which should be distributed to other nodes
  */
-static bool
+bool
 MtmIsUserTransaction()
 {
 	return !IsAutoVacuumLauncherProcess() &&
@@ -1564,6 +1546,7 @@ void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
 	msg->oldestSnapshot = Mtm->nodes[MtmNodeId-1].oldestSnapshot;
 	msg->lockReq = Mtm->originLockNodeMask != 0;
 	msg->locked = (Mtm->originLockNodeMask|Mtm->inducedLockNodeMask) != 0;
+	msg->node = MtmNodeId;
 }
 
 
@@ -2453,7 +2436,7 @@ static void MtmInitialize()
 		{
 			Mtm->nodes[i].oldestSnapshot = 0;
 			Mtm->nodes[i].disabledNodeMask = 0;
-			Mtm->nodes[i].connectivityMask = (((nodemask_t)1 << MtmNodes) - 1);
+			Mtm->nodes[i].connectivityMask = (((nodemask_t)1 << MtmNodes) - 1) & ~((nodemask_t)1 << (MtmNodeId-1));
 			Mtm->nodes[i].lockGraphUsed = 0;
 			Mtm->nodes[i].lockGraphAllocated = 0;
 			Mtm->nodes[i].lockGraphData = NULL;
@@ -2479,7 +2462,9 @@ static void MtmInitialize()
 		MtmTx.snapshot = INVALID_CSN;
 		MtmTx.xid = InvalidTransactionId;
 	}
-	RegisterXactCallback(MtmXactCallback, NULL);
+
+	RegisterXactCallback(MtmXactCallback2, NULL);
+
 	MtmXid2State = MtmCreateXidMap();
 	MtmGid2State = MtmCreateGidMap();
 	MtmLocalTables = MtmCreateLocalTableMap();
@@ -2488,6 +2473,19 @@ static void MtmInitialize()
 	LWLockRelease(AddinShmemInitLock);
 
 	MtmCheckControlFile();
+
+	/* Start dmq senders */
+	for (i = 0; i < MtmNodes; i++)
+	{
+		int destination_id;
+
+		if (i + 1 == MtmNodeId)
+			continue;
+		destination_id = dmq_destination_add(MtmConnections[i].connStr,
+											 psprintf("node%d", MtmNodeId),
+											 MtmHeartbeatSendTimeout);
+		Mtm->nodes[i].destination_id = destination_id;
+	}
 }
 
 static void
@@ -2802,6 +2800,14 @@ static bool ConfigIsSane(void)
 	}
 
 	return ok;
+}
+
+static void
+MtmDmqStartup(char *sender)
+{
+	int node_id;
+	sscanf(sender, "node%d", &node_id);
+	MtmOnNodeConnect(node_id);
 }
 
 void
@@ -3264,7 +3270,10 @@ _PG_init(void)
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize);
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2);
 
-	MtmArbiterInitialize();
+	MtmMonitorInitialize();
+
+	dmq_init();
+	dmq_receiver_start_hook = MtmDmqStartup;
 
 	/*
 	 * Install hooks.
@@ -4634,11 +4643,11 @@ static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int force
  * Genenerate global transaction identifier for two-pahse commit.
  * It should be unique for all nodes
  */
-static void
+void
 MtmGenerateGid(char* gid)
 {
 	static int localCount;
-	sprintf(gid, "MTM-%d-%d-%d-" INT64_FORMAT, MtmNodeId, MyProcPid, ++localCount, (int64) GetCurrentTimestamp());
+	sprintf(gid, "MTM-%d-%d-%d-" INT64_FORMAT, MtmNodeId, MyProc->pgprocno, ++localCount, (int64) GetCurrentTimestamp());
 	// MTM_LOG1("MtmGenerateGid: %s", gid);
 }
 
@@ -4654,7 +4663,7 @@ MtmGidParseNodeId(const char* gid)
  * Replace normal commit with two-phase commit.
  * It is called either for commit of standalone command either for commit of transaction block.
  */
-static bool MtmTwoPhaseCommit(MtmCurrentTrans* x)
+static bool MtmTwoPhaseCommit0(MtmCurrentTrans* x)
 {
 	MTM_TXTRACE(x, "MtmTwoPhaseCommit Start");
 
@@ -5067,7 +5076,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 					MtmTx.isTransactionBlock = true;
 					break;
 				case TRANS_STMT_COMMIT:
-					if (MtmTwoPhaseCommit(&MtmTx)) {
+					if (MtmTwoPhaseCommit(&MtmTx)) { // XXX: isn't this already handled by commit event?
 						return;
 					}
 					break;

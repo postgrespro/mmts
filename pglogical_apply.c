@@ -442,7 +442,7 @@ process_remote_begin(StringInfo s)
 {
 	GlobalTransactionId gtid;
 	csn_t snapshot;
-	nodemask_t participantsMask;
+	nodemask_t participantsMask = 0;
 	int rc;
 
 	gtid.node = pq_getmsgint(s, 4); 
@@ -456,7 +456,7 @@ process_remote_begin(StringInfo s)
 
     SetCurrentStatementStartTimestamp();     
 	StartTransactionCommand();
-    MtmJoinTransaction(&gtid, snapshot, participantsMask);
+    // MtmJoinTransaction(&gtid, snapshot, participantsMask);
 
 	if (GucAltered) {
 		SPI_connect();
@@ -763,6 +763,30 @@ read_rel(StringInfo s, LOCKMODE mode)
 	}
 }
 
+/* send response to coordinator after PREPARE */
+static void
+MtmFollowerSendReply(const char *gid, int node_id, MtmMessageCode msg_code)
+{
+	DmqDestinationId dest_id;
+	MtmArbiterMessage msg;
+	int dest_procno = -1;
+
+	dest_id = Mtm->nodes[node_id-1].destination_id;
+
+	memset(&msg, '\0', sizeof(MtmArbiterMessage));
+	MtmInitMessage(&msg, msg_code);
+	strncpy(msg.gid, gid, GIDSIZE);
+
+	sscanf(msg.gid, "MTM-%*d-%d-%*d-%*d", &dest_procno);
+	Assert(dest_procno > 0);
+
+	elog(LOG, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
+
+	dmq_push_buffer(dest_id, psprintf("be%d", dest_procno),
+					&msg, sizeof(MtmArbiterMessage));
+}
+
+
 static void
 process_remote_commit(StringInfo in)
 {
@@ -772,7 +796,7 @@ process_remote_commit(StringInfo in)
 	lsn_t       origin_lsn;
 	lsn_t       commit_lsn;
 	int         origin_node;
-	char        gid[MULTIMASTER_MAX_GID_SIZE];
+	char        gid[GIDSIZE];
 
 	gid[0] = '\0';
 
@@ -799,7 +823,20 @@ process_remote_commit(StringInfo in)
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MTM_LOG2("%d: PGLOGICAL_PRECOMMIT_PREPARED %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			MtmBeginSession(origin_node);
-			MtmPrecommitTransaction(gid);
+			// MtmPrecommitTransaction(gid);
+
+			if (!IsTransactionState()) {
+				MtmResetTransaction();
+				StartTransactionCommand();
+				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+				CommitTransactionCommand();
+			} else {
+				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+			}
+
+			// MtmPrecommitTransaction(gid);
+			MtmFollowerSendReply(gid, origin_node, MSG_PRECOMMITTED);
+
 			MtmEndSession(origin_node, true);
 			return;
 		}
@@ -816,35 +853,54 @@ process_remote_commit(StringInfo in)
 		}
 		case PGLOGICAL_PREPARE:
 		{
-			Assert(IsTransactionState() && TransactionIdIsValid(MtmGetCurrentTransactionId()));
-			strncpy(gid, pq_getmsgstring(in), sizeof gid);
-			MTM_LOG2("%d: PGLOGICAL_PREPARE %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
-			if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_IN_PROGRESS) == TRANSACTION_STATUS_ABORTED) { 
-				MTM_LOG1("Avoid prepare of previously aborted global transaction %s", gid);	
-				AbortCurrentTransaction();
-			} else { 				
-				/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
-				BeginTransactionBlock(false);
-				CommitTransactionCommand();
-				StartTransactionCommand();
-				
-				MtmBeginSession(origin_node);
-				/* PREPARE itself */
-				MtmSetCurrentTransactionGID(gid);
-				PrepareTransactionBlock(gid);
-				CommitTransactionCommand();
+			bool res;
 
-				if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_UNKNOWN) == TRANSACTION_STATUS_ABORTED) { 
-					MTM_LOG1("Perform delayed rollback of prepared global transaction %s", gid);	
-					StartTransactionCommand();
-					MtmSetCurrentTransactionGID(gid);
-					TXFINISH("%s ABORT, PGLOGICAL_PREPARE", gid);
-					FinishPreparedTransaction(gid, false, false);
-					CommitTransactionCommand();					
-					Assert(!MtmTransIsActive());
-				}	
-				MtmEndSession(origin_node, true);
-			}
+			// Assert(IsTransactionState() && TransactionIdIsValid(MtmGetCurrentTransactionId()));
+			strncpy(gid, pq_getmsgstring(in), sizeof gid);
+
+			MtmBeginSession(origin_node);
+
+			/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
+			BeginTransactionBlock(false);
+			CommitTransactionCommand();
+			StartTransactionCommand();
+
+			/* PREPARE itself */
+			res = PrepareTransactionBlock(gid);
+			CommitTransactionCommand();
+
+			/* XXX: we can move that to callbacks to keep apply clean */
+			MtmFollowerSendReply(gid, origin_node, res ? MSG_PREPARED : MSG_ABORTED);
+
+			MtmEndSession(origin_node, true);
+
+			// MTM_LOG2("%d: PGLOGICAL_PREPARE %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
+			// if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_IN_PROGRESS) == TRANSACTION_STATUS_ABORTED) { 
+			// 	MTM_LOG1("Avoid prepare of previously aborted global transaction %s", gid);	
+			// 	AbortCurrentTransaction();
+			// } else { 				
+			// 	/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
+			// 	BeginTransactionBlock();
+			// 	CommitTransactionCommand();
+			// 	StartTransactionCommand();
+				
+			// 	MtmBeginSession(origin_node);
+			// 	/* PREPARE itself */
+			// 	MtmSetCurrentTransactionGID(gid, origin_node);
+			// 	PrepareTransactionBlock(gid);
+			// 	CommitTransactionCommand();
+
+			// 	if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_UNKNOWN) == TRANSACTION_STATUS_ABORTED) { 
+			// 		MTM_LOG1("Perform delayed rollback of prepared global transaction %s", gid);	
+			// 		StartTransactionCommand();
+			// 		MtmSetCurrentTransactionGID(gid, origin_node);
+			// 		TXFINISH("%s ABORT, PGLOGICAL_PREPARE", gid);
+			// 		FinishPreparedTransaction(gid, false, false);
+			// 		CommitTransactionCommand();					
+			// 		Assert(!MtmTransIsActive());
+			// 	}	
+			// 	MtmEndSession(origin_node, true);
+			// }
 			break;
 		}
 		case PGLOGICAL_COMMIT_PREPARED:
@@ -867,7 +923,7 @@ process_remote_commit(StringInfo in)
 				MtmSetCurrentTransactionCSN(MtmAssignCSN());
 			else
 				MtmSetCurrentTransactionCSN(csn);
-			MtmSetCurrentTransactionGID(gid);
+			MtmSetCurrentTransactionGID(gid, origin_node);
 			TXFINISH("%s COMMIT, PGLOGICAL_COMMIT_PREPARED csn=%lld", gid, csn);
 			FinishPreparedTransaction(gid, true, false);
 			MTM_LOG2("Distributed transaction %s is committed", gid);

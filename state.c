@@ -550,6 +550,9 @@ MtmRefreshClusterStatus()
 		}
 	}
 
+	Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
+	return;
+
 	/*
 	 * Check for clique.
 	 */
@@ -890,4 +893,69 @@ MtmGetDisabledNodeMask()
 	disabledMask = Mtm->disabledNodeMask;
 	MtmUnlock();
 	return disabledMask;
+}
+
+
+#include "storage/latch.h"
+#include "postmaster/bgworker.h"
+#include "utils/guc.h"
+#include "pgstat.h"
+
+void MtmMonitor(Datum arg);
+
+static BackgroundWorker MtmMonitorWorker = {
+	"mtm-monitor",
+	"mtm",
+	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
+	BgWorkerStart_ConsistentState,
+	MULTIMASTER_BGW_RESTART_TIMEOUT,
+	"multimaster",
+	"MtmMonitor",
+	(Datum) 0,
+	"",
+	0
+};
+
+static int stop = 0;
+static void SetStop(int sig)
+{
+	stop = 1;
+}
+
+void MtmMonitorInitialize(void)
+{
+	MTM_ELOG(LOG, "Register background workers");
+	RegisterBackgroundWorker(&MtmMonitorWorker);
+}
+
+void MtmMonitor(Datum arg)
+{
+	pqsignal(SIGINT, SetStop);
+	pqsignal(SIGQUIT, SetStop);
+	pqsignal(SIGTERM, SetStop);
+	pqsignal(SIGHUP, PostgresSigHupHandler);
+	
+	MtmBackgroundWorker = true;
+
+	/* We're now ready to receive signals */
+	BackgroundWorkerUnblockSignals();
+
+	/* Connect to a database */
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
+
+	while (!stop) {
+		int rc = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH,
+							MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
+		if (rc & WL_POSTMASTER_DEATH) { 
+			break;
+		}
+
+		if (ConfigReloadPending)
+		{
+			ConfigReloadPending = false;
+			ProcessConfigFile(PGC_SIGHUP);
+		}
+
+		MtmRefreshClusterStatus();
+	}
 }

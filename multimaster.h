@@ -10,6 +10,8 @@
 #include "commands/vacuum.h"
 #include "libpq-fe.h"
 
+#include "dmq.h"
+
 #ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 0
 #endif
@@ -20,7 +22,10 @@
 #define MTM_ERRMSG(fmt,...)     errmsg(MTM_TAG fmt, ## __VA_ARGS__)
 
 #if DEBUG_LEVEL == 0
-#define MTM_LOG1(fmt, ...) elog(LOG, "[MTM] " fmt, ## __VA_ARGS__)
+#define MTM_LOG1(fmt, ...) ereport(LOG, \
+								(errmsg("[MTM] " fmt, ## __VA_ARGS__), \
+								errhidestmt(true), errhidecontext(true)))
+
 #define MTM_LOG2(fmt, ...)
 #define MTM_LOG3(fmt, ...)
 #define MTM_LOG4(fmt, ...)
@@ -244,6 +249,7 @@ typedef struct
 	int         lockGraphUsed;
 	uint64      nHeartbeats;
 	bool		manualRecovery;
+	DmqDestinationId	destination_id;
 	bool		slotDeleted;			/* Signalizes that node is already deleted our slot and
 										 * recovery from that node isn't possible.
 										 */
@@ -360,6 +366,23 @@ typedef struct MtmSeqPosition
 	int64 next;
 } MtmSeqPosition;
 
+typedef struct {
+	TransactionId xid;	  /* local transaction ID	*/
+	GlobalTransactionId gtid; /* global transaction ID assigned by coordinator of transaction */
+	bool  isTwoPhase;	  /* user level 2PC */
+	bool  isReplicated;	  /* transaction on replica */
+	bool  isDistributed;  /* transaction performed INSERT/UPDATE/DELETE and has to be replicated to other nodes */
+	bool  isPrepared;	  /* transaction is prepared at first stage of 2PC */
+	bool  isSuspended;	  /* prepared transaction is suspended because coordinator node is switch to offline */
+	bool  isTransactionBlock; /* is transaction block */
+	bool  containsDML;	  /* transaction contains DML statements */
+	bool  isActive;		  /* transaction is active (nActiveTransaction counter is incremented) */
+	XidStatus status;	  /* transaction status */
+	csn_t snapshot;		  /* transaction snapshot */
+	csn_t csn;			  /* CSN */
+	pgid_t gid;			  /* global transaction identifier (used by 2pc) */
+} MtmCurrentTrans;
+
 #define MtmIsCoordinator(ts) (ts->gtid.node == MtmNodeId)
 
 extern char const* const MtmNodeStatusMnem[];
@@ -399,8 +422,14 @@ extern bool  MtmEnforceLocalTx;
 extern bool MtmIsRecoverySession;
 extern int MtmWorkers;
 
+extern MtmCurrentTrans MtmTx;
 
-extern void  MtmArbiterInitialize(void);
+extern void  MtmXactCallback2(XactEvent event, void *arg);
+extern void  MtmMonitorInitialize(void);
+extern bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
+extern bool MtmIsUserTransaction(void);
+extern void MtmGenerateGid(char* gid);
+
 extern void  MtmStartReceivers(void);
 extern void  MtmStartReceiver(int nodeId, bool dynamic);
 extern csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_t* participantsMask);
