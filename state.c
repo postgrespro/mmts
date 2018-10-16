@@ -6,6 +6,8 @@
 #include "utils/snapmgr.h"
 #include "nodes/makefuncs.h"
 #include "catalog/namespace.h"
+#include "tcop/tcopprot.h"
+#include "storage/ipc.h"
 
 char const* const MtmNeighborEventMnem[] =
 {
@@ -96,7 +98,8 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 			 * We booted after being with refereeGrant,
 			 * but now have ordinary majority.
 			 */
-			MtmPollStatusOfPreparedTransactions(true);
+			// MtmPollStatusOfPreparedTransactions(true);
+			ResolveAllTransactions();
 			Mtm->refereeWinnerId = saved_winner_node_id;
 		}
 	}
@@ -310,7 +313,7 @@ MtmStateProcessEvent(MtmEvent ev)
 			break;
 
 		case MTM_ARBITER_RECEIVER_START:
-			MtmOnNodeConnect(MtmNodeId);
+			// MtmOnNodeConnect(MtmNodeId);
 			break;
 
 		case MTM_RECOVERY_START1:
@@ -365,7 +368,9 @@ void MtmDisableNode(int nodeId)
 	if (Mtm->status == MTM_ONLINE) {
 		/* Make decision about prepared transaction status only in quorum */
 		MtmLock(LW_EXCLUSIVE);
-		MtmPollStatusOfPreparedTransactionsForDisabledNode(nodeId, false);
+		// MtmPollStatusOfPreparedTransactionsForDisabledNode(nodeId, false);
+		ResolveTransactionsForNode(nodeId);
+
 		MtmUnlock();
 	}
 }
@@ -396,8 +401,12 @@ void MtmEnableNode(int nodeId)
  *
  */
 
-void MtmOnNodeDisconnect(int nodeId)
+void MtmOnNodeDisconnect(char *node_name)
 {
+	int nodeId;
+
+	sscanf(node_name, "node%d", &nodeId);
+
 	if (BIT_CHECK(SELF_CONNECTIVITY_MASK, nodeId-1))
 		return;
 
@@ -418,8 +427,12 @@ void MtmOnNodeDisconnect(int nodeId)
 }
 
 // XXXX: make that event too
-void MtmOnNodeConnect(int nodeId)
+void MtmOnNodeConnect(char *node_name)
 {
+	int nodeId;
+
+	sscanf(node_name, "node%d", &nodeId);
+
 	// if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, nodeId-1))
 	// 	return;
 
@@ -485,7 +498,7 @@ MtmRefreshClusterStatus()
 	 * See comment to MTM_RECOVERED -> MTM_ONLINE transition in MtmCheckState()
 	 */
 	MtmLock(LW_EXCLUSIVE);
-	MtmCheckState(DEBUG1);
+	MtmCheckState(LOG);
 	MtmUnlock();
 
 	/*
@@ -522,7 +535,8 @@ MtmRefreshClusterStatus()
 					Mtm->refereeGrant = true;
 					if (countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes) == 1)
 					{
-						MtmPollStatusOfPreparedTransactions(true);
+						// MtmPollStatusOfPreparedTransactions(true);
+						ResolveAllTransactions();
 					}
 					MtmEnableNode(MtmNodeId);
 					MtmCheckState(LOG);
@@ -550,8 +564,8 @@ MtmRefreshClusterStatus()
 		}
 	}
 
-	Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
-	return;
+	// Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
+	// return;
 
 	/*
 	 * Check for clique.
@@ -895,6 +909,12 @@ MtmGetDisabledNodeMask()
 	return disabledMask;
 }
 
+/*****************************************************************************
+ *
+ * Mtm monitor
+ *
+ *****************************************************************************/
+
 
 #include "storage/latch.h"
 #include "postmaster/bgworker.h"
@@ -916,23 +936,71 @@ static BackgroundWorker MtmMonitorWorker = {
 	0
 };
 
-static int stop = 0;
-static void SetStop(int sig)
-{
-	stop = 1;
-}
+static int		sender_to_node[MTM_MAX_NODES];
 
-void MtmMonitorInitialize(void)
+void
+MtmMonitorInitialize(void)
 {
 	MTM_ELOG(LOG, "Register background workers");
 	RegisterBackgroundWorker(&MtmMonitorWorker);
 }
 
-void MtmMonitor(Datum arg)
+static void
+check_status_requests(void)
 {
-	pqsignal(SIGINT, SetStop);
-	pqsignal(SIGQUIT, SetStop);
-	pqsignal(SIGTERM, SetStop);
+	DmqSenderId sender_id;
+	StringInfoData buffer;
+
+	while(dmq_pop_nb(&sender_id, &buffer))
+	{
+		int sender_node_id;
+		MtmArbiterMessage *msg;
+		DmqDestinationId dest_id;
+		char *state_3pc;
+
+		sender_node_id = sender_to_node[sender_id];
+		msg = (MtmArbiterMessage *) buffer.data;
+
+		Assert(msg->node == sender_node_id);
+		Assert(msg->code == MSG_POLL_REQUEST);
+
+		state_3pc = GetLoggedPreparedXactState(msg->gid);
+
+		// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
+		if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxNotFound;
+		else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxPrepared;
+		else if (strncmp(state_3pc, "precommitted", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxPreCommited;
+		else if (strncmp(state_3pc, "preaborted", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxPreAborted;
+		else if (strncmp(state_3pc, "committed", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxCommited;
+		else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
+			msg->state = MtmTxAborted;
+		else
+			Assert(false);
+
+		pfree(state_3pc);
+
+		msg->code = MSG_POLL_STATUS;
+		msg->node = MtmNodeId;
+
+		dest_id = Mtm->nodes[sender_node_id - 1].destination_id;
+
+		// XXX: and define channels as strings too
+		dmq_push_buffer(dest_id, "txresp", &msg,
+						sizeof(MtmArbiterMessage));
+	}
+}
+
+void
+MtmMonitor(Datum arg)
+{
+	int i, sender_id = 0;
+
+	pqsignal(SIGTERM, die);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 	
 	MtmBackgroundWorker = true;
@@ -943,12 +1011,23 @@ void MtmMonitor(Datum arg)
 	/* Connect to a database */
 	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
-	while (!stop) {
-		int rc = WaitLatch(&MyProc->procLatch, WL_TIMEOUT | WL_POSTMASTER_DEATH,
-							MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
-		if (rc & WL_POSTMASTER_DEATH) { 
-			break;
+
+	// XXX: turn this into a function
+	/* subscribe to status-requests channels from other nodes */
+	for (i = 0; i < Mtm->nAllNodes; i++)
+	{
+		if (i + 1 != MtmNodeId)
+		{
+			dmq_stream_subscribe(psprintf("node%d", i + 1), "txresp");
+			sender_to_node[sender_id++] = i + 1;
 		}
+	}
+
+	for (;;)
+	{
+		int rc;
+
+		CHECK_FOR_INTERRUPTS();
 
 		if (ConfigReloadPending)
 		{
@@ -956,6 +1035,20 @@ void MtmMonitor(Datum arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		MtmRefreshClusterStatus();
+		// MtmRefreshClusterStatus();
+
+		check_status_requests();
+
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
+
+		/* Emergency bailout if postmaster has died */
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
+
+		if (rc & WL_LATCH_SET)
+			ResetLatch(MyLatch);
+
 	}
 }

@@ -11,8 +11,8 @@ n_nodes=3
 ulimit -c unlimited
 pkill -9 postgres
 
-cd $BASEDIR
-make install
+# cd $BASEDIR
+# make install
 
 cd $BASEDIR/contrib/mmts
 make clean && make install

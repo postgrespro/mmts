@@ -79,6 +79,7 @@
 #define MULTIMASTER_BROADCAST_SERVICE    "mtm_broadcast"
 #define MULTIMASTER_ADMIN                "mtm_admin"
 #define MULTIMASTER_PRECOMMITTED         "precommitted"
+#define MULTIMASTER_PREABORTED           "preaborted"
 
 #define MULTIMASTER_DEFAULT_ARBITER_PORT 5433
 
@@ -107,8 +108,27 @@ typedef ulong64 lsn_t;
 
 typedef char pgid_t[GIDSIZE];
 
+// XXX! need rename: that's actually a disconnectivity mask
 #define SELF_CONNECTIVITY_MASK  (Mtm->nodes[MtmNodeId-1].connectivityMask)
 #define EFFECTIVE_CONNECTIVITY_MASK  ( SELF_CONNECTIVITY_MASK | Mtm->stoppedNodeMask | ~Mtm->clique )
+
+#define MTM_MAX_NODES 16
+
+typedef enum
+{
+	MtmTxUnknown		= (0<<0),
+	MtmTxNotFound		= (0<<1),
+	MtmTxInProgress		= (0<<2),
+	MtmTxPrepared		= (0<<3),
+	MtmTxPreCommited	= (0<<4),
+	MtmTxPreAborted		= (0<<5),
+	MtmTxCommited		= (0<<6),
+	MtmTxAborted		= (0<<7)
+} MtmTxState;
+
+
+
+typedef int MtmTxStateMask;
 
 typedef enum
 {
@@ -164,6 +184,7 @@ typedef enum
 typedef struct
 {
 	MtmMessageCode code;   /* Message code: MSG_PREPARE, MSG_PRECOMMIT, MSG_COMMIT, MSG_ABORT,... */
+	MtmTxState     state;
     int            node;   /* Sender node ID */
 	bool           lockReq;/* Whether sender node needs to lock cluster to let wal-sender caught-up and complete recovery */
 	bool           locked; /* Whether sender node is locked */
@@ -387,6 +408,7 @@ typedef struct {
 
 extern char const* const MtmNodeStatusMnem[];
 extern char const* const MtmTxnStatusMnem[];
+extern char const* const MtmTxStateMnem[];
 extern char const* const MtmMessageKindMnem[];
 
 extern MtmState* Mtm;
@@ -429,6 +451,12 @@ extern void  MtmMonitorInitialize(void);
 extern bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 extern bool MtmIsUserTransaction(void);
 extern void MtmGenerateGid(char* gid);
+extern int  MtmGidParseNodeId(const char* gid);
+
+extern void ResolverMain(void);
+extern void ResolverInit(void);
+extern void ResolveTransactionsForNode(int node_id);
+extern void ResolveAllTransactions(void);
 
 extern void  MtmStartReceivers(void);
 extern void  MtmStartReceiver(int nodeId, bool dynamic);

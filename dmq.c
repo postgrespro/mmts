@@ -39,7 +39,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/dynahash.h"
 
-#define DMQ_MQ_SIZE ((Size)1024)
+#define DMQ_MQ_SIZE  ((Size) 65536)
 #define DMQ_MQ_MAGIC 0x646d71
 
 /*
@@ -110,7 +110,8 @@ static DmqBackendState dmq_local;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
-dmq_receiver_start_hook_type dmq_receiver_start_hook;
+dmq_receiver_hook_type dmq_receiver_start_hook;
+dmq_receiver_hook_type dmq_receiver_stop_hook;
 
 void dmq_sender_main(Datum main_arg);
 
@@ -231,11 +232,11 @@ dmq_init(void)
 	worker.bgw_main_arg = 0;
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "dmq_sender_main");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "dmq_sender");
-	snprintf(worker.bgw_type, BGW_MAXLEN, "dmq_sender");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-dmq-sender");
+	snprintf(worker.bgw_type, BGW_MAXLEN, "mtm-dmq-sender");
 	RegisterBackgroundWorker(&worker);
 
-	/* Register shmem hook for all backends */
+	/* Register shmem hooks */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = dmq_shmem_startup_hook;
 
@@ -838,12 +839,15 @@ _pq_getbyte_if_available(unsigned char *c)
 static void
 dmq_receiver_at_exit(int status, Datum sender)
 {
-	int sender_id = DatumGetInt32(sender);
+	int		sender_id = DatumGetInt32(sender);
+	char	sender_name[DMQ_NAME_MAXLEN];
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	dmq_state->receiver[DatumGetInt32(sender_id)][0] = '\0';
+	strncmp(sender_name, dmq_state->receiver[sender_id], DMQ_NAME_MAXLEN);
+	dmq_state->receiver[sender_id][0] = '\0';
 	LWLockRelease(dmq_state->lock);
 
+	dmq_receiver_stop_hook(sender_name);
 }
 
 
@@ -1162,6 +1166,36 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg)
 	}
 }
 
+bool
+dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg)
+{
+	shm_mq_result res;
+	int i;
+
+	for (i = 0; i < dmq_local.n_inhandles; i++)
+	{
+		Size	len;
+		void   *data;
+
+		res = shm_mq_receive(dmq_local.mq_inh[i], &len, &data, true);
+		if (res == SHM_MQ_SUCCESS)
+		{
+			msg->data = data;
+			msg->len = len;
+			msg->maxlen = len;
+			msg->cursor = 0;
+			*sender_id = i;
+			// elog(LOG, "pop message %s, from %d", (char *) *dataptr, i);
+			return true;
+		}
+		else if (res == SHM_MQ_DETACHED)
+		{
+			elog(ERROR, "dmq_pop: queue detached");
+		}
+	}
+
+	return false;
+}
 
 DmqDestinationId
 dmq_destination_add(char *connstr, char *sender_name, int ping_period)

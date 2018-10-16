@@ -26,8 +26,8 @@ extern void MtmStateProcessEvent(MtmEvent ev);
 extern void MtmDisableNode(int nodeId);
 extern void MtmEnableNode(int nodeId);
 
-extern void MtmOnNodeDisconnect(int nodeId);
-extern void MtmOnNodeConnect(int nodeId);
+extern void MtmOnNodeDisconnect(char *node_name);
+extern void MtmOnNodeConnect(char *node_name);
 extern void MtmReconnectNode(int nodeId);
 
 extern void MtmRefreshClusterStatus(void);

@@ -161,7 +161,7 @@ static bool MtmRunUtilityStmt(PGconn* conn, char const* sql, char **errmsg);
 static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int forceOnNode);
 static void MtmProcessDDLCommand(char const* queryString, bool transactional);
 
-static int  MtmGidParseNodeId(const char* gid);
+// static int  MtmGidParseNodeId(const char* gid);
 
 // static void MtmLockCluster(void);
 // static void MtmUnlockCluster(void);
@@ -212,6 +212,18 @@ char const* const MtmTxnStatusMnem[] =
 	"Committed",
 	"Aborted",
 	"Unknown"
+};
+
+char const* const MtmTxStateMnem[] =
+{
+	"MtmTxUnknown",
+	"MtmTxNotFound",
+	"MtmTxInProgress",
+	"MtmTxPrepared",
+	"MtmTxPreCommited",
+	"MtmTxPreAborted",
+	"MtmTxCommited",
+	"MtmTxAborted"
 };
 
 bool  MtmDoReplication;
@@ -1013,7 +1025,7 @@ bool MtmWatchdog(timestamp_t now)
 			{
 				MTM_LOG1("[STATE] Node %i: Disconnect due to heartbeat timeout (%d msec)",
 					 i+1, (int)USEC_TO_MSEC(now - Mtm->nodes[i].lastHeartbeat));
-				MtmOnNodeDisconnect(i+1);
+				// MtmOnNodeDisconnect(i+1);
 				allAlive = false;
 			}
 		}
@@ -2400,7 +2412,7 @@ static void MtmInitialize()
 		Mtm->nLiveNodes = 0; //MtmNodes;
 		Mtm->nAllNodes = MtmNodes;
 		Mtm->disabledNodeMask =  (((nodemask_t)1 << MtmNodes) - 1);
-		Mtm->clique = 0;
+		Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1); //0;
 		Mtm->refereeGrant = false;
 		Mtm->refereeWinnerId = 0;
 		Mtm->stalledNodeMask = 0;
@@ -2800,14 +2812,6 @@ static bool ConfigIsSane(void)
 	}
 
 	return ok;
-}
-
-static void
-MtmDmqStartup(char *sender)
-{
-	int node_id;
-	sscanf(sender, "node%d", &node_id);
-	MtmOnNodeConnect(node_id);
 }
 
 void
@@ -3273,7 +3277,10 @@ _PG_init(void)
 	MtmMonitorInitialize();
 
 	dmq_init();
-	dmq_receiver_start_hook = MtmDmqStartup;
+	dmq_receiver_start_hook = MtmOnNodeConnect;
+	dmq_receiver_stop_hook = MtmOnNodeDisconnect;
+
+	ResolverInit();
 
 	/*
 	 * Install hooks.
@@ -3422,7 +3429,8 @@ MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shut
 		{
 			/* Lock on us */
 			Mtm->recoverySlot = nodeId;
-			MtmPollStatusOfPreparedTransactions(false);
+			// MtmPollStatusOfPreparedTransactions(false);
+			ResolveAllTransactions();
 			MtmUnlock();
 			return REPLMODE_RECOVERY;
 		}
@@ -4651,7 +4659,7 @@ MtmGenerateGid(char* gid)
 	// MTM_LOG1("MtmGenerateGid: %s", gid);
 }
 
-static int
+int
 MtmGidParseNodeId(const char* gid)
 {
 	int MtmNodeId;

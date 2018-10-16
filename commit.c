@@ -7,7 +7,7 @@
 
 static Oid		MtmDatabaseId;
 static bool		DmqSubscribed;
-static int		sender_to_node[64];
+static int		sender_to_node[MTM_MAX_NODES];
 
 MtmCurrentTrans MtmTx;
 
@@ -97,17 +97,16 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	if (!DmqSubscribed)
 	{
-		int i, j;
+		int i, sender_id = 0;
 
-		for (j = 0, i = 0; i < Mtm->nAllNodes; i++)
+		for (i = 0; i < Mtm->nAllNodes; i++)
 		{
-			if (i + 1 == MtmNodeId)
-				continue;
-
-			dmq_stream_subscribe(psprintf("node%d", i + 1),
+			if (i + 1 != MtmNodeId)
+			{
+				dmq_stream_subscribe(psprintf("node%d", i + 1),
 								psprintf("be%d", MyProc->pgprocno));
-
-			sender_to_node[j++] = i + 1;
+				sender_to_node[sender_id++] = i + 1;
+			}
 		}
 		DmqSubscribed = true;
 	}
