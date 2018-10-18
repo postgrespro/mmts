@@ -42,6 +42,9 @@
 #define DMQ_MQ_SIZE  ((Size) 65536)
 #define DMQ_MQ_MAGIC 0x646d71
 
+// XXX: move to common
+#define BIT_CHECK(mask, bit) (((mask) & ((int64)1 << (bit))) != 0)
+
 /*
  * Shared data structures to hold current connections topology.
  * All that stuff can be moved to persistent tables to avoid hardcoded
@@ -76,6 +79,7 @@ typedef struct {
 typedef struct
 {
 	char	stream_name[DMQ_NAME_MAXLEN];
+	int		mask_pos;
 	int		procno;
 } DmqStreamSubscription;
 
@@ -88,6 +92,7 @@ typedef struct DmqSharedState
 	HTAB		   *subscriptions;
 	char			receiver[DMQ_MAX_RECEIVERS][DMQ_NAME_MAXLEN];
 	dsm_handle		receiver_dsm[DMQ_MAX_RECEIVERS];
+	int				receiver_procno[DMQ_MAX_RECEIVERS];
 	int				nreceivers;
 
 	pid_t			sender_pid;
@@ -99,8 +104,10 @@ static DmqSharedState *dmq_state;
 typedef struct DmqBackendState
 {
 	shm_mq_handle *mq_outh;
-	shm_mq_handle *mq_inh[DMQ_MAX_DESTINATIONS];
+	shm_mq_handle *mq_inh[DMQ_MAX_RECEIVERS];
 	int				n_inhandles;
+	char			receiver_names[DMQ_MAX_RECEIVERS][DMQ_NAME_MAXLEN];
+	int				mask_pos[DMQ_MAX_RECEIVERS];
 } DmqBackendState;
 
 /* Flags set by signal handlers */
@@ -529,8 +536,8 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Idle;
 						DeleteWaitEvent(set, event.pos);
-						elog(LOG, "[DMQ] [B1] failed to connect: %s",
-							 PQerrorMessage(conns[conn_id].pgconn));
+						// elog(LOG, "[DMQ] [B1] failed to connect: %s",
+						// 	 PQerrorMessage(conns[conn_id].pgconn));
 					}
 					else
 						Assert(status == PGRES_POLLING_WRITING);
@@ -644,14 +651,6 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 			"dmq_receiver_loop: subscription %s is not found (body = %s)",
 			stream_name, body);
 		return;
-	}
-
-	/* select queue and reconnect it if needed */
-	mq = shm_mq_get_queue(mq_handles[sub->procno]);
-	if (shm_mq_get_sender(mq) == NULL)
-	{
-		shm_mq_set_sender(mq, MyProc);
-		mq_handles[sub->procno] = shm_mq_attach(mq, seg, NULL);
 	}
 
 	elog(LOG, "got message %s.%s, passing to %d", stream_name, body, sub->procno);
@@ -843,11 +842,12 @@ dmq_receiver_at_exit(int status, Datum sender)
 	char	sender_name[DMQ_NAME_MAXLEN];
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	strncmp(sender_name, dmq_state->receiver[sender_id], DMQ_NAME_MAXLEN);
+	strncpy(sender_name, dmq_state->receiver[sender_id], DMQ_NAME_MAXLEN);
 	dmq_state->receiver[sender_id][0] = '\0';
 	LWLockRelease(dmq_state->lock);
 
-	dmq_receiver_stop_hook(sender_name);
+	if (dmq_receiver_stop_hook)
+		dmq_receiver_stop_hook(sender_name);
 }
 
 
@@ -897,6 +897,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	dmq_state->receiver_dsm[receiver_id] = dsm_segment_handle(seg);
 	strncpy(dmq_state->receiver[receiver_id], sender_name, DMQ_NAME_MAXLEN);
 	dmq_state->nreceivers++;
+	dmq_state->receiver_procno[receiver_id] = MyProc->pgprocno;
 	LWLockRelease(dmq_state->lock);
 
 	on_shmem_exit(dmq_receiver_at_exit, Int32GetDatum(receiver_id));
@@ -1052,53 +1053,34 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 	resetStringInfo(&buf);
 }
 
-void
-dmq_stream_subscribe(char *sender_name, char *stream_name)
+static bool
+dmq_reattach_shm_mq(int handle_id)
 {
-	bool found;
-	DmqStreamSubscription *sub;
-	int receiver_id = -1;
-
 	dsm_segment	   *seg;
 	shm_toc		   *toc;
 	shm_mq		   *inq;
 	MemoryContext oldctx;
 
-	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	sub = (DmqStreamSubscription *) hash_search(dmq_state->subscriptions, stream_name,
-												HASH_ENTER, &found);
-	if (found && sub->procno != MyProc->pgprocno)
-	{
-		elog(ERROR, "procno%d: %s: subscription is already active for procno %d / %s",
-				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
-	}
-	else
-		sub->procno = MyProc->pgprocno;
-	LWLockRelease(dmq_state->lock);
+	int receiver_id = -1;
+	int receiver_procno;
+	int i;
 
 	/* await for sender to connect */
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
-	for (;;)
+	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		int i;
-
-		for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+		// XXX: change to hash
+		if (strcmp(dmq_state->receiver[i], dmq_local.receiver_names[handle_id]) == 0)
 		{
-			if (strcmp(dmq_state->receiver[i], sender_name) == 0)
-			{
-				receiver_id = i;
-				break;
-			}
-		}
-
-		if (receiver_id >= 0)
+			receiver_id = i;
+			receiver_procno = dmq_state->receiver_procno[i];
 			break;
-
-		LWLockRelease(dmq_state->lock);
-		pg_usleep(100000L);
-		CHECK_FOR_INTERRUPTS();
-		LWLockAcquire(dmq_state->lock, LW_SHARED);
+		}
 	}
+	LWLockRelease(dmq_state->lock);
+
+	if (receiver_id < 0)
+		return false;
 
 	Assert(dmq_state->receiver_dsm[receiver_id] != DSM_HANDLE_INVALID);
 
@@ -1108,8 +1090,6 @@ dmq_stream_subscribe(char *sender_name, char *stream_name)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("unable to map dynamic shared memory segment")));
 
-	LWLockRelease(dmq_state->lock);
-
 	dsm_pin_mapping(seg);
 
 	toc = shm_toc_attach(DMQ_MQ_MAGIC, dsm_segment_address(seg));
@@ -1118,29 +1098,73 @@ dmq_stream_subscribe(char *sender_name, char *stream_name)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("bad magic number in dynamic shared memory segment")));
 
+	if (dmq_local.mq_inh[handle_id])
+	{
+		shm_mq_detach(dmq_local.mq_inh[handle_id]);
+	}
+
 	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
-	// xxx memleak
+
+	/* re-create */
 	inq = shm_mq_create(inq, DMQ_MQ_SIZE);
 	shm_mq_set_receiver(inq, MyProc);
+	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]);
 
 	oldctx = MemoryContextSwitchTo(TopMemoryContext);
-	dmq_local.mq_inh[dmq_local.n_inhandles++] = shm_mq_attach(inq, seg, NULL);
+	dmq_local.mq_inh[handle_id] = shm_mq_attach(inq, seg, NULL);
 	MemoryContextSwitchTo(oldctx);
+
+	return true;
+}
+
+
+void
+dmq_stream_subscribe(char *sender_name, char *stream_name, int mask_pos)
+{
+	bool found;
+	DmqStreamSubscription *sub;
+
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	sub = (DmqStreamSubscription *) hash_search(dmq_state->subscriptions, stream_name,
+												HASH_ENTER, &found);
+	if (found && sub->procno != MyProc->pgprocno)
+	{
+		elog(ERROR, "procno%d: %s: subscription is already active for procno %d / %s",
+				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
+	}
+	sub->procno = MyProc->pgprocno;
+	sub->mask_pos = mask_pos;
+	LWLockRelease(dmq_state->lock);
+
+	dmq_local.mq_inh[dmq_local.n_inhandles] = NULL;
+	strncpy(dmq_local.receiver_names[dmq_local.n_inhandles], sender_name,
+			DMQ_NAME_MAXLEN);
+	dmq_local.mask_pos[dmq_local.n_inhandles] = mask_pos;
+
+	dmq_reattach_shm_mq(dmq_local.n_inhandles);
+
+	dmq_local.n_inhandles++;
 }
 
 void
-dmq_pop(DmqSenderId *sender_id, StringInfo msg)
+dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
 {
 	shm_mq_result res;
 
 	for (;;)
 	{
 		int i;
+		bool nowait = false;
+
+		CHECK_FOR_INTERRUPTS();
 
 		for (i = 0; i < dmq_local.n_inhandles; i++)
 		{
 			Size	len;
 			void   *data;
+
+			if (!BIT_CHECK(mask, dmq_local.mask_pos[i]))
+				continue;
 
 			res = shm_mq_receive(dmq_local.mq_inh[i], &len, &data, true);
 			if (res == SHM_MQ_SUCCESS)
@@ -1155,14 +1179,19 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg)
 			}
 			else if (res == SHM_MQ_DETACHED)
 			{
-				elog(ERROR, "dmq_pop: queue detached");
+				if (dmq_reattach_shm_mq(i))
+					nowait = true;
+				else
+					elog(ERROR, "dmq_pop: queue detached");
 			}
 		}
+
+		if (nowait)
+			continue;
 
 		// XXX cache that
 		WaitLatch(MyLatch, WL_LATCH_SET, 10, WAIT_EVENT_MQ_RECEIVE);
 		ResetLatch(MyLatch);
-		CHECK_FOR_INTERRUPTS();
 	}
 }
 

@@ -844,7 +844,7 @@ process_remote_commit(StringInfo in)
 		{
 			MTM_LOG1("%d: PGLOGICAL_COMMIT %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			if (IsTransactionState()) {
-				Assert(TransactionIdIsValid(MtmGetCurrentTransactionId()));
+				// Assert(TransactionIdIsValid(MtmGetCurrentTransactionId()));
 				MtmBeginSession(origin_node);
 				CommitTransactionCommand();
 				MtmEndSession(origin_node, true);

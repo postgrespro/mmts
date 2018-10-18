@@ -400,7 +400,7 @@ ResolverMain(void)
 	{
 		if (i + 1 != MtmNodeId)
 		{
-			dmq_stream_subscribe(psprintf("node%d", i + 1), "txresp");
+			dmq_stream_subscribe(psprintf("node%d", i + 1), "txresp", i);
 			sender_to_node[sender_id++] = i + 1;
 		}
 	}

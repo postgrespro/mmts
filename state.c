@@ -498,8 +498,10 @@ MtmRefreshClusterStatus()
 	 * See comment to MTM_RECOVERED -> MTM_ONLINE transition in MtmCheckState()
 	 */
 	MtmLock(LW_EXCLUSIVE);
-	MtmCheckState(LOG);
+	MtmCheckState(DEBUG1);
 	MtmUnlock();
+
+	return;
 
 	/*
 	 * Check for referee decision when only half of nodes are visible.
@@ -1018,7 +1020,7 @@ MtmMonitor(Datum arg)
 	{
 		if (i + 1 != MtmNodeId)
 		{
-			dmq_stream_subscribe(psprintf("node%d", i + 1), "txresp");
+			dmq_stream_subscribe(psprintf("node%d", i + 1), "txreq", i);
 			sender_to_node[sender_id++] = i + 1;
 		}
 	}
@@ -1035,7 +1037,7 @@ MtmMonitor(Datum arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		// MtmRefreshClusterStatus();
+		MtmRefreshClusterStatus();
 
 		check_status_requests();
 

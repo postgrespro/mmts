@@ -104,7 +104,8 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 			if (i + 1 != MtmNodeId)
 			{
 				dmq_stream_subscribe(psprintf("node%d", i + 1),
-								psprintf("be%d", MyProc->pgprocno));
+								psprintf("be%d", MyProc->pgprocno),
+								i);
 				sender_to_node[sender_id++] = i + 1;
 			}
 		}
@@ -162,7 +163,7 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 		StringInfoData buffer;
 		MtmArbiterMessage *msg;
 
-		dmq_pop(&sender_id, &buffer);
+		dmq_pop(&sender_id, &buffer, participantsMask);
 		msg = (MtmArbiterMessage *) buffer.data;
 
 		// elog(LOG, "GatherPrepares: got %s from node%d", msg->gid, sender_to_node[sender_id]);
@@ -199,7 +200,7 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask)
 		StringInfoData buffer;
 		MtmArbiterMessage *msg;
 
-		dmq_pop(&sender_id, &buffer);
+		dmq_pop(&sender_id, &buffer, participantsMask);
 		msg = (MtmArbiterMessage *) buffer.data;
 
 		elog(LOG, "GatherPrecommits: got %s from node%d", msg->gid, sender_to_node[sender_id]);
