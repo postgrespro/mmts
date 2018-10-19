@@ -450,13 +450,19 @@ extern void  MtmXactCallback2(XactEvent event, void *arg);
 extern void  MtmMonitorInitialize(void);
 extern bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 extern bool MtmIsUserTransaction(void);
-extern void MtmGenerateGid(char* gid);
+extern void MtmGenerateGid(char *gid, TransactionId xid);
 extern int  MtmGidParseNodeId(const char* gid);
+extern TransactionId MtmGidParseXid(const char* gid);
 
 extern void ResolverMain(void);
 extern void ResolverInit(void);
 extern void ResolveTransactionsForNode(int node_id);
 extern void ResolveAllTransactions(void);
+
+extern void MtmFollowerHandleAbort(void);
+
+extern void MtmDeadlockDetectorRemoveXact(TransactionId xid);
+extern void MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid);
 
 extern void  MtmStartReceivers(void);
 extern void  MtmStartReceiver(int nodeId, bool dynamic);

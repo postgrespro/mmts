@@ -51,7 +51,6 @@
  * size limits, but now it doesn't seems to be worth of troubles.
  */
 
-#define DMQ_NAME_MAXLEN 32
 #define DMQ_CONNSTR_MAX_LEN 150
 
 #define DMQ_MAX_SUBS_PER_BACKEND 10
@@ -83,37 +82,41 @@ typedef struct
 	int		procno;
 } DmqStreamSubscription;
 
-typedef struct DmqSharedState
+
+/* Global state for dmq */
+struct DmqSharedState
 {
 	LWLock		   *lock;
 	dsm_handle	    out_dsm;
 	DmqDestination  destinations[DMQ_MAX_DESTINATIONS];
 
 	HTAB		   *subscriptions;
+
+	// XXX: change to nested struct
 	char			receiver[DMQ_MAX_RECEIVERS][DMQ_NAME_MAXLEN];
 	dsm_handle		receiver_dsm[DMQ_MAX_RECEIVERS];
 	int				receiver_procno[DMQ_MAX_RECEIVERS];
 	int				nreceivers;
 
 	pid_t			sender_pid;
-} DmqSharedState;
+} *dmq_state;
 
-static DmqSharedState *dmq_state;
 
 /* Backend-local i/o queues. */
-typedef struct DmqBackendState
+struct
 {
-	shm_mq_handle *mq_outh;
-	shm_mq_handle *mq_inh[DMQ_MAX_RECEIVERS];
+	shm_mq_handle  *mq_outh;
 	int				n_inhandles;
-	char			receiver_names[DMQ_MAX_RECEIVERS][DMQ_NAME_MAXLEN];
-	int				mask_pos[DMQ_MAX_RECEIVERS];
-} DmqBackendState;
+	struct
+	{
+		shm_mq_handle   *mqh;
+		char			name[DMQ_NAME_MAXLEN];
+		int				mask_pos;
+	} inhandles[DMQ_MAX_RECEIVERS];
+} dmq_local;
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;
-
-static DmqBackendState dmq_local;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
@@ -177,7 +180,7 @@ dmq_shmem_startup_hook(void)
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	dmq_state = ShmemInitStruct("dmq",
-								sizeof(DmqSharedState),
+								sizeof(struct DmqSharedState),
 								&found);
 	if (!found)
 	{
@@ -211,7 +214,7 @@ dmq_shmem_size(void)
 {
 	Size	size = 0;
 
-	size = add_size(size, sizeof(DmqSharedState));
+	size = add_size(size, sizeof(struct DmqSharedState));
 	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
 											 sizeof(DmqStreamSubscription)));
 	return MAXALIGN(size);
@@ -612,7 +615,6 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	bool		found;
 	DmqStreamSubscription *sub;
 	shm_mq_result res;
-	shm_mq	   *mq;
 
 	/*
 	 * Consume stream_name packed as a string and interpret rest of the data
@@ -653,7 +655,7 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 		return;
 	}
 
-	elog(LOG, "got message %s.%s, passing to %d", stream_name, body, sub->procno);
+	// elog(LOG, "got message %s.%s, passing to %d", stream_name, body, sub->procno);
 
 	/* and send it */
 	res = shm_mq_send(mq_handles[sub->procno], body_len, body, false);
@@ -1046,12 +1048,42 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 
 	// elog(LOG, "pushing l=%d '%.*s'", buf.len, buf.len, buf.data);
 
+	// XXX: use sendv instead
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
 		elog(ERROR, "dmq_push: can't send to queue");
 
 	resetStringInfo(&buf);
 }
+
+
+void
+dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload, size_t len)
+{
+	StringInfoData buf;
+	shm_mq_result res;
+
+	ensure_outq_handle();
+
+	initStringInfo(&buf);
+	pq_sendbyte(&buf, dest_id);
+	pq_send_ascii_string(&buf, stream_name);
+	pq_sendbytes(&buf, payload, len);
+
+	// elog(LOG, "pushing l=%d '%.*s'", buf.len, buf.len, buf.data);
+
+	// XXX: use sendv instead
+	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
+	if (res != SHM_MQ_SUCCESS)
+		elog(ERROR, "dmq_push: can't send to queue");
+}
+
+
+
+
+
+
+
 
 static bool
 dmq_reattach_shm_mq(int handle_id)
@@ -1065,12 +1097,11 @@ dmq_reattach_shm_mq(int handle_id)
 	int receiver_procno;
 	int i;
 
-	/* await for sender to connect */
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		// XXX: change to hash
-		if (strcmp(dmq_state->receiver[i], dmq_local.receiver_names[handle_id]) == 0)
+		// XXX: change to hash maybe
+		if (strcmp(dmq_state->receiver[i], dmq_local.inhandles[handle_id].name) == 0)
 		{
 			receiver_id = i;
 			receiver_procno = dmq_state->receiver_procno[i];
@@ -1098,9 +1129,9 @@ dmq_reattach_shm_mq(int handle_id)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("bad magic number in dynamic shared memory segment")));
 
-	if (dmq_local.mq_inh[handle_id])
+	if (dmq_local.inhandles[handle_id].mqh)
 	{
-		shm_mq_detach(dmq_local.mq_inh[handle_id]);
+		shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
 	}
 
 	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
@@ -1111,15 +1142,28 @@ dmq_reattach_shm_mq(int handle_id)
 	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]);
 
 	oldctx = MemoryContextSwitchTo(TopMemoryContext);
-	dmq_local.mq_inh[handle_id] = shm_mq_attach(inq, seg, NULL);
+	dmq_local.inhandles[handle_id].mqh = shm_mq_attach(inq, seg, NULL);
 	MemoryContextSwitchTo(oldctx);
 
 	return true;
 }
 
+void
+dmq_attach_receiver(char *sender_name, int mask_pos)
+{
+	int handle_id = dmq_local.n_inhandles;
+
+	dmq_local.inhandles[handle_id].mqh = NULL;
+	dmq_local.inhandles[handle_id].mask_pos = mask_pos;
+	strncpy(dmq_local.inhandles[handle_id].name, sender_name, DMQ_NAME_MAXLEN);
+
+	dmq_reattach_shm_mq(handle_id);
+
+	dmq_local.n_inhandles++;
+}
 
 void
-dmq_stream_subscribe(char *sender_name, char *stream_name, int mask_pos)
+dmq_stream_subscribe(char *stream_name)
 {
 	bool found;
 	DmqStreamSubscription *sub;
@@ -1133,17 +1177,19 @@ dmq_stream_subscribe(char *sender_name, char *stream_name, int mask_pos)
 				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
 	}
 	sub->procno = MyProc->pgprocno;
-	sub->mask_pos = mask_pos;
+	LWLockRelease(dmq_state->lock);
+}
+
+void
+dmq_stream_unsubscribe(char *stream_name)
+{
+	bool found;
+
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	hash_search(dmq_state->subscriptions, stream_name, HASH_REMOVE, &found);
 	LWLockRelease(dmq_state->lock);
 
-	dmq_local.mq_inh[dmq_local.n_inhandles] = NULL;
-	strncpy(dmq_local.receiver_names[dmq_local.n_inhandles], sender_name,
-			DMQ_NAME_MAXLEN);
-	dmq_local.mask_pos[dmq_local.n_inhandles] = mask_pos;
-
-	dmq_reattach_shm_mq(dmq_local.n_inhandles);
-
-	dmq_local.n_inhandles++;
+	Assert(found);
 }
 
 void
@@ -1163,10 +1209,10 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
 			Size	len;
 			void   *data;
 
-			if (!BIT_CHECK(mask, dmq_local.mask_pos[i]))
+			if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 				continue;
 
-			res = shm_mq_receive(dmq_local.mq_inh[i], &len, &data, true);
+			res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
 			if (res == SHM_MQ_SUCCESS)
 			{
 				msg->data = data;
@@ -1201,12 +1247,14 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg)
 	shm_mq_result res;
 	int i;
 
+	return false;
+
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
 		Size	len;
 		void   *data;
 
-		res = shm_mq_receive(dmq_local.mq_inh[i], &len, &data, true);
+		res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
 		if (res == SHM_MQ_SUCCESS)
 		{
 			msg->data = data;
@@ -1257,24 +1305,4 @@ dmq_destination_add(char *connstr, char *sender_name, int ping_period)
 		return dest_id;
 }
 
-
-void
-dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload, size_t len)
-{
-	StringInfoData buf;
-	shm_mq_result res;
-
-	ensure_outq_handle();
-
-	initStringInfo(&buf);
-	pq_sendbyte(&buf, dest_id);
-	pq_send_ascii_string(&buf, stream_name);
-	pq_sendbytes(&buf, payload, len);
-
-	// elog(LOG, "pushing l=%d '%.*s'", buf.len, buf.len, buf.data);
-
-	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
-	if (res != SHM_MQ_SUCCESS)
-		elog(ERROR, "dmq_push: can't send to queue");
-}
 

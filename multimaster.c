@@ -582,7 +582,7 @@ csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_
 		MtmTransState* ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
 		if (ts != NULL) {
 			*participantsMask = ts->participantsMask;
-			if (!ts->isLocal)
+			if (!ts->isLocal || ts->isTwoPhase)
 				snapshot = ts->snapshot;
 			// /* If node is disables, then we are in a process of recovery of this node */
 			// if (!ts->isLocal && BIT_CHECK(ts->participantsMask|Mtm->disabledNodeMask, nodeId-1)) {
@@ -897,7 +897,6 @@ MtmCreateTransState(MtmCurrentTrans* x)
 	strncpy(ts->gid, x->gid, GIDSIZE);
 	x->isActive = true;
 
-	Assert(ts->gid[0] == '\0' || MtmGidParseNodeId(ts->gid) == ts->gtid.node);
 	return ts;
 }
 
@@ -1344,7 +1343,6 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 		MTM_LOG3("Commit prepared transaction "XID_FMT" with gid='%s'", x->xid, x->gid);
 		ts = tm->state;
 
-		Assert(MtmIsCoordinator(ts));
 		if (!ts->isLocal) {
 			ts->votingCompleted = false;
 			ts->votedMask = 0;
@@ -1376,7 +1374,11 @@ MtmPreCommitPreparedTransaction(MtmCurrentTrans* x)
 						ts->gid, (long64)ts->xid, ts->nConfigChanges,	Mtm->nConfigChanges, ts->participantsMask);
 				}
 			}
-		} else {
+		}
+		else
+		{
+			ts->csn = 42;
+			ts->isTwoPhase = true;
 			ts->status = TRANSACTION_STATUS_UNKNOWN;
 		}
 
@@ -1552,6 +1554,8 @@ MtmEndTransaction(MtmCurrentTrans* x, bool commit)
  */
 void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
 {
+	memset(msg, '\0', sizeof(MtmArbiterMessage));
+
 	msg->code = code;
 	msg->disabledNodeMask = Mtm->disabledNodeMask;
 	msg->connectivityMask = SELF_CONNECTIVITY_MASK;
@@ -1671,6 +1675,11 @@ static void	MtmLoadPreparedTransactions(void)
 			ts->isTwoPhase = false;
 			ts->csn = 0; /* should be replaced with real CSN by poll result */
 			ts->gtid.node = MtmGidParseNodeId(gid);
+			if (ts->gtid.node < 0)
+			{
+				ts->isTwoPhase = true;
+				ts->gtid.node = MtmNodeId;
+			}
 			ts->gtid.xid = xid;
 			ts->nSubxids = 0;
 			ts->votingCompleted = true;
@@ -1755,13 +1764,13 @@ void MtmJoinTransaction(GlobalTransactionId* gtid, csn_t globalSnapshot, nodemas
 	// }
 }
 
-void  MtmSetCurrentTransactionGID(char const* gid)
+void  MtmSetCurrentTransactionGID(char const* gid, int node_id)
 {
 	MTM_LOG3("Set current transaction xid="XID_FMT" GID %s", MtmTx.xid, gid);
 	strncpy(MtmTx.gid, gid, GIDSIZE);
 	MtmTx.isDistributed = true;
 	MtmTx.isReplicated = true;
-	MtmTx.gtid.node = MtmGidParseNodeId(gid);
+	MtmTx.gtid.node = node_id;
 }
 
 TransactionId MtmGetCurrentTransactionId(void)
@@ -1917,7 +1926,6 @@ void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
-			Assert(MtmGidParseNodeId(ts->gid) == ts->gtid.node);
 
 			if (ts->status == TRANSACTION_STATUS_IN_PROGRESS) {
 				MTM_ELOG(LOG, "Abort transaction %s because its coordinator is disabled and it is not prepared at node %d", ts->gid, MtmNodeId);
@@ -1972,7 +1980,6 @@ MtmPollStatusOfPreparedTransactions(bool majorMode)
 			&& (ts->status == TRANSACTION_STATUS_UNKNOWN || ts->status == TRANSACTION_STATUS_IN_PROGRESS))
 		{
 			Assert(ts->gid[0]);
-			Assert(MtmGidParseNodeId(ts->gid) == ts->gtid.node);
 
 			if (majorMode)
 			{
@@ -3071,7 +3078,7 @@ _PG_init(void)
 		"Transactions from one node will be committed in same order on all nodes",
 		NULL,
 		&MtmPreserveCommitOrder,
-		true,
+		false,
 		PGC_BACKEND,
 		GUC_NO_SHOW_ALL,
 		NULL,
@@ -3341,7 +3348,7 @@ void MtmRollbackPreparedTransaction(int nodeId, char const* gid)
 		MtmResetTransaction();
 		StartTransactionCommand();
 		MtmBeginSession(nodeId);
-		MtmSetCurrentTransactionGID(gid);
+		MtmSetCurrentTransactionGID(gid, nodeId);
 		TXFINISH("%s ABORT, MtmRollbackPrepared", gid);
 		FinishPreparedTransaction(gid, false, false);
 		MtmTx.isActive = true;
@@ -3377,7 +3384,7 @@ void MtmFinishPreparedTransaction(MtmTransState* ts, bool commit)
 		StartTransactionCommand();
 	}
 	MtmSetCurrentTransactionCSN(ts->csn);
-	MtmSetCurrentTransactionGID(ts->gid);
+	MtmSetCurrentTransactionGID(ts->gid, ts->gtid.node);
 	MtmTx.isActive = true;
 	FinishPreparedTransaction(ts->gid, commit, false);
 	if (commit) {
@@ -4652,19 +4659,27 @@ static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int force
  * It should be unique for all nodes
  */
 void
-MtmGenerateGid(char* gid)
+MtmGenerateGid(char *gid, TransactionId xid)
 {
-	static int localCount;
-	sprintf(gid, "MTM-%d-%d-%d-" INT64_FORMAT, MtmNodeId, MyProc->pgprocno, ++localCount, (int64) GetCurrentTimestamp());
-	// MTM_LOG1("MtmGenerateGid: %s", gid);
+	sprintf(gid, "MTM-%d-" XID_FMT, MtmNodeId, xid);
+	return;
 }
 
 int
 MtmGidParseNodeId(const char* gid)
 {
-	int MtmNodeId;
-	sscanf(gid, "MTM-%d-%*d-%*d-%*d", &MtmNodeId);
+	int MtmNodeId = -1;
+	sscanf(gid, "MTM-%d-%*d", &MtmNodeId);
 	return MtmNodeId;
+}
+
+TransactionId
+MtmGidParseXid(const char* gid)
+{
+	TransactionId xid = InvalidTransactionId;
+	sscanf(gid, "MTM-%*d-" XID_FMT, &xid);
+	Assert(TransactionIdIsValid(xid));
+	return xid;
 }
 
 /*
@@ -4676,7 +4691,7 @@ static bool MtmTwoPhaseCommit0(MtmCurrentTrans* x)
 	MTM_TXTRACE(x, "MtmTwoPhaseCommit Start");
 
 	if (!x->isReplicated && x->isDistributed && x->containsDML) {
-		MtmGenerateGid(x->gid);
+		// MtmGenerateGid(x->gid);
 
 		if (!x->isTransactionBlock) {
 			BeginTransactionBlock(false);
@@ -5557,16 +5572,51 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next)
  * -------------------------------------------
  */
 
+void
+MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid)
+{
+	MtmTransState* ts;
+	bool found;
+
+	Assert(TransactionIdIsValid(xid));
+
+	MtmLock(LW_EXCLUSIVE);
+	ts = (MtmTransState *) hash_search(MtmXid2State, &xid, HASH_ENTER, &found);
+	ts->gtid = *gtid;
+	MtmUnlock();
+
+	Assert(!found);
+}
+
+void
+MtmDeadlockDetectorRemoveXact(TransactionId xid)
+{
+	bool found;
+
+	Assert(TransactionIdIsValid(xid));
+
+	MtmLock(LW_EXCLUSIVE);
+	hash_search(MtmXid2State, &xid, HASH_REMOVE, &found);
+	MtmUnlock();
+
+	Assert(found);
+}
+
 static void
 MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 {
 	MtmTransState* ts;
 
 	MtmLock(LW_SHARED);
-	ts = (MtmTransState*)hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
-	if (ts != NULL) {
+	ts = (MtmTransState *) hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
+	if (ts != NULL)
+	{
 		*gtid = ts->gtid;
-	} else {
+	}
+	else
+	{
+		// XXX: investigate how this assert happens
+		// Assert(TransactionIdIsInProgress(xid));
 		gtid->node = MtmNodeId;
 		gtid->xid = xid;
 	}

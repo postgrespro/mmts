@@ -79,7 +79,7 @@ static bool build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, Tu
 static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
 static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
 
-static bool process_remote_begin(StringInfo s);
+static bool process_remote_begin(StringInfo s, GlobalTransactionId *gtid);
 static bool process_remote_message(StringInfo s);
 static void process_remote_commit(StringInfo s);
 static void process_remote_insert(StringInfo s, Relation rel);
@@ -438,18 +438,22 @@ create_rel_estate(Relation rel)
 }
 
 static bool
-process_remote_begin(StringInfo s)
+process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 {
-	GlobalTransactionId gtid;
 	csn_t snapshot;
 	nodemask_t participantsMask = 0;
 	int rc;
+	TransactionId xid;
 
-	gtid.node = pq_getmsgint(s, 4); 
-	gtid.xid = pq_getmsgint64(s); 
+	gtid->node = pq_getmsgint(s, 4);
+	gtid->xid = pq_getmsgint64(s);
+
+	// XXX: get rid of MtmReplicationNodeId
+	MtmReplicationNodeId = gtid->node;
+
 	snapshot = pq_getmsgint64(s);    
 	participantsMask = pq_getmsgint64(s);
-	Assert(gtid.node > 0);
+	Assert(gtid->node > 0);
 
 	MTM_LOG2("REMOTE begin node=%d xid=%llu snapshot=%lld participantsMask=%llx", gtid.node, (long64)gtid.xid, snapshot, participantsMask);
 	MtmResetTransaction();		
@@ -457,6 +461,10 @@ process_remote_begin(StringInfo s)
     SetCurrentStatementStartTimestamp();     
 	StartTransactionCommand();
     // MtmJoinTransaction(&gtid, snapshot, participantsMask);
+
+	/* ddd */
+	xid = GetCurrentTransactionId();
+	MtmDeadlockDetectorAddXact(xid, gtid);
 
 	if (GucAltered) {
 		SPI_connect();
@@ -765,27 +773,21 @@ read_rel(StringInfo s, LOCKMODE mode)
 
 /* send response to coordinator after PREPARE */
 static void
-MtmFollowerSendReply(const char *gid, int node_id, MtmMessageCode msg_code)
+mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 {
-	DmqDestinationId dest_id;
+	DmqDestinationId dest_id = Mtm->nodes[node_id-1].destination_id;
 	MtmArbiterMessage msg;
-	int dest_procno = -1;
 
-	dest_id = Mtm->nodes[node_id-1].destination_id;
-
-	memset(&msg, '\0', sizeof(MtmArbiterMessage));
 	MtmInitMessage(&msg, msg_code);
-	strncpy(msg.gid, gid, GIDSIZE);
+	msg.dxid = xid;
+	Assert(MtmReplicationNodeId == node_id);
+	Assert(TransactionIdIsValid(xid));
 
-	sscanf(msg.gid, "MTM-%*d-%d-%*d-%*d", &dest_procno);
-	Assert(dest_procno > 0);
+	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, msg.dxid),
+					&msg, sizeof(MtmArbiterMessage));
 
 	elog(LOG, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
-
-	dmq_push_buffer(dest_id, psprintf("be%d", dest_procno),
-					&msg, sizeof(MtmArbiterMessage));
 }
-
 
 static void
 process_remote_commit(StringInfo in)
@@ -835,7 +837,12 @@ process_remote_commit(StringInfo in)
 			}
 
 			// MtmPrecommitTransaction(gid);
-			MtmFollowerSendReply(gid, origin_node, MSG_PRECOMMITTED);
+
+			if (Mtm->status != MTM_RECOVERY)
+			{
+				TransactionId origin_xid = MtmGidParseXid(gid);
+				mtm_send_reply(origin_xid, origin_node, MSG_PRECOMMITTED);
+			}
 
 			MtmEndSession(origin_node, true);
 			return;
@@ -854,8 +861,10 @@ process_remote_commit(StringInfo in)
 		case PGLOGICAL_PREPARE:
 		{
 			bool res;
+			TransactionId xid = GetCurrentTransactionIdIfAny();
 
-			// Assert(IsTransactionState() && TransactionIdIsValid(MtmGetCurrentTransactionId()));
+			Assert(IsTransactionState() && TransactionIdIsValid(xid));
+
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
 			MtmBeginSession(origin_node);
@@ -869,8 +878,14 @@ process_remote_commit(StringInfo in)
 			res = PrepareTransactionBlock(gid);
 			CommitTransactionCommand();
 
+			MtmDeadlockDetectorRemoveXact(xid);
+
 			/* XXX: we can move that to callbacks to keep apply clean */
-			MtmFollowerSendReply(gid, origin_node, res ? MSG_PREPARED : MSG_ABORTED);
+			if (Mtm->status != MTM_RECOVERY)
+			{
+				TransactionId origin_xid = MtmGidParseXid(gid);
+				mtm_send_reply(origin_xid, origin_node, res ? MSG_PREPARED : MSG_ABORTED);
+			}
 
 			MtmEndSession(origin_node, true);
 
@@ -937,8 +952,10 @@ process_remote_commit(StringInfo in)
 			// Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			/* MtmRollbackPreparedTransaction will set origin session itself */
-			MTM_LOG1("Receive ABORT_PREPARED logical message for transaction %s from node %d", gid, origin_node);
-			MtmRollbackPreparedTransaction(origin_node, gid);
+			MTM_LOG1("PGLOGICAL_ABORT_PREPARED for transaction %s from node %d", gid, origin_node);
+			StartTransactionCommand();
+			FinishPreparedTransaction(gid, false, true);
+			CommitTransactionCommand();
 			break;
 		}
 		default:
@@ -1328,6 +1345,7 @@ void MtmExecutor(void* work, size_t size)
 	int save_len = 0;
 	MemoryContext old_context;
 	MemoryContext top_context;
+	GlobalTransactionId current_gtid = {0, InvalidTransactionId};
 
     s.data = work;
     s.len = size;
@@ -1358,7 +1376,7 @@ void MtmExecutor(void* work, size_t size)
             switch (action) {
                 /* BEGIN */
             case 'B':
-			    inside_transaction = process_remote_begin(&s);
+			    inside_transaction = process_remote_begin(&s, &current_gtid);
 				break;
                 /* COMMIT */
             case 'C':
@@ -1454,8 +1472,12 @@ void MtmExecutor(void* work, size_t size)
         FlushErrorState();
 		MTM_LOG1("%d: REMOTE begin abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
 		MtmEndSession(MtmReplicationNodeId, false);
+
+		MtmDeadlockDetectorRemoveXact(GetCurrentTransactionIdIfAny());
         AbortCurrentTransaction();
-		Assert(!MtmTransIsActive());
+		if (Mtm->status != MTM_RECOVERY)
+			mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+		// Assert(!MtmTransIsActive());
 		MTM_LOG2("%d: REMOTE end abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
     }
     PG_END_TRY();

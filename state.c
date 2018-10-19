@@ -1020,10 +1020,12 @@ MtmMonitor(Datum arg)
 	{
 		if (i + 1 != MtmNodeId)
 		{
-			dmq_stream_subscribe(psprintf("node%d", i + 1), "txreq", i);
+			dmq_attach_receiver(psprintf("node%d", i + 1), i);
 			sender_to_node[sender_id++] = i + 1;
 		}
 	}
+
+	dmq_stream_subscribe("txreq");
 
 	for (;;)
 	{

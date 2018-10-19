@@ -82,7 +82,6 @@ MtmPrePrepareTransaction(MtmCurrentTrans* x)
 			MtmDatabaseName);
 
 	Assert(TransactionIdIsValid(GetCurrentTransactionId()));
-	Assert(*x->gid != '\0');
 }
 
 bool // XXX: do we need that bool?
@@ -91,6 +90,9 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	nodemask_t participantsMask;
 	bool	ret;
 	int		failed_at;
+	TransactionId xid;
+	char	stream[DMQ_NAME_MAXLEN];
+	pgid_t  gid;
 
 	if (!x->isDistributed || !x->containsDML)
 		return false;
@@ -98,14 +100,11 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	if (!DmqSubscribed)
 	{
 		int i, sender_id = 0;
-
 		for (i = 0; i < Mtm->nAllNodes; i++)
 		{
 			if (i + 1 != MtmNodeId)
 			{
-				dmq_stream_subscribe(psprintf("node%d", i + 1),
-								psprintf("be%d", MyProc->pgprocno),
-								i);
+				dmq_attach_receiver(psprintf("node%d", i + 1), i);
 				sender_to_node[sender_id++] = i + 1;
 			}
 		}
@@ -120,15 +119,20 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 		StartTransactionCommand();
 	}
 
-	MtmGenerateGid(x->gid);
+	xid = GetCurrentTransactionId();
+	sprintf(stream, "xid" XID_FMT, xid);
+	dmq_stream_subscribe(stream);
+	x->xid = xid;
+
+	MtmGenerateGid(gid, xid);
 	participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) &
 								  ~Mtm->disabledNodeMask &
 								  ~((nodemask_t)1 << (MtmNodeId-1));
 
-	ret = PrepareTransactionBlock(x->gid);
+	ret = PrepareTransactionBlock(gid);
 	if (!ret)
 	{
-		MTM_ELOG(WARNING, "Failed to prepare transaction %s (%llu)", x->gid, (long64)x->xid);
+		MTM_ELOG(WARNING, "Failed to prepare transaction %s (%llu)", gid, (long64)x->xid);
 		return false;
 	}
 	CommitTransactionCommand();
@@ -136,16 +140,19 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	ret = GatherPrepares(x, participantsMask, &failed_at);
 	if (!ret)
 	{
-		FinishPreparedTransaction(x->gid, false, false);
+		dmq_stream_unsubscribe(stream);
+		FinishPreparedTransaction(gid, false, false);
 		MTM_ELOG(ERROR, "Failed to prepare transaction %s at node %d",
-						x->gid, failed_at);
+						gid, failed_at);
 	}
 
-	SetPreparedTransactionState(x->gid, MULTIMASTER_PRECOMMITTED);
+	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 	GatherPrecommits(x, participantsMask);
 
 	StartTransactionCommand();
-	FinishPreparedTransaction(x->gid, true, false);
+	FinishPreparedTransaction(gid, true, false);
+
+	dmq_stream_unsubscribe(stream);
 
 	return true;
 }
@@ -167,14 +174,14 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 		msg = (MtmArbiterMessage *) buffer.data;
 
 		// elog(LOG, "GatherPrepares: got %s from node%d", msg->gid, sender_to_node[sender_id]);
-		ereport(LOG,
-					(errmsg("GatherPrepares: got %s from node%d",
-							msg->gid, sender_to_node[sender_id]),
-					 errhidestmt(true)));
+		// ereport(LOG,
+		// 			(errmsg("GatherPrepares: got %s from node%d",
+		// 					msg->gid, sender_to_node[sender_id]),
+		// 			 errhidestmt(true)));
 
 		Assert(msg->node == sender_to_node[sender_id]);
 		Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
-		Assert(strcmp(msg->gid, x->gid) == 0);
+		Assert(msg->dxid == x->xid);
 		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
 
 		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
@@ -203,11 +210,11 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask)
 		dmq_pop(&sender_id, &buffer, participantsMask);
 		msg = (MtmArbiterMessage *) buffer.data;
 
-		elog(LOG, "GatherPrecommits: got %s from node%d", msg->gid, sender_to_node[sender_id]);
+		// elog(LOG, "GatherPrecommits: got %s from node%d", msg->gid, sender_to_node[sender_id]);
 
 		Assert(msg->node == sender_to_node[sender_id]);
 		Assert(msg->code == MSG_PRECOMMITTED);
-		Assert(strcmp(msg->gid, x->gid) == 0);
+		Assert(msg->dxid == x->xid);
 		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
 
 		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
