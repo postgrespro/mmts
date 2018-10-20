@@ -26,6 +26,8 @@
 #include "postgres.h"
 
 #include "dmq.h"
+#include "logger.h"
+
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -68,6 +70,7 @@ typedef enum
 typedef struct {
 	bool			active;
 	char			sender_name[DMQ_NAME_MAXLEN];
+	char			receiver_name[DMQ_NAME_MAXLEN];
 	char			connstr[DMQ_CONNSTR_MAX_LEN];
 	int				ping_period;
 	PGconn		   *pgconn;
@@ -305,7 +308,7 @@ fe_send(PGconn *conn, char *msg, size_t len)
 void
 dmq_sender_main(Datum main_arg)
 {
-	uintptr_t		i;
+	int		i;
 	dsm_segment	   *seg;
 	shm_toc		   *toc;
 	shm_mq_handle **mq_handles;
@@ -413,16 +416,23 @@ dmq_sender_main(Datum main_arg)
 						conns[conn_id].state = Idle;
 						DeleteWaitEvent(set, conns[conn_id].pos);
 
-						elog(LOG,
-							 "[DMQ] 1 broken connection to peer %d, idling: %s",
-							 conn_id, PQerrorMessage(conns[i].pgconn));
+						mtm_log(DmqStateFinal,
+								"[DMQ] failed to send message to %s: %s",
+								conns[conn_id].receiver_name,
+								PQerrorMessage(conns[conn_id].pgconn));
+					}
+					else
+					{
+						mtm_log(DmqTraceOutgoing,
+								"[DMQ] sent message (l=%zu, m=%s) to %s",
+								len, data, conns[conn_id].receiver_name);
 					}
 				}
 				else
 				{
-					elog(LOG,
-						 "[DMQ] dropping message to unconnected peer %d, '%s'",
-						 conn_id, data);
+					mtm_log(WARNING,
+						 "[DMQ] dropping message (l=%zu, m=%s) to disconnected %s",
+						 len, data, conns[conn_id].receiver_name);
 				}
 
 				wait = false;
@@ -439,7 +449,9 @@ dmq_sender_main(Datum main_arg)
 				mq = shm_mq_create(mq, DMQ_MQ_SIZE);
 				shm_mq_set_receiver(mq, MyProc);
 				mq_handles[i] = shm_mq_attach(mq, seg, NULL);
-				elog(LOG, "[DMQ] procno %d queue reattached", (int) i);
+
+				mtm_log(DmqTraceShmMq,
+						"[DMQ] sender reattached shm_mq to procno %d", i);
 			}
 		}
 
@@ -464,41 +476,54 @@ dmq_sender_main(Datum main_arg)
 		 */
 		if (timer_event)
 		{
-			for (i = 0; i < DMQ_MAX_DESTINATIONS; i++)
+			uintptr_t		conn_id;
+
+			for (conn_id = 0; conn_id < DMQ_MAX_DESTINATIONS; conn_id++)
 			{
 				/* Idle --> Connecting */
-				if (conns[i].active && conns[i].state == Idle)
+				if (conns[conn_id].active && conns[conn_id].state == Idle)
 				{
-					if (conns[i].pgconn)
-						PQfinish(conns[i].pgconn);
+					if (conns[conn_id].pgconn)
+						PQfinish(conns[conn_id].pgconn);
 
-					conns[i].pgconn = PQconnectStart(conns[i].connstr);
+					conns[conn_id].pgconn = PQconnectStart(conns[conn_id].connstr);
 
-					if (PQstatus(conns[i].pgconn) == CONNECTION_BAD)
+					if (PQstatus(conns[conn_id].pgconn) == CONNECTION_BAD)
 					{
-						elog(WARNING, "[DMQ] connection to '%s': %s",
-							 conns[i].connstr, PQerrorMessage(conns[i].pgconn));
-						conns[i].state = Idle;
+						conns[conn_id].state = Idle;
+
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] failed to start connection with %s (%s): %s",
+								conns[conn_id].receiver_name,
+								conns[conn_id].connstr,
+								PQerrorMessage(conns[conn_id].pgconn));
 					}
 					else
 					{
-						conns[i].pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
-											PQsocket(conns[i].pgconn),
-											NULL, (void *) i);
-						conns[i].state = Connecting;
+						conns[conn_id].state = Connecting;
+						conns[conn_id].pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
+											PQsocket(conns[conn_id].pgconn),
+											NULL, (void *) conn_id);
+
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] switching %s from Idle to Connecting",
+								conns[conn_id].receiver_name);
 					}
 				}
 				/* Heatbeat */
-				else if (conns[i].state == Active)
+				else if (conns[conn_id].state == Active)
 				{
-					int ret = fe_send(conns[i].pgconn, "H", 2);
+					int ret = fe_send(conns[conn_id].pgconn, "H", 2);
 					if (ret < 0)
 					{
-						conns[i].state = Idle;
-						DeleteWaitEvent(set, conns[i].pos);
+						conns[conn_id].state = Idle;
+						DeleteWaitEvent(set, conns[conn_id].pos);
 						// Assert(PQstatus(conns[i].pgconn) != CONNECTION_OK);
-						elog(LOG, "[DMQ] 1 broken connection to peer %d, idling: %s",
-							 (int) i, PQerrorMessage(conns[i].pgconn));
+
+						mtm_log(DmqStateFinal,
+								"[DMQ] failed to send heartbeat to %s: %s",
+								conns[conn_id].receiver_name,
+								PQerrorMessage(conns[conn_id].pgconn));
 					}
 				}
 			}
@@ -529,18 +554,27 @@ dmq_sender_main(Datum main_arg)
 					else if (status == PGRES_POLLING_OK)
 					{
 						char *sender_name = conns[conn_id].sender_name;
-						char *query = psprintf("select mtm.dmq_receiver_loop('%s')", sender_name);
+						char *query = psprintf("select mtm.dmq_receiver_loop('%s')",
+											   sender_name);
 
+						conns[conn_id].state = Negotiating;
 						ModifyWaitEvent(set, event.pos, WL_SOCKET_READABLE, NULL);
 						PQsendQuery(conns[conn_id].pgconn, query);
-						conns[conn_id].state = Negotiating;
+
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] switching %s from Connecting to Negotiating",
+								conns[conn_id].receiver_name);
 					}
 					else if (status == PGRES_POLLING_FAILED)
 					{
 						conns[conn_id].state = Idle;
 						DeleteWaitEvent(set, event.pos);
-						// elog(LOG, "[DMQ] [B1] failed to connect: %s",
-						// 	 PQerrorMessage(conns[conn_id].pgconn));
+
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] failed to connect with %s (%s): %s",
+								conns[conn_id].receiver_name,
+								conns[conn_id].connstr,
+								PQerrorMessage(conns[conn_id].pgconn));
 					}
 					else
 						Assert(status == PGRES_POLLING_WRITING);
@@ -558,13 +592,19 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Idle;
 						DeleteWaitEvent(set, event.pos);
-						elog(LOG, "DMQ sender error: %s",
-							 PQerrorMessage(conns[conn_id].pgconn));
+
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] failed to get handshake from %s: %s",
+								conns[conn_id].receiver_name,
+								PQerrorMessage(conns[i].pgconn));
 					}
 					if (!PQisBusy(conns[conn_id].pgconn))
 					{
 						conns[conn_id].state = Active;
-						elog(LOG, "[DMQ] connection #%d established", conn_id);
+
+						mtm_log(DmqStateFinal,
+								"[DMQ] Connected to %s",
+								conns[conn_id].receiver_name);
 					}
 					break;
 
@@ -575,8 +615,11 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Idle;
 						DeleteWaitEvent(set, event.pos);
-						elog(LOG, "[DMQ] [B2] connection error: %s",
-							 PQerrorMessage(conns[conn_id].pgconn));
+
+						mtm_log(DmqStateFinal,
+								"[DMQ] connection error with %s: %s",
+								conns[conn_id].receiver_name,
+								PQerrorMessage(conns[conn_id].pgconn));
 					}
 					break;
 			}
@@ -649,19 +692,21 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 
 	if (!found)
 	{
-		elog(WARNING,
-			"dmq_receiver_loop: subscription %s is not found (body = %s)",
+		mtm_log(WARNING,
+			"[DMQ] subscription %s is not found (body = %s)",
 			stream_name, body);
 		return;
 	}
 
-	// elog(LOG, "got message %s.%s, passing to %d", stream_name, body, sub->procno);
+	mtm_log(DmqTraceIncoming,
+			"[DMQ] got message %s.%s, passing to %d", stream_name, body,
+			sub->procno);
 
 	/* and send it */
 	res = shm_mq_send(mq_handles[sub->procno], body_len, body, false);
 	if (res != SHM_MQ_SUCCESS)
 	{
-		elog(WARNING, "dmq_receiver_loop: can't send to queue");
+		mtm_log(WARNING, "[DMQ] can't send to queue %d", sub->procno);
 	}
 }
 
@@ -776,7 +821,7 @@ _pq_getmessage_if_avalable(StringInfo s)
 	else
 	{
 		recv_bytes += rc;
-		Assert(recv_bytes >= read_bytes && recv_bytes < DMQ_RECV_BUFFER);
+		Assert(recv_bytes >= read_bytes && recv_bytes <= DMQ_RECV_BUFFER);
 
 		/*
 		 * Here we need to re-check for full message again, so the caller will know
@@ -838,14 +883,14 @@ _pq_getbyte_if_available(unsigned char *c)
 }
 
 static void
-dmq_receiver_at_exit(int status, Datum sender)
+dmq_receiver_at_exit(int status, Datum receiver)
 {
-	int		sender_id = DatumGetInt32(sender);
+	int		receiver_id = DatumGetInt32(receiver);
 	char	sender_name[DMQ_NAME_MAXLEN];
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	strncpy(sender_name, dmq_state->receiver[sender_id], DMQ_NAME_MAXLEN);
-	dmq_state->receiver[sender_id][0] = '\0';
+	strncpy(sender_name, dmq_state->receiver[receiver_id], DMQ_NAME_MAXLEN);
+	dmq_state->receiver[receiver_id][0] = '\0';
 	LWLockRelease(dmq_state->lock);
 
 	if (dmq_receiver_stop_hook)
@@ -893,7 +938,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
 		if (strcmp(dmq_state->receiver[i], sender_name) == 0)
-			elog(ERROR, "sender '%s' already connected", sender_name);
+			mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
 	}
 	receiver_id = dmq_state->nreceivers;
 	dmq_state->receiver_dsm[receiver_id] = dsm_segment_handle(seg);
@@ -941,7 +986,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 				}
 				else
 				{
-					elog(ERROR, "dmq_recv_be: invalid message type %c, %s",
+					mtm_log(ERROR, "[DMQ] invalid message type %c, %s",
 								qtype, s.data);
 				}
 			}
@@ -963,7 +1008,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		{
 			ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("dmq_recv_be: EOF on connection")));
+				 errmsg("[DMQ] EOF on connection")));
 			break;
 		}
 
@@ -978,9 +1023,9 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		// XXX: is it enough?
 		CHECK_FOR_INTERRUPTS();
 
-		if (dmq_now() - last_message_at > 5000)
+		if (dmq_now() - last_message_at > 2000)
 		{
-			elog(ERROR, "[DMQ] exit receiver due to heatbeat timeout");
+			mtm_log(ERROR, "[DMQ] exit receiver due to heatbeat timeout");
 		}
 
 	}
@@ -1046,12 +1091,13 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 	pq_send_ascii_string(&buf, stream_name);
 	pq_send_ascii_string(&buf, msg);
 
-	// elog(LOG, "pushing l=%d '%.*s'", buf.len, buf.len, buf.data);
+	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
+			buf.len, buf.len, buf.data);
 
 	// XXX: use sendv instead
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
-		elog(ERROR, "dmq_push: can't send to queue");
+		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
 
 	resetStringInfo(&buf);
 }
@@ -1070,20 +1116,14 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	pq_send_ascii_string(&buf, stream_name);
 	pq_sendbytes(&buf, payload, len);
 
-	// elog(LOG, "pushing l=%d '%.*s'", buf.len, buf.len, buf.data);
+	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
+			buf.len, buf.len, buf.data);
 
 	// XXX: use sendv instead
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
-		elog(ERROR, "dmq_push: can't send to queue");
+		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
 }
-
-
-
-
-
-
-
 
 static bool
 dmq_reattach_shm_mq(int handle_id)
@@ -1095,6 +1135,7 @@ dmq_reattach_shm_mq(int handle_id)
 
 	int receiver_id = -1;
 	int receiver_procno;
+	dsm_handle receiver_dsm;
 	int i;
 
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
@@ -1105,17 +1146,34 @@ dmq_reattach_shm_mq(int handle_id)
 		{
 			receiver_id = i;
 			receiver_procno = dmq_state->receiver_procno[i];
+			receiver_dsm = dmq_state->receiver_dsm[receiver_id];
 			break;
 		}
 	}
 	LWLockRelease(dmq_state->lock);
 
 	if (receiver_id < 0)
+	{
+		mtm_log(DmqTraceShmMq, "[DMQ] can't find receiver named '%s'",
+			dmq_local.inhandles[handle_id].name);
 		return false;
+	}
 
-	Assert(dmq_state->receiver_dsm[receiver_id] != DSM_HANDLE_INVALID);
+	Assert(receiver_dsm != DSM_HANDLE_INVALID);
 
-	seg = dsm_attach(dmq_state->receiver_dsm[receiver_id]);
+	if (dsm_find_mapping(receiver_dsm))
+	{
+		mtm_log(DmqTraceShmMq,
+			"[DMQ] we already attached '%s', probably receiver is exiting",
+			dmq_local.inhandles[handle_id].name);
+		return false;
+	}
+
+	mtm_log(DmqTraceShmMq, "[DMQ] attaching '%s', dsm handle %d",
+			dmq_local.inhandles[handle_id].name,
+			receiver_dsm);
+
+	seg = dsm_attach(receiver_dsm);
 	if (seg == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -1129,12 +1187,17 @@ dmq_reattach_shm_mq(int handle_id)
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("bad magic number in dynamic shared memory segment")));
 
+	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
+
 	if (dmq_local.inhandles[handle_id].mqh)
 	{
 		shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
+		mtm_log(DmqTraceShmMq, "[DMQ] re-creating shm_mq handle %p", inq);
 	}
-
-	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
+	else
+	{
+		mtm_log(DmqTraceShmMq, "[DMQ] creating shm_mq handle %p", inq);
+	}
 
 	/* re-create */
 	inq = shm_mq_create(inq, DMQ_MQ_SIZE);
@@ -1173,7 +1236,8 @@ dmq_stream_subscribe(char *stream_name)
 												HASH_ENTER, &found);
 	if (found && sub->procno != MyProc->pgprocno)
 	{
-		elog(ERROR, "procno%d: %s: subscription is already active for procno %d / %s",
+		mtm_log(ERROR,
+				"[DMQ] procno%d: %s: subscription is already active for procno %d / %s",
 				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
 	}
 	sub->procno = MyProc->pgprocno;
@@ -1193,7 +1257,7 @@ dmq_stream_unsubscribe(char *stream_name)
 }
 
 void
-dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
+dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 {
 	shm_mq_result res;
 
@@ -1212,7 +1276,11 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
 			if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 				continue;
 
-			res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
+			if (dmq_local.inhandles[i].mqh)
+				res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
+			else
+				res = SHM_MQ_DETACHED;
+
 			if (res == SHM_MQ_SUCCESS)
 			{
 				msg->data = data;
@@ -1220,15 +1288,22 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
 				msg->maxlen = len;
 				msg->cursor = 0;
 				*sender_id = i;
-				// elog(LOG, "pop message %s, from %d", (char *) *dataptr, i);
+
+				mtm_log(DmqTraceIncoming,
+						"[DMQ] dmq_pop: got message %s from %s",
+						(char *) data, dmq_local.inhandles[i].name);
 				return;
 			}
 			else if (res == SHM_MQ_DETACHED)
 			{
+				mtm_log(DmqTraceShmMq,
+						"[DMQ] dmq_pop: queue '%s' detached, trying to reattach",
+						dmq_local.inhandles[i].name);
+
 				if (dmq_reattach_shm_mq(i))
 					nowait = true;
 				else
-					elog(ERROR, "dmq_pop: queue detached");
+					mtm_log(ERROR, "[DMQ] dmq_pop: failed to reattach");
 			}
 		}
 
@@ -1242,19 +1317,24 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask)
 }
 
 bool
-dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg)
+dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 {
 	shm_mq_result res;
 	int i;
-
-	return false;
 
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
 		Size	len;
 		void   *data;
 
-		res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
+		if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
+			continue;
+
+		if (dmq_local.inhandles[i].mqh)
+			res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
+		else
+			res = SHM_MQ_DETACHED;
+
 		if (res == SHM_MQ_SUCCESS)
 		{
 			msg->data = data;
@@ -1262,12 +1342,17 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg)
 			msg->maxlen = len;
 			msg->cursor = 0;
 			*sender_id = i;
-			// elog(LOG, "pop message %s, from %d", (char *) *dataptr, i);
+
+			mtm_log(DmqTraceIncoming,
+					"[DMQ] dmq_pop: got message %s from %s",
+					(char *) data, dmq_local.inhandles[i].name);
 			return true;
 		}
 		else if (res == SHM_MQ_DETACHED)
 		{
-			elog(ERROR, "dmq_pop: queue detached");
+			if (!dmq_reattach_shm_mq(i))
+				mtm_log(WARNING, "[DMQ] dmq_pop_nb: failed to reattach");
+			return false;
 		}
 	}
 
@@ -1275,7 +1360,8 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg)
 }
 
 DmqDestinationId
-dmq_destination_add(char *connstr, char *sender_name, int ping_period)
+dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
+					int ping_period)
 {
 	DmqDestinationId dest_id;
 	pid_t sender_pid;
@@ -1287,6 +1373,7 @@ dmq_destination_add(char *connstr, char *sender_name, int ping_period)
 		if (!dest->active)
 		{
 			strncpy(dest->sender_name, sender_name, DMQ_NAME_MAXLEN);
+			strncpy(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN);
 			strncpy(dest->connstr, connstr, DMQ_CONNSTR_MAX_LEN);
 			dest->ping_period = ping_period;
 			dest->active = true;
@@ -1300,7 +1387,7 @@ dmq_destination_add(char *connstr, char *sender_name, int ping_period)
 		kill(sender_pid, SIGHUP);
 
 	if (dest_id == DMQ_MAX_DESTINATIONS)
-		elog(ERROR, "Can't add new destination. DMQ_MAX_DESTINATIONS reached.");
+		mtm_log(ERROR, "Can't add new destination. DMQ_MAX_DESTINATIONS reached.");
 	else
 		return dest_id;
 }

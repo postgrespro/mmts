@@ -1,9 +1,22 @@
+/*----------------------------------------------------------------------------
+ *
+ * commit.c
+ *		Replace ordinary commit with 3PC.
+ *
+ * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ *----------------------------------------------------------------------------
+ */
+
 #include "postgres.h"
 #include "multimaster.h"
 #include "storage/proc.h"
 #include "utils/guc.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
+
+#include "logger.h"
 
 static Oid		MtmDatabaseId;
 static bool		DmqSubscribed;
@@ -17,9 +30,6 @@ static void MtmPrePrepareTransaction(MtmCurrentTrans* x);
 static bool GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask,
 						   int *failed_at);
 static void GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask);
-
-
-
 
 
 void
@@ -77,7 +87,7 @@ MtmPrePrepareTransaction(MtmCurrentTrans* x)
 		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
 
 	if (MtmDatabaseId != MyDatabaseId)
-		MTM_ELOG(ERROR,
+		mtm_log(ERROR,
 			"Refusing to work. Multimaster configured to work with database '%s'",
 			MtmDatabaseName);
 
@@ -132,7 +142,8 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)
 	{
-		MTM_ELOG(WARNING, "Failed to prepare transaction %s (%llu)", gid, (long64)x->xid);
+		mtm_log(MtmTxFinish, "%s prepared", gid);
+		mtm_log(WARNING, "Failed to prepare transaction %s", gid);
 		return false;
 	}
 	CommitTransactionCommand();
@@ -142,15 +153,18 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	{
 		dmq_stream_unsubscribe(stream);
 		FinishPreparedTransaction(gid, false, false);
-		MTM_ELOG(ERROR, "Failed to prepare transaction %s at node %d",
+		mtm_log(MtmTxFinish, "%s aborted", gid);
+		mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
 						gid, failed_at);
 	}
 
 	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+	mtm_log(MtmTxFinish, "%s precommittted", gid);
 	GatherPrecommits(x, participantsMask);
 
 	StartTransactionCommand();
 	FinishPreparedTransaction(gid, true, false);
+	mtm_log(MtmTxFinish, "%s committted", gid);
 
 	dmq_stream_unsubscribe(stream);
 
@@ -173,16 +187,15 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 		dmq_pop(&sender_id, &buffer, participantsMask);
 		msg = (MtmArbiterMessage *) buffer.data;
 
-		// elog(LOG, "GatherPrepares: got %s from node%d", msg->gid, sender_to_node[sender_id]);
-		// ereport(LOG,
-		// 			(errmsg("GatherPrepares: got %s from node%d",
-		// 					msg->gid, sender_to_node[sender_id]),
-		// 			 errhidestmt(true)));
-
 		Assert(msg->node == sender_to_node[sender_id]);
 		Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
 		Assert(msg->dxid == x->xid);
 		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
+
+		mtm_log(MtmTxTrace,
+			"GatherPrepares: got '%s' for %s from node%d",
+			msg->code == MSG_PREPARED ? "ok" : "failed",
+			msg->gid, sender_to_node[sender_id]);
 
 		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 
@@ -210,12 +223,14 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask)
 		dmq_pop(&sender_id, &buffer, participantsMask);
 		msg = (MtmArbiterMessage *) buffer.data;
 
-		// elog(LOG, "GatherPrecommits: got %s from node%d", msg->gid, sender_to_node[sender_id]);
-
 		Assert(msg->node == sender_to_node[sender_id]);
 		Assert(msg->code == MSG_PRECOMMITTED);
 		Assert(msg->dxid == x->xid);
 		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
+
+		mtm_log(MtmTxTrace,
+			"GatherPrecommits: got 'ok' for %s from node%d",
+			msg->gid, sender_to_node[sender_id]);
 
 		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 	}

@@ -11,14 +11,15 @@ typedef int8 DmqSenderId;
 
 extern void dmq_init(void);
 
-extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name, int ping_period);
+extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,
+											char *receiver_name, int ping_period);
 extern void dmq_attach_receiver(char *sender_name, int mask_pos);
 
 extern void dmq_stream_subscribe(char *stream_name);
 extern void dmq_stream_unsubscribe(char *stream_name);
 
-extern void dmq_pop(DmqSenderId *sender_id, StringInfo msg, int64 mask);
-extern bool dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg);
+extern void dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask);
+extern bool dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask);
 
 extern void dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg);
 extern void dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *buffer, size_t len);

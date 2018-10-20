@@ -12,6 +12,7 @@
 
 #include "postgres.h"
 #include "multimaster.h"
+#include "logger.h"
 
 #include "access/twophase.h"
 #include "postmaster/bgworker.h"
@@ -222,13 +223,15 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		   tx->state[MtmNodeId-1] == MtmTxPreCommited ||
 		   tx->state[MtmNodeId-1] == MtmTxPreAborted);
 
-	MTM_LOG1("[RESOLVER] tx %s (%s) got state %s from node %d",
+	mtm_log(ResolverTraceTxMsg,
+			"[RESOLVER] tx %s (%s) got state %s from node %d",
 			gid, MtmTxStateMnem[tx->state[MtmNodeId-1]], MtmTxStateMnem[state],
 			node_id);
 
 	if (exists(tx, MtmTxAborted | MtmTxNotFound))
 	{
 		FinishPreparedTransaction(gid, false, false);
+		mtm_log(ResolverTxFinish, "%s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -237,6 +240,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	if (exists(tx, MtmTxCommited))
 	{
 		FinishPreparedTransaction(gid, true, false);
+		mtm_log(ResolverTxFinish, "%s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -249,6 +253,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		// SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 		// tx->state[MtmNodeId-1] = MtmTxPreCommited;
 		FinishPreparedTransaction(gid, true, false);
+		mtm_log(ResolverTxFinish, "%s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -260,6 +265,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		// SetPreparedTransactionState(gid, MULTIMASTER_PREABORTED);
 		// tx->state[MtmNodeId-1] = MtmTxPreAborted;
 		FinishPreparedTransaction(gid, false, false);
+		mtm_log(ResolverTxFinish, "%s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -278,7 +284,7 @@ static bool
 load_tasks_if_any(void)
 {
 	PreparedTransaction	pxacts;
-	int					n_xacts, i;
+	int					n_xacts, added_xacts = 0, i;
 	resolver_task		task = {NoTask, 0};
 
 	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
@@ -295,8 +301,6 @@ load_tasks_if_any(void)
 
 	n_xacts = GetPreparedTransactions(&pxacts);
 
-	MTM_LOG1("[RESOLVER] got %d transactions to resolve", n_xacts);
-
 	for (i = 0; i < n_xacts; i++)
 	{
 		char const *gid = pxacts[i].gid;
@@ -312,6 +316,7 @@ load_tasks_if_any(void)
 			resolver_tx	   *tx;
 
 			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
+			added_xacts++;
 
 			for (j = 0; j < Mtm->nAllNodes; j++)
 				tx->state[j] = MtmTxUnknown;
@@ -322,6 +327,9 @@ load_tasks_if_any(void)
 				tx->state[MtmNodeId - 1] = MtmTxPrepared;
 		}
 	}
+
+	mtm_log(ResolverTasks, "[RESOLVER] got %d transactions to resolve",
+			added_xacts);
 
 	return true;
 }
@@ -350,6 +358,10 @@ scatter_status_requests(void)
 
 				dest_id = Mtm->nodes[i].destination_id;
 
+				mtm_log(ResolverTraceTxMsg,
+						"[RESOLVER] sending request for %s to node%d",
+						tx->gid, i+1);
+
 				dmq_push_buffer(dest_id, "txreq", &msg,
 								sizeof(MtmArbiterMessage));
 			}
@@ -364,7 +376,7 @@ handle_responses(void)
 	DmqSenderId sender_id;
 	StringInfoData buffer;
 
-	while(dmq_pop_nb(&sender_id, &buffer))
+	while(dmq_pop_nb(&sender_id, &buffer, ~Mtm->disabledNodeMask))
 	{
 		int node_id;
 		MtmArbiterMessage *msg;

@@ -2502,6 +2502,7 @@ static void MtmInitialize()
 			continue;
 		destination_id = dmq_destination_add(MtmConnections[i].connStr,
 											 psprintf("node%d", MtmNodeId),
+											 psprintf("node%d", i + 1),
 											 MtmHeartbeatSendTimeout);
 		Mtm->nodes[i].destination_id = destination_id;
 	}

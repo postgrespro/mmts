@@ -9,6 +9,8 @@
 #include "tcop/tcopprot.h"
 #include "storage/ipc.h"
 
+#include "logger.h"
+
 char const* const MtmNeighborEventMnem[] =
 {
 	"MTM_NEIGHBOR_CLIQUE_DISABLE",
@@ -927,7 +929,7 @@ void MtmMonitor(Datum arg);
 
 static BackgroundWorker MtmMonitorWorker = {
 	"mtm-monitor",
-	"mtm",
+	"mtm-monitor",
 	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
 	BgWorkerStart_ConsistentState,
 	MULTIMASTER_BGW_RESTART_TIMEOUT,
@@ -943,7 +945,6 @@ static int		sender_to_node[MTM_MAX_NODES];
 void
 MtmMonitorInitialize(void)
 {
-	MTM_ELOG(LOG, "Register background workers");
 	RegisterBackgroundWorker(&MtmMonitorWorker);
 }
 
@@ -953,7 +954,7 @@ check_status_requests(void)
 	DmqSenderId sender_id;
 	StringInfoData buffer;
 
-	while(dmq_pop_nb(&sender_id, &buffer))
+	while(dmq_pop_nb(&sender_id, &buffer, ~SELF_CONNECTIVITY_MASK))
 	{
 		int sender_node_id;
 		MtmArbiterMessage *msg;
@@ -965,6 +966,9 @@ check_status_requests(void)
 
 		Assert(msg->node == sender_node_id);
 		Assert(msg->code == MSG_POLL_REQUEST);
+
+		mtm_log(StatusRequest, "got status request for %s from %d",
+				msg->gid, sender_node_id);
 
 		state_3pc = GetLoggedPreparedXactState(msg->gid);
 
@@ -983,6 +987,9 @@ check_status_requests(void)
 			msg->state = MtmTxAborted;
 		else
 			Assert(false);
+
+		mtm_log(StatusRequest, "responding to %d with %s -> %s",
+				sender_node_id, msg->gid, MtmTxStateMnem[msg->state]);
 
 		pfree(state_3pc);
 
