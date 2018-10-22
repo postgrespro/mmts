@@ -1256,7 +1256,7 @@ dmq_stream_unsubscribe(char *stream_name)
 	Assert(found);
 }
 
-void
+bool
 dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 {
 	shm_mq_result res;
@@ -1292,7 +1292,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 				mtm_log(DmqTraceIncoming,
 						"[DMQ] dmq_pop: got message %s from %s",
 						(char *) data, dmq_local.inhandles[i].name);
-				return;
+				return true;
 			}
 			else if (res == SHM_MQ_DETACHED)
 			{
@@ -1301,9 +1301,15 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 						dmq_local.inhandles[i].name);
 
 				if (dmq_reattach_shm_mq(i))
+				{
 					nowait = true;
+				}
 				else
-					mtm_log(ERROR, "[DMQ] dmq_pop: failed to reattach");
+				{
+					*sender_id = i;
+					return false;
+				}
+				// mtm_log(ERROR, "[DMQ] dmq_pop: failed to reattach");
 			}
 		}
 

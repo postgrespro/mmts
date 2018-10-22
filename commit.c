@@ -180,31 +180,64 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 
 	while (participantsMask != 0)
 	{
+		bool ret;
 		DmqSenderId sender_id;
 		StringInfoData buffer;
 		MtmArbiterMessage *msg;
 
-		dmq_pop(&sender_id, &buffer, participantsMask);
-		msg = (MtmArbiterMessage *) buffer.data;
+		ret = dmq_pop(&sender_id, &buffer, participantsMask);
 
-		Assert(msg->node == sender_to_node[sender_id]);
-		Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
-		Assert(msg->dxid == x->xid);
-		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
-
-		mtm_log(MtmTxTrace,
-			"GatherPrepares: got '%s' for %s from node%d",
-			msg->code == MSG_PREPARED ? "ok" : "failed",
-			msg->gid, sender_to_node[sender_id]);
-
-		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
-
-		if (msg->code == MSG_ABORTED)
+		if (ret)
 		{
-			prepared = false;
-			*failed_at = msg->node;
+			msg = (MtmArbiterMessage *) buffer.data;
+
+			Assert(msg->node == sender_to_node[sender_id]);
+			Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
+			Assert(msg->dxid == x->xid);
+			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
+
+			mtm_log(MtmTxTrace,
+				"GatherPrepares: got '%s' for tx" XID_FMT " from node%d",
+				msg->code == MSG_PREPARED ? "ok" : "failed",
+				x->xid, sender_to_node[sender_id]);
+
+			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+
+			if (msg->code == MSG_ABORTED)
+			{
+				prepared = false;
+				*failed_at = msg->node;
+			}
+		}
+		else
+		{
+			/*
+			 * If queue is detached then the neignbour node is probably
+			 * disconnected. Let's wait when it became disabled as we can
+			 * became offline by this time.
+			 */
+			MtmLock(LW_SHARED);
+			if (BIT_CHECK(Mtm->disabledNodeMask, sender_to_node[sender_id] - 1))
+			{
+				if (Mtm->status != MTM_ONLINE)
+				{
+					elog(ERROR, "our node was disabled during transaction commit");
+				}
+				else
+				{
+					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+					mtm_log(MtmTxTrace,
+						"GatherPrepares: dropping node%d from participants of tx" XID_FMT,
+						sender_to_node[sender_id], x->xid);
+					prepared = false;
+					*failed_at = sender_to_node[sender_id];
+				}
+			}
+			MtmUnlock();
 		}
 	}
+
+	// XXX: assert that majority has responded
 
 	return prepared;
 }
@@ -216,22 +249,53 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask)
 
 	while (participantsMask != 0)
 	{
+		bool ret;
 		DmqSenderId sender_id;
 		StringInfoData buffer;
 		MtmArbiterMessage *msg;
 
-		dmq_pop(&sender_id, &buffer, participantsMask);
-		msg = (MtmArbiterMessage *) buffer.data;
+		ret = dmq_pop(&sender_id, &buffer, participantsMask);
 
-		Assert(msg->node == sender_to_node[sender_id]);
-		Assert(msg->code == MSG_PRECOMMITTED);
-		Assert(msg->dxid == x->xid);
-		Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
+		if (ret)
+		{
+			msg = (MtmArbiterMessage *) buffer.data;
 
-		mtm_log(MtmTxTrace,
-			"GatherPrecommits: got 'ok' for %s from node%d",
-			msg->gid, sender_to_node[sender_id]);
+			Assert(msg->node == sender_to_node[sender_id]);
+			Assert(msg->code == MSG_PRECOMMITTED);
+			Assert(msg->dxid == x->xid);
+			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
 
-		BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+			mtm_log(MtmTxTrace,
+				"GatherPrecommits: got 'ok' for tx" XID_FMT " from node%d",
+				x->xid, sender_to_node[sender_id]);
+
+			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+		}
+		else
+		{
+			/*
+			 * If queue is detached then the neignbour node is probably
+			 * disconnected. Let's wait when it became disabled as we can
+			 * became offline by this time.
+			 */
+			MtmLock(LW_SHARED);
+			if (BIT_CHECK(Mtm->disabledNodeMask, sender_to_node[sender_id] - 1))
+			{
+				if (Mtm->status != MTM_ONLINE)
+				{
+					elog(ERROR, "our node was disabled during transaction commit");
+				}
+				else
+				{
+					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+					mtm_log(MtmTxTrace,
+						"GatherPrecommit: dropping node%d from participants of tx" XID_FMT,
+						sender_to_node[sender_id], x->xid);
+				}
+			}
+			MtmUnlock();
+		}
 	}
+
+	// XXX: assert that majority has responded
 }

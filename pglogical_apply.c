@@ -786,7 +786,7 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, msg.dxid),
 					&msg, sizeof(MtmArbiterMessage));
 
-	elog(LOG, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
+	// elog(LOG, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
 }
 
 static void
