@@ -989,7 +989,7 @@ check_status_requests(void)
 			Assert(false);
 
 		mtm_log(StatusRequest, "responding to %d with %s -> %s",
-				sender_node_id, msg->gid, MtmTxStateMnem[msg->state]);
+				sender_node_id, msg->gid, MtmTxStateMnem(msg->state));
 
 		pfree(state_3pc);
 
@@ -999,8 +999,11 @@ check_status_requests(void)
 		dest_id = Mtm->nodes[sender_node_id - 1].destination_id;
 
 		// XXX: and define channels as strings too
-		dmq_push_buffer(dest_id, "txresp", &msg,
+		dmq_push_buffer(dest_id, "txresp", msg,
 						sizeof(MtmArbiterMessage));
+
+		mtm_log(StatusRequest, "responded to %d with %s -> %s, code = %d",
+				sender_node_id, msg->gid, MtmTxStateMnem(msg->state), msg->code);
 	}
 }
 

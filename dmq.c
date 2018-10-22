@@ -1350,7 +1350,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			*sender_id = i;
 
 			mtm_log(DmqTraceIncoming,
-					"[DMQ] dmq_pop: got message %s from %s",
+					"[DMQ] dmq_pop_nb: got message %s from %s",
 					(char *) data, dmq_local.inhandles[i].name);
 			return true;
 		}

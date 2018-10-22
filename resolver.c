@@ -123,7 +123,7 @@ ResolverInit(void)
 
 	/* Set up common data for all our workers */
 	memset(&worker, 0, sizeof(worker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS;
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 5;
 	worker.bgw_notify_pid = 0;
@@ -170,6 +170,30 @@ ResolveAllTransactions(void)
 	resolver_state->task_queue[resolver_state->tasks++] = task;
 
 	LWLockRelease(resolver_state->lock);
+}
+
+char *
+MtmTxStateMnem(MtmTxState state)
+{
+	switch (state)
+	{
+		case MtmTxUnknown:
+			return "MtmTxUnknown";
+		case MtmTxNotFound:
+			return "MtmTxNotFound";
+		case MtmTxInProgress:
+			return "MtmTxInProgress";
+		case MtmTxPrepared:
+			return "MtmTxPrepared";
+		case MtmTxPreCommited:
+			return "MtmTxPreCommited";
+		case MtmTxPreAborted:
+			return "MtmTxPreAborted";
+		case MtmTxCommited:
+			return "MtmTxCommited";
+		case MtmTxAborted:
+			return "MtmTxAborted";
+	}
 }
 
 /*****************************************************************************
@@ -222,11 +246,14 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	Assert(tx->state[MtmNodeId-1] == MtmTxPrepared ||
 		   tx->state[MtmNodeId-1] == MtmTxPreCommited ||
 		   tx->state[MtmNodeId-1] == MtmTxPreAborted);
+	Assert(node_id != MtmNodeId);
 
 	mtm_log(ResolverTraceTxMsg,
 			"[RESOLVER] tx %s (%s) got state %s from node %d",
-			gid, MtmTxStateMnem[tx->state[MtmNodeId-1]], MtmTxStateMnem[state],
+			gid, MtmTxStateMnem(tx->state[MtmNodeId-1]), MtmTxStateMnem(state),
 			node_id);
+
+	tx->state[node_id-1] = state;
 
 	if (exists(tx, MtmTxAborted | MtmTxNotFound))
 	{
@@ -376,7 +403,7 @@ handle_responses(void)
 	DmqSenderId sender_id;
 	StringInfoData buffer;
 
-	while(dmq_pop_nb(&sender_id, &buffer, ~Mtm->disabledNodeMask))
+	while(dmq_pop_nb(&sender_id, &buffer, ~SELF_CONNECTIVITY_MASK))
 	{
 		int node_id;
 		MtmArbiterMessage *msg;
@@ -401,6 +428,7 @@ ResolverMain(void)
 	/* init this worker */
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
 	/* init map with current unresolved transactions */
 	ctl.keysize = GIDSIZE;

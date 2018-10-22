@@ -81,7 +81,7 @@ static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
 
 static bool process_remote_begin(StringInfo s, GlobalTransactionId *gtid);
 static bool process_remote_message(StringInfo s);
-static void process_remote_commit(StringInfo s);
+static void process_remote_commit(StringInfo s, GlobalTransactionId *current_gtid);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
@@ -790,7 +790,7 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 }
 
 static void
-process_remote_commit(StringInfo in)
+process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 {
 	uint8 		event;
 	csn_t       csn;
@@ -888,6 +888,9 @@ process_remote_commit(StringInfo in)
 			}
 
 			MtmEndSession(origin_node, true);
+
+			current_gtid->node = 0;
+			current_gtid->xid = InvalidTransactionId;
 
 			// MTM_LOG2("%d: PGLOGICAL_PREPARE %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			// if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_IN_PROGRESS) == TRANSACTION_STATUS_ABORTED) { 
@@ -1381,7 +1384,7 @@ void MtmExecutor(void* work, size_t size)
                 /* COMMIT */
             case 'C':
   			    close_rel(rel);
-                process_remote_commit(&s);
+				process_remote_commit(&s, &current_gtid);
 				inside_transaction = false;
                 break;
                 /* INSERT */
@@ -1473,10 +1476,16 @@ void MtmExecutor(void* work, size_t size)
 		MTM_LOG1("%d: REMOTE begin abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
 		MtmEndSession(MtmReplicationNodeId, false);
 
-		MtmDeadlockDetectorRemoveXact(GetCurrentTransactionIdIfAny());
-        AbortCurrentTransaction();
-		if (Mtm->status != MTM_RECOVERY)
-			mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+		/* handle only prepare errors here */
+		if (TransactionIdIsValid(current_gtid.xid))
+		{
+			MtmDeadlockDetectorRemoveXact(GetCurrentTransactionIdIfAny());
+			if (Mtm->status != MTM_RECOVERY)
+				mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+		}
+
+		AbortCurrentTransaction();
+
 		// Assert(!MtmTransIsActive());
 		MTM_LOG2("%d: REMOTE end abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
     }

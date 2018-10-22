@@ -214,18 +214,6 @@ char const* const MtmTxnStatusMnem[] =
 	"Unknown"
 };
 
-char const* const MtmTxStateMnem[] =
-{
-	"MtmTxUnknown",
-	"MtmTxNotFound",
-	"MtmTxInProgress",
-	"MtmTxPrepared",
-	"MtmTxPreCommited",
-	"MtmTxPreAborted",
-	"MtmTxCommited",
-	"MtmTxAborted"
-};
-
 bool  MtmDoReplication;
 char* MtmDatabaseName;
 char* MtmDatabaseUser;

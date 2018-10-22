@@ -116,17 +116,15 @@ typedef char pgid_t[GIDSIZE];
 
 typedef enum
 {
-	MtmTxUnknown		= (0<<0),
-	MtmTxNotFound		= (0<<1),
-	MtmTxInProgress		= (0<<2),
-	MtmTxPrepared		= (0<<3),
-	MtmTxPreCommited	= (0<<4),
-	MtmTxPreAborted		= (0<<5),
-	MtmTxCommited		= (0<<6),
-	MtmTxAborted		= (0<<7)
+	MtmTxUnknown		= (1<<0),
+	MtmTxNotFound		= (1<<1),
+	MtmTxInProgress		= (1<<2),
+	MtmTxPrepared		= (1<<3),
+	MtmTxPreCommited	= (1<<4),
+	MtmTxPreAborted		= (1<<5),
+	MtmTxCommited		= (1<<6),
+	MtmTxAborted		= (1<<7)
 } MtmTxState;
-
-
 
 typedef int MtmTxStateMask;
 
@@ -408,7 +406,6 @@ typedef struct {
 
 extern char const* const MtmNodeStatusMnem[];
 extern char const* const MtmTxnStatusMnem[];
-extern char const* const MtmTxStateMnem[];
 extern char const* const MtmMessageKindMnem[];
 
 extern MtmState* Mtm;
@@ -458,6 +455,7 @@ extern void ResolverMain(void);
 extern void ResolverInit(void);
 extern void ResolveTransactionsForNode(int node_id);
 extern void ResolveAllTransactions(void);
+extern char *MtmTxStateMnem(MtmTxState state);
 
 extern void MtmFollowerHandleAbort(void);
 
