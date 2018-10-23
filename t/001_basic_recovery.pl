@@ -18,7 +18,6 @@ my $psql_out;
 ###############################################################################
 
 $cluster->psql(0, 'postgres', "
-	create extension multimaster;
 	create table if not exists t(k int primary key, v int);
 	insert into t values(1, 10);");
 $cluster->psql(1, 'postgres', "select v from t where k=1;", stdout => \$psql_out);

@@ -40,6 +40,7 @@
 #include "replication/origin.h"
 #include "utils/portal.h"
 #include "tcop/pquery.h"
+#include "tcop/tcopprot.h"
 
 #ifdef WITH_RSOCKET
 #include "libpq-int.h"
@@ -55,7 +56,6 @@
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
 
 /* Signal handling */
-static volatile sig_atomic_t got_sigterm = false;
 static volatile sig_atomic_t got_sighup = false;
 
 /* GUC variables */
@@ -74,16 +74,6 @@ static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
 void pglogical_receiver_main(Datum main_arg);
-
-static void
-receiver_raw_sigterm(SIGNAL_ARGS)
-{
-	int save_errno = errno;
-	got_sigterm = true;
-	if (MyProc)
-		SetLatch(&MyProc->procLatch);
-	errno = save_errno;
-}
 
 static void
 receiver_raw_sighup(SIGNAL_ARGS)
@@ -258,7 +248,8 @@ pglogical_receiver_main(Datum main_arg)
 
 	/* Register functions for SIGTERM/SIGHUP management */
 	pqsignal(SIGHUP, receiver_raw_sighup);
-	pqsignal(SIGTERM, receiver_raw_sigterm);
+	// pqsignal(SIGTERM, receiver_raw_sigterm);
+	pqsignal(SIGTERM, die);
 
 	MtmCreateSpillDirectory(nodeId);
 
@@ -276,6 +267,8 @@ pglogical_receiver_main(Datum main_arg)
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
+
+	MtmWaitForExtensionCreation();
 
 	BgwPoolStart(&Mtm->nodes[nodeId-1].pool, worker_proc);
 
@@ -305,7 +298,7 @@ pglogical_receiver_main(Datum main_arg)
 	 * In case of errors we will try to reestablish connection.
 	 * Also reconnet is forced when node is switch to recovery mode
 	 */
-	while (!got_sigterm)
+	for(;;)
 	{
 		int	 count;
 		ConnStatusType status;
@@ -317,7 +310,7 @@ pglogical_receiver_main(Datum main_arg)
 		 * Druing recovery we need to open only one replication slot from which node should receive all transactions.
 		 * Slots at other nodes should be removed
 		 */
-		mode = MtmGetReplicationMode(nodeId, &got_sigterm);
+		mode = MtmGetReplicationMode(nodeId);
 		MTM_LOG1("[STATE] Node %i: wal_receiver starts in %s mode", nodeId, MtmReplicationModeName[mode]);
 
 		// if (mode == REPLMODE_RECOVERY)
@@ -419,7 +412,7 @@ pglogical_receiver_main(Datum main_arg)
 
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_START);
 
-		while (!got_sigterm)
+		for(;;)
 		{
 			int rc, hdr_len;
 			/* Wait necessary amount of time */
@@ -435,13 +428,6 @@ pglogical_receiver_main(Datum main_arg)
 				ProcessConfigFile(PGC_SIGHUP);
 				got_sighup = false;
 				ereport(LOG, (MTM_ERRMSG("%s: processed SIGHUP", worker_proc)));
-			}
-
-			if (got_sigterm)
-			{
-				/* Simply exit */
-				ereport(LOG, (MTM_ERRMSG("%s: processed SIGTERM", worker_proc)));
-				proc_exit(0);
 			}
 
 			/* Emergency bailout if postmaster has died */
@@ -606,12 +592,12 @@ pglogical_receiver_main(Datum main_arg)
 								} else {
 									if (MtmPreserveCommitOrder && buf.used == msg_len) {
 										/* Perform commit-prepared and rollback-prepared requested directly in receiver */
-										timestamp_t stop, start = MtmGetSystemTime();
+										// timestamp_t stop, start = MtmGetSystemTime();
 										MtmExecutor(buf.data, buf.used);
-										stop = MtmGetSystemTime();
-										if (stop - start > USECS_PER_SEC) {
-											elog(WARNING, "Commit of prepared transaction takes %lld usec, flags=%x", stop - start, stmt[1]);
-										}
+										// stop = MtmGetSystemTime();
+										// if (stop - start > USECS_PER_SEC) {
+										// 	elog(WARNING, "Commit of prepared transaction takes %lld usec, flags=%x", stop - start, stmt[1]);
+										// }
 									} else {
 										/* all other commits should be applied in place */
 										// Assert(stmt[1] == PGLOGICAL_PREPARE || stmt[1] == PGLOGICAL_COMMIT || stmt[1] == PGLOGICAL_PRECOMMIT_PREPARED);

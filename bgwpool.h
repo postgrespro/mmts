@@ -8,7 +8,7 @@
 
 typedef void(*BgwPoolExecutor)(void* work, size_t size);
 
-typedef ulong64 timestamp_t;
+typedef long timestamp_t;
 
 
 #define MAX_DBNAME_LEN 30

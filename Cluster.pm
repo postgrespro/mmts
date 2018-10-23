@@ -120,13 +120,12 @@ sub configure
 			listen_addresses = '$host'
 			unix_socket_directories = '$unix_sock_dir'
 			port = $pgport
-			max_prepared_transactions = 10
+			max_prepared_transactions = 30
 			max_connections = 10
 			max_worker_processes = 100
 			wal_level = logical
 			max_wal_senders = 6
 			wal_sender_timeout = 0
-			default_transaction_isolation = 'repeatable read'
 			max_replication_slots = 6
 			shared_preload_libraries = 'multimaster'
 			shared_buffers = 16MB
@@ -160,6 +159,7 @@ sub start
 	foreach my $node (@$nodes)
 	{
 		$node->start();
+		$node->safe_psql('postgres', "create extension multimaster;");
 		note( "Starting node with connstr 'dbname=postgres port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
 	}
 }
@@ -230,7 +230,7 @@ sub stop
 		$node->stop($mode);
 	}
 
-	$self->dumplogs();
+	# $self->dumplogs();
 
 	return $ok;
 }

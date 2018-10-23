@@ -53,7 +53,7 @@ do
 SQL
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
     createdb -p $port
-    psql -p $port -c 'create extension multimaster'
+    # psql -p $port -c 'create extension multimaster'
     pg_ctl -w -D tmp_check/node$i -l node$i.log stop
 done
 
@@ -92,13 +92,16 @@ SQL
         host replication all 0.0.0.0/0 trust
 CONF
 
+    pg_ctl -w -D tmp_check/node$i -l node$i.log start
+    psql -p $port -c 'create extension multimaster'
+
 done
 
-for ((i=1;i<=n_nodes;i++))
-do
-    # cp pg_hba.conf tmp_check/node$i
-    pg_ctl -w -D tmp_check/node$i -l node$i.log start
-done
+# for ((i=1;i<=n_nodes;i++))
+# do
+#     # cp pg_hba.conf tmp_check/node$i
+#     pg_ctl -w -D tmp_check/node$i -l node$i.log start
+# done
 
 # sleep 10
 # psql < regress.sql

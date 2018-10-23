@@ -428,7 +428,12 @@ ResolverMain(void)
 	/* init this worker */
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+
+	MtmBackgroundWorker = true;
+
 	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
+
+	MtmWaitForExtensionCreation();
 
 	/* init map with current unresolved transactions */
 	ctl.keysize = GIDSIZE;

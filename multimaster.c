@@ -435,20 +435,26 @@ timestamp_t MtmGetCurrentTime(void)
 	return MtmGetSystemTime() + Mtm->timeShift;
 }
 
-void MtmSleep(timestamp_t interval)
+void MtmSleep(timestamp_t usec)
 {
-	timestamp_t waketm = MtmGetCurrentTime() + interval;
+	timestamp_t waketm = MtmGetCurrentTime() + usec;
+
 	for (;;)
 	{
+		int rc;
 		timestamp_t sleepfor = waketm - MtmGetCurrentTime();
 
-		pg_usleep(sleepfor);
-		if (MtmGetCurrentTime() < waketm)
-		{
-			/* Assert(errno == EINTR); */
-			continue;
-		}
-		break;
+		CHECK_FOR_INTERRUPTS();
+
+		rc = WaitLatch(MyLatch,
+						WL_TIMEOUT | WL_POSTMASTER_DEATH,
+						sleepfor/1000.0, WAIT_EVENT_BGWORKER_STARTUP);
+
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
+
+		if (MtmGetCurrentTime() > waketm)
+			break;
 	}
 }
 
@@ -1177,10 +1183,10 @@ Mtm2PCVoting(MtmCurrentTrans* x, MtmTransState* ts)
 		MtmLock(LW_EXCLUSIVE);
 		if (MtmMin2PCTimeout != 0 && now > deadline) {
 			if (ts->isPrepared) {
-				MTM_ELOG(LOG, "Distributed transaction %s (%llu) is not committed in %lld msec", ts->gid, (long64)ts->xid, USEC_TO_MSEC(now - start));
+				// MTM_ELOG(LOG, "Distributed transaction %s (%llu) is not committed in %lld msec", ts->gid, (long64)ts->xid, USEC_TO_MSEC(now - start));
 			} else {
-				MTM_ELOG(WARNING, "Commit of distributed transaction %s (%llu) is canceled because of %lld msec timeout expiration",
-					 ts->gid, (long64)ts->xid, USEC_TO_MSEC(timeout));
+				// MTM_ELOG(WARNING, "Commit of distributed transaction %s (%llu) is canceled because of %lld msec timeout expiration",
+					//  ts->gid, (long64)ts->xid, USEC_TO_MSEC(timeout));
 				MtmAbortTransaction(ts);
 				break;
 			}
@@ -2398,6 +2404,7 @@ static void MtmInitialize()
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmState) + sizeof(MtmNodeInfo)*(MtmMaxNodes-1));
+		Mtm->extension_created = false;
 		Mtm->status = MTM_DISABLED; //MTM_INITIALIZATION;
 		Mtm->recoverySlot = 0;
 		Mtm->locks = GetNamedLWLockTranche(MULTIMASTER_NAME);
@@ -2481,19 +2488,6 @@ static void MtmInitialize()
 
 	MtmCheckControlFile();
 
-	/* Start dmq senders */
-	for (i = 0; i < MtmNodes; i++)
-	{
-		int destination_id;
-
-		if (i + 1 == MtmNodeId)
-			continue;
-		destination_id = dmq_destination_add(MtmConnections[i].connStr,
-											 psprintf("node%d", MtmNodeId),
-											 psprintf("node%d", i + 1),
-											 MtmHeartbeatSendTimeout);
-		Mtm->nodes[i].destination_id = destination_id;
-	}
 }
 
 static void
@@ -3394,7 +3388,7 @@ void MtmFinishPreparedTransaction(MtmTransState* ts, bool commit)
  * During recovery we need to open only one replication slot from which node should receive all transactions.
  * Slots at other nodes should be removed.
  */
-MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shutdown)
+MtmReplicationMode MtmGetReplicationMode(int nodeId)
 {
 	MtmLock(LW_EXCLUSIVE);
 
@@ -3410,8 +3404,6 @@ MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shut
 			BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, MtmNodeId - 1))
 	{
 		MtmUnlock();
-		if (*shutdown)
-			return REPLMODE_EXIT;
 		MtmSleep(STATUS_POLL_DELAY);
 		MtmLock(LW_EXCLUSIVE);
 	}
@@ -3435,8 +3427,6 @@ MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shut
 		while (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
 		{
 			MtmUnlock();
-			if (*shutdown)
-				return REPLMODE_EXIT;
 			MtmSleep(STATUS_POLL_DELAY);
 			MtmLock(LW_EXCLUSIVE);
 		}
@@ -4267,7 +4257,8 @@ typedef struct
 	int		  nodeId;
 } MtmGetClusterInfoCtx;
 
-static void erase_option_from_connstr(const char *option, char *connstr)
+void
+erase_option_from_connstr(const char *option, char *connstr)
 {
 	char *needle = psprintf("%s=", option);
 	while (1) {
@@ -5771,4 +5762,23 @@ void
 MtmToggleDML(void)
 {
 	MtmTx.containsDML = true;
+}
+
+
+void
+MtmWaitForExtensionCreation(void)
+{
+	for (;;)
+	{
+		RangeVar   *rv;
+		Oid			rel_oid;
+		int			rc;
+
+		StartTransactionCommand();
+		rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "local_tables", -1);
+		rel_oid = RangeVarGetRelid(rv, NoLock, true);
+		CommitTransactionCommand();
+
+		MtmSleep(USECS_PER_SEC);
+	}
 }

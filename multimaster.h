@@ -316,6 +316,7 @@ typedef struct {
 
 typedef struct
 {
+	bool extension_created;
 	MtmNodeStatus status;              /* Status of this node */
 	/* A human-readable description of why the current status was set */
 	char *statusReason;
@@ -451,6 +452,9 @@ extern void MtmGenerateGid(char *gid, TransactionId xid);
 extern int  MtmGidParseNodeId(const char* gid);
 extern TransactionId MtmGidParseXid(const char* gid);
 
+extern void MtmWaitForExtensionCreation(void);
+extern void erase_option_from_connstr(const char *option, char *connstr);
+
 extern void ResolverMain(void);
 extern void ResolverInit(void);
 extern void ResolveTransactionsForNode(int node_id);
@@ -468,7 +472,7 @@ extern csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, no
 extern csn_t MtmAssignCSN(void);
 extern csn_t MtmSyncClock(csn_t csn);
 extern void  MtmJoinTransaction(GlobalTransactionId* gtid, csn_t snapshot, nodemask_t participantsMask);
-extern MtmReplicationMode MtmGetReplicationMode(int nodeId, sig_atomic_t volatile* shutdown);
+extern MtmReplicationMode MtmGetReplicationMode(int nodeId);
 extern void  MtmExecutor(void* work, size_t size);
 extern void  MtmSend2PCMessage(MtmTransState* ts, MtmMessageCode cmd);
 extern void  MtmSendMessage(MtmArbiterMessage* msg);

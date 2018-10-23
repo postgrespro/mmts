@@ -56,8 +56,7 @@ is( (($hash0 == $hash1) and ($hash1 == $hash2) and ($oldhash == $hash0)) , 1, "C
 # Check start after all nodes were disconnected
 ########################################################
 
-$cluster->psql(0, 'postgres', "create extension multimaster;
-	create table if not exists t(k int primary key, v int);");
+$cluster->psql(0, 'postgres', "create table if not exists t(k int primary key, v int);");
 
 $cluster->psql(0, 'postgres', "insert into t values(1, 10);");
 $cluster->psql(1, 'postgres', "insert into t values(2, 20);");

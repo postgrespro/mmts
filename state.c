@@ -1023,6 +1023,34 @@ MtmMonitor(Datum arg)
 	/* Connect to a database */
 	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
+	/* Check extension creation */
+	MtmWaitForExtensionCreation();
+
+	/* Start dmq senders */
+	for (i = 0; i < MtmNodes; i++)
+	{
+		char   *connstr_with_appname;
+		int		destination_id;
+
+		if (i + 1 == MtmNodeId)
+			continue;
+
+		connstr_with_appname = psprintf("%s application_name=%s",
+										Mtm->nodes[i].con.connStr,
+										MULTIMASTER_BROADCAST_SERVICE);
+
+		/* XXX: temp backward compatibility */
+		erase_option_from_connstr("arbiter_port", connstr_with_appname);
+
+		destination_id = dmq_destination_add(connstr_with_appname,
+											 psprintf("node%d", MtmNodeId),
+											 psprintf("node%d", i + 1),
+											 MtmHeartbeatSendTimeout);
+
+		Mtm->nodes[i].destination_id = destination_id;
+
+		pfree(connstr_with_appname);
+	}
 
 	// XXX: turn this into a function
 	/* subscribe to status-requests channels from other nodes */

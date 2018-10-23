@@ -15,6 +15,7 @@
 #include "utils/guc.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
+#include "tcop/tcopprot.h"
 
 #include "logger.h"
 
@@ -63,18 +64,19 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 	x->containsDML = false; // will be set by executor hook
 	x->isTransactionBlock = IsTransactionBlock();
 
-	// /* Application name can be changed using PGAPPNAME environment variable */
-	// if (x->isDistributed && Mtm->status != MTM_ONLINE
-	// 	&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
-	// 	&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0)
-	// {
-	// 	/* Reject all user's transactions at offline cluster.
-	// 	 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
-	// 	 */
-	// 	MTM_ELOG(ERROR,
-	// 			"Multimaster node is not online: current status %s",
-	// 			MtmNodeStatusMnem[Mtm->status]);
-	// }
+	/* Application name can be changed using PGAPPNAME environment variable */
+	if (x->isDistributed && Mtm->status != MTM_ONLINE
+		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
+		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0
+		&& debug_query_string && pg_strcasecmp(debug_query_string, "create extension multimaster;") != 0)
+	{
+		/* Reject all user's transactions at offline cluster.
+		 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
+		 */
+		MTM_ELOG(ERROR,
+				"Multimaster node is not online: current status %s",
+				MtmNodeStatusMnem[Mtm->status]);
+	}
 }
 
 static void
@@ -104,7 +106,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
 
-	if (!x->isDistributed || !x->containsDML)
+	if (!x->isDistributed || !x->containsDML || !Mtm->extension_created)
 		return false;
 
 	if (!DmqSubscribed)
