@@ -17,6 +17,10 @@
  * function that will switch fe/be protocol to a COPY mode and enters endless
  * receiving loop.
  *
+ * XXX: needs better PQerror reporting logic -- perhaps once per given Idle
+ * connection.
+ *
+ * XXX: is there max size for a connstr?
  *
  * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -457,6 +461,10 @@ dmq_sender_main(Datum main_arg)
 
 		/*
 		 * Generate timeout or socket events.
+		 *
+		 *
+		 * XXX: here we expect that whole cyle takes less then 250-100 ms.
+		 * Otherwise we can stuck with timer_event forever.
 		 */
 		now_millisec = dmq_now();
 		if (now_millisec - prev_timer_at > 250)
@@ -466,7 +474,7 @@ dmq_sender_main(Datum main_arg)
 		}
 		else
 		{
-			nevents = WaitEventSetWait(set, wait ? 250 : 0, &event,
+			nevents = WaitEventSetWait(set, wait ? 100 : 0, &event,
 									   1, PG_WAIT_EXTENSION);
 		}
 
@@ -506,8 +514,9 @@ dmq_sender_main(Datum main_arg)
 											NULL, (void *) conn_id);
 
 						mtm_log(DmqStateIntermediate,
-								"[DMQ] switching %s from Idle to Connecting",
-								conns[conn_id].receiver_name);
+								"[DMQ] switching %s from Idle to Connecting on '%s'",
+								conns[conn_id].receiver_name,
+								conns[conn_id].connstr);
 					}
 				}
 				/* Heatbeat */
@@ -547,9 +556,24 @@ dmq_sender_main(Datum main_arg)
 				{
 					PostgresPollingStatusType status = PQconnectPoll(conns[conn_id].pgconn);
 
+					mtm_log(DmqStateIntermediate,
+							"[DMQ] Connecting: PostgresPollingStatusType = %d on %s",
+							status,
+							conns[conn_id].receiver_name);
+
 					if (status == PGRES_POLLING_READING)
 					{
 						ModifyWaitEvent(set, event.pos, WL_SOCKET_READABLE, NULL);
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] Connecting: modify wait event to WL_SOCKET_READABLE on %s",
+								conns[conn_id].receiver_name);
+					}
+					else if (status == PGRES_POLLING_WRITING)
+					{
+						ModifyWaitEvent(set, event.pos, WL_SOCKET_WRITEABLE, NULL);
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] Connecting: modify wait event to WL_SOCKET_WRITEABLE on %s",
+								conns[conn_id].receiver_name);
 					}
 					else if (status == PGRES_POLLING_OK)
 					{
@@ -577,7 +601,7 @@ dmq_sender_main(Datum main_arg)
 								PQerrorMessage(conns[conn_id].pgconn));
 					}
 					else
-						Assert(status == PGRES_POLLING_WRITING);
+						Assert(false);
 
 					break;
 				}
