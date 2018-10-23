@@ -59,6 +59,7 @@
 #include "pglogical_relid_map.h"
 #include "spill.h"
 #include "state.h"
+#include "logger.h"
 
 typedef struct TupleData
 {
@@ -835,6 +836,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			} else {
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 			}
+			mtm_log(MtmTxFinish, "TXFINISH: %s precommittted", gid);
 
 			// MtmPrecommitTransaction(gid);
 
@@ -876,6 +878,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 
 			/* PREPARE itself */
 			res = PrepareTransactionBlock(gid);
+			mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 			CommitTransactionCommand();
 
 			MtmDeadlockDetectorRemoveXact(xid);
@@ -944,6 +947,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			MtmSetCurrentTransactionGID(gid, origin_node);
 			TXFINISH("%s COMMIT, PGLOGICAL_COMMIT_PREPARED csn=%lld", gid, csn);
 			FinishPreparedTransaction(gid, true, false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			MTM_LOG2("Distributed transaction %s is committed", gid);
 			CommitTransactionCommand();
 			Assert(!MtmTransIsActive());
@@ -959,6 +963,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, true);
 			CommitTransactionCommand();
+			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 			break;
 		}
 		default:

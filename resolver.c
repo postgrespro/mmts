@@ -255,10 +255,12 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 
 	tx->state[node_id-1] = state;
 
+	/* XXX: missing ok because we call this concurrently with logrep recovery */
+
 	if (exists(tx, MtmTxAborted | MtmTxNotFound))
 	{
-		FinishPreparedTransaction(gid, false, false);
-		mtm_log(ResolverTxFinish, "%s aborted", gid);
+		FinishPreparedTransaction(gid, false, true);
+		mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -266,8 +268,8 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 
 	if (exists(tx, MtmTxCommited))
 	{
-		FinishPreparedTransaction(gid, true, false);
-		mtm_log(ResolverTxFinish, "%s committed", gid);
+		FinishPreparedTransaction(gid, true, true);
+		mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -279,8 +281,8 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		// XXX: do that through PreCommit
 		// SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 		// tx->state[MtmNodeId-1] = MtmTxPreCommited;
-		FinishPreparedTransaction(gid, true, false);
-		mtm_log(ResolverTxFinish, "%s committed", gid);
+		FinishPreparedTransaction(gid, true, true);
+		mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
@@ -291,8 +293,8 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		// XXX: do that through PreAbort
 		// SetPreparedTransactionState(gid, MULTIMASTER_PREABORTED);
 		// tx->state[MtmNodeId-1] = MtmTxPreAborted;
-		FinishPreparedTransaction(gid, false, false);
-		mtm_log(ResolverTxFinish, "%s aborted", gid);
+		FinishPreparedTransaction(gid, false, true);
+		mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;

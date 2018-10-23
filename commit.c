@@ -106,6 +106,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
 
+	/* XXX: avoid Mtm->extension_created */
 	if (!x->isDistributed || !x->containsDML || !Mtm->extension_created)
 		return false;
 
@@ -134,6 +135,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	xid = GetCurrentTransactionId();
 	sprintf(stream, "xid" XID_FMT, xid);
 	dmq_stream_subscribe(stream);
+	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
 	x->xid = xid;
 
 	MtmGenerateGid(gid, xid);
@@ -144,7 +146,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)
 	{
-		mtm_log(MtmTxFinish, "%s prepared", gid);
+		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 		mtm_log(WARNING, "Failed to prepare transaction %s", gid);
 		return false;
 	}
@@ -155,20 +157,21 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	{
 		dmq_stream_unsubscribe(stream);
 		FinishPreparedTransaction(gid, false, false);
-		mtm_log(MtmTxFinish, "%s aborted", gid);
+		mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 		mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
 						gid, failed_at);
 	}
 
 	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
-	mtm_log(MtmTxFinish, "%s precommittted", gid);
+	mtm_log(MtmTxFinish, "TXFINISH: %s precommittted", gid);
 	GatherPrecommits(x, participantsMask);
 
 	StartTransactionCommand();
 	FinishPreparedTransaction(gid, true, false);
-	mtm_log(MtmTxFinish, "%s committted", gid);
+	mtm_log(MtmTxFinish, "TXFINISH: %s committted", gid);
 
 	dmq_stream_unsubscribe(stream);
+	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
 
 	return true;
 }
