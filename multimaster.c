@@ -5772,12 +5772,17 @@ MtmWaitForExtensionCreation(void)
 	{
 		RangeVar   *rv;
 		Oid			rel_oid;
-		int			rc;
 
 		StartTransactionCommand();
 		rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "local_tables", -1);
 		rel_oid = RangeVarGetRelid(rv, NoLock, true);
 		CommitTransactionCommand();
+
+		if (OidIsValid(rel_oid))
+		{
+			Mtm->extension_created = true;
+			break;
+		}
 
 		MtmSleep(USECS_PER_SEC);
 	}
