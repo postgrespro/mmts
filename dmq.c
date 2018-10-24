@@ -94,18 +94,23 @@ typedef struct
 struct DmqSharedState
 {
 	LWLock		   *lock;
+
+	/* sender stuff */
+	pid_t			sender_pid;
 	dsm_handle	    out_dsm;
 	DmqDestination  destinations[DMQ_MAX_DESTINATIONS];
 
+	/* receivers stuff */
 	HTAB		   *subscriptions;
+	int				n_receivers;
+	struct
+	{
+		char		name[DMQ_NAME_MAXLEN];
+		dsm_handle	dsm_h;
+		int			procno;
+		bool		active;
+	} receivers[DMQ_MAX_RECEIVERS];
 
-	// XXX: change to nested struct
-	char			receiver[DMQ_MAX_RECEIVERS][DMQ_NAME_MAXLEN];
-	dsm_handle		receiver_dsm[DMQ_MAX_RECEIVERS];
-	int				receiver_procno[DMQ_MAX_RECEIVERS];
-	int				nreceivers;
-
-	pid_t			sender_pid;
 } *dmq_state;
 
 
@@ -116,7 +121,8 @@ struct
 	int				n_inhandles;
 	struct
 	{
-		shm_mq_handle   *mqh;
+		dsm_segment	   *dsm_seg;
+		shm_mq_handle  *mqh;
 		char			name[DMQ_NAME_MAXLEN];
 		int				mask_pos;
 	} inhandles[DMQ_MAX_RECEIVERS];
@@ -198,11 +204,13 @@ dmq_shmem_startup_hook(void)
 		memset(dmq_state->destinations, '\0', sizeof(DmqDestination)*DMQ_MAX_DESTINATIONS);
 
 		dmq_state->sender_pid = 0;
-		dmq_state->nreceivers = 0;
+		dmq_state->n_receivers = 0;
 		for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 		{
-			dmq_state->receiver[i][0] = '\0';
-			dmq_state->receiver_dsm[i] = DSM_HANDLE_INVALID;
+			dmq_state->receivers[i].name[0] = '\0';
+			dmq_state->receivers[i].dsm_h = DSM_HANDLE_INVALID;
+			dmq_state->receivers[i].procno = -1;
+			dmq_state->receivers[i].active = false;
 		}
 	}
 
@@ -913,8 +921,9 @@ dmq_receiver_at_exit(int status, Datum receiver)
 	char	sender_name[DMQ_NAME_MAXLEN];
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	strncpy(sender_name, dmq_state->receiver[receiver_id], DMQ_NAME_MAXLEN);
-	dmq_state->receiver[receiver_id][0] = '\0';
+	strncpy(sender_name, dmq_state->receivers[receiver_id].name,
+			DMQ_NAME_MAXLEN);
+	dmq_state->receivers[receiver_id].active = false;
 	LWLockRelease(dmq_state->lock);
 
 	if (dmq_receiver_stop_hook)
@@ -937,7 +946,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	shm_mq_handle	  **mq_handles;
 	char			   *sender_name;
 	int					i;
-	int					receiver_id;
+	int					receiver_id = -1;
 	double				last_message_at = dmq_now();
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
@@ -958,17 +967,34 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	/* register ourself in dmq_state */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+
 	/* check for a conflicting receiver_name */
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		if (strcmp(dmq_state->receiver[i], sender_name) == 0)
-			mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
+		if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
+		{
+			if (!dmq_state->receivers[i].active)
+			{
+				receiver_id = i;
+			}
+			else
+				mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
+		}
 	}
-	receiver_id = dmq_state->nreceivers;
-	dmq_state->receiver_dsm[receiver_id] = dsm_segment_handle(seg);
-	strncpy(dmq_state->receiver[receiver_id], sender_name, DMQ_NAME_MAXLEN);
-	dmq_state->nreceivers++;
-	dmq_state->receiver_procno[receiver_id] = MyProc->pgprocno;
+
+	if (receiver_id < 0)
+	{
+		if (dmq_state->n_receivers >= DMQ_MAX_RECEIVERS)
+			mtm_log(ERROR, "[DMQ] maximum number of dmq-receivers reached");
+
+		receiver_id = dmq_state->n_receivers;
+		dmq_state->n_receivers++;
+		strncpy(dmq_state->receivers[receiver_id].name, sender_name, DMQ_NAME_MAXLEN);
+	}
+
+	dmq_state->receivers[receiver_id].dsm_h = dsm_segment_handle(seg);
+	dmq_state->receivers[receiver_id].procno = MyProc->pgprocno;
+	dmq_state->receivers[receiver_id].active = true;
 	LWLockRelease(dmq_state->lock);
 
 	on_shmem_exit(dmq_receiver_at_exit, Int32GetDatum(receiver_id));
@@ -1152,7 +1178,6 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 static bool
 dmq_reattach_shm_mq(int handle_id)
 {
-	dsm_segment	   *seg;
 	shm_toc		   *toc;
 	shm_mq		   *inq;
 	MemoryContext oldctx;
@@ -1166,11 +1191,12 @@ dmq_reattach_shm_mq(int handle_id)
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
 		// XXX: change to hash maybe
-		if (strcmp(dmq_state->receiver[i], dmq_local.inhandles[handle_id].name) == 0)
+		if (strcmp(dmq_state->receivers[i].name, dmq_local.inhandles[handle_id].name) == 0
+			&& dmq_state->receivers[i].active)
 		{
 			receiver_id = i;
-			receiver_procno = dmq_state->receiver_procno[i];
-			receiver_dsm = dmq_state->receiver_dsm[receiver_id];
+			receiver_procno = dmq_state->receivers[i].procno;
+			receiver_dsm = dmq_state->receivers[receiver_id].dsm_h;
 			break;
 		}
 	}
@@ -1197,15 +1223,30 @@ dmq_reattach_shm_mq(int handle_id)
 			dmq_local.inhandles[handle_id].name,
 			receiver_dsm);
 
-	seg = dsm_attach(receiver_dsm);
-	if (seg == NULL)
+	if (dmq_local.inhandles[handle_id].dsm_seg)
+	{
+		if (dmq_local.inhandles[handle_id].mqh)
+		{
+			mtm_log(DmqTraceShmMq, "[DMQ] detach shm_mq_handle %p",
+					dmq_local.inhandles[handle_id].mqh);
+			shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
+		}
+		mtm_log(DmqTraceShmMq, "[DMQ] detach dsm_seg %p",
+				dmq_local.inhandles[handle_id].dsm_seg);
+		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
+	}
+
+	dmq_local.inhandles[handle_id].dsm_seg = dsm_attach(receiver_dsm);
+	if (dmq_local.inhandles[handle_id].dsm_seg == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("unable to map dynamic shared memory segment")));
 
-	dsm_pin_mapping(seg);
+	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 
-	toc = shm_toc_attach(DMQ_MQ_MAGIC, dsm_segment_address(seg));
+
+	toc = shm_toc_attach(DMQ_MQ_MAGIC,
+				dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg));
 	if (toc == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -1213,23 +1254,15 @@ dmq_reattach_shm_mq(int handle_id)
 
 	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
 
-	if (dmq_local.inhandles[handle_id].mqh)
-	{
-		shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
-		mtm_log(DmqTraceShmMq, "[DMQ] re-creating shm_mq handle %p", inq);
-	}
-	else
-	{
-		mtm_log(DmqTraceShmMq, "[DMQ] creating shm_mq handle %p", inq);
-	}
-
 	/* re-create */
-	inq = shm_mq_create(inq, DMQ_MQ_SIZE);
+	mtm_log(DmqTraceShmMq, "[DMQ] creating shm_mq handle %p", inq);
+	inq = shm_mq_create(inq, DMQ_MQ_SIZE); // XXX
 	shm_mq_set_receiver(inq, MyProc);
-	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]);
+	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]); // XXX
 
 	oldctx = MemoryContextSwitchTo(TopMemoryContext);
-	dmq_local.inhandles[handle_id].mqh = shm_mq_attach(inq, seg, NULL);
+	dmq_local.inhandles[handle_id].mqh = shm_mq_attach(inq,
+							dmq_local.inhandles[handle_id].dsm_seg, NULL);
 	MemoryContextSwitchTo(oldctx);
 
 	return true;
