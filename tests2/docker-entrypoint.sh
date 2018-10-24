@@ -57,7 +57,6 @@ if [ "$1" = 'postgres' ]; then
 			max_replication_slots = 10
 			max_wal_senders = 10
 			shared_preload_libraries = 'multimaster'
-			default_transaction_isolation = 'repeatable read'
 			log_line_prefix = '%m [%p]: '
 			wal_writer_delay = 500ms
 			# log_statement = all
@@ -71,7 +70,7 @@ if [ "$1" = 'postgres' ]; then
 
 			multimaster.volkswagen_mode = on
 			multimaster.ignore_tables_without_pk = on
-			partition_backend = 'internal'
+			# partition_backend = 'internal'
 		EOF
 
 		if [ -n "$NODE_ID" ]; then

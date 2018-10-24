@@ -442,9 +442,13 @@ void MtmSleep(timestamp_t usec)
 	for (;;)
 	{
 		int rc;
-		timestamp_t sleepfor = waketm - MtmGetCurrentTime();
+		timestamp_t sleepfor;
 
 		CHECK_FOR_INTERRUPTS();
+
+		sleepfor = waketm - MtmGetCurrentTime();
+		if (sleepfor < 0)
+			break;
 
 		rc = WaitLatch(MyLatch,
 						WL_TIMEOUT | WL_POSTMASTER_DEATH,
@@ -452,9 +456,6 @@ void MtmSleep(timestamp_t usec)
 
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
-
-		if (MtmGetCurrentTime() > waketm)
-			break;
 	}
 }
 

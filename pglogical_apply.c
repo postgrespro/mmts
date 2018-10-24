@@ -441,8 +441,6 @@ create_rel_estate(Relation rel)
 static bool
 process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 {
-	csn_t snapshot;
-	nodemask_t participantsMask = 0;
 	int rc;
 	TransactionId xid;
 
@@ -452,11 +450,11 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	// XXX: get rid of MtmReplicationNodeId
 	MtmReplicationNodeId = gtid->node;
 
-	snapshot = pq_getmsgint64(s);    
-	participantsMask = pq_getmsgint64(s);
+	pq_getmsgint64(s); // XXX: snapshot
+	pq_getmsgint64(s); // XXX: participantsMask
 	Assert(gtid->node > 0);
 
-	MTM_LOG2("REMOTE begin node=%d xid=%llu snapshot=%lld participantsMask=%llx", gtid.node, (long64)gtid.xid, snapshot, participantsMask);
+	// MTM_LOG2("REMOTE begin node=%d xid=%llu snapshot=%lld participantsMask=%llx", gtid.node, (long64)gtid.xid, snapshot, participantsMask);
 	MtmResetTransaction();		
 
     SetCurrentStatementStartTimestamp();     

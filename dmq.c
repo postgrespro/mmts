@@ -418,7 +418,7 @@ dmq_sender_main(Datum main_arg)
 					{
 						// Assert(PQstatus(conns[conn_id].pgconn) != CONNECTION_OK);
 						conns[conn_id].state = Idle;
-						DeleteWaitEvent(set, conns[conn_id].pos);
+						// DeleteWaitEvent(set, conns[conn_id].pos);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] failed to send message to %s: %s",
@@ -429,14 +429,14 @@ dmq_sender_main(Datum main_arg)
 					{
 						mtm_log(DmqTraceOutgoing,
 								"[DMQ] sent message (l=%zu, m=%s) to %s",
-								len, data, conns[conn_id].receiver_name);
+								len, (char *) data, conns[conn_id].receiver_name);
 					}
 				}
 				else
 				{
 					mtm_log(WARNING,
 						 "[DMQ] dropping message (l=%zu, m=%s) to disconnected %s",
-						 len, data, conns[conn_id].receiver_name);
+						 len, (char *) data, conns[conn_id].receiver_name);
 				}
 
 				wait = false;
@@ -463,7 +463,7 @@ dmq_sender_main(Datum main_arg)
 		 * Generate timeout or socket events.
 		 *
 		 *
-		 * XXX: here we expect that whole cyle takes less then 250-100 ms.
+		 * XXX: here we expect that whole cycle takes less then 250-100 ms.
 		 * Otherwise we can stuck with timer_event forever.
 		 */
 		now_millisec = dmq_now();
@@ -526,7 +526,7 @@ dmq_sender_main(Datum main_arg)
 					if (ret < 0)
 					{
 						conns[conn_id].state = Idle;
-						DeleteWaitEvent(set, conns[conn_id].pos);
+						// DeleteWaitEvent(set, conns[conn_id].pos);
 						// Assert(PQstatus(conns[i].pgconn) != CONNECTION_OK);
 
 						mtm_log(DmqStateFinal,
@@ -543,7 +543,7 @@ dmq_sender_main(Datum main_arg)
 		 */
 		else if (nevents > 0 && event.events & WL_SOCKET_MASK)
 		{
-			uint conn_id = (uint) event.user_data;
+			uintptr_t conn_id = (uintptr_t) event.user_data;
 
 			switch (conns[conn_id].state)
 			{
@@ -625,6 +625,7 @@ dmq_sender_main(Datum main_arg)
 					if (!PQisBusy(conns[conn_id].pgconn))
 					{
 						conns[conn_id].state = Active;
+						DeleteWaitEvent(set, event.pos);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] Connected to %s",
@@ -638,7 +639,6 @@ dmq_sender_main(Datum main_arg)
 					if (!PQconsumeInput(conns[conn_id].pgconn))
 					{
 						conns[conn_id].state = Idle;
-						DeleteWaitEvent(set, event.pos);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] connection error with %s: %s",
@@ -975,8 +975,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	/* okay, switch client to copyout state */
 	pq_beginmessage(&s, 'W');
-	pq_sendbyte(&s, 0);
-	pq_sendint16(&s, 0);
+	pq_sendbyte(&s, 0); /* copy_is_binary */
+	pq_sendint16(&s, 0); /* numAttributes */
 	pq_endmessage(&s);
 	pq_flush();
 
@@ -1146,7 +1146,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	// XXX: use sendv instead
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
-		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
+		mtm_log(WARNING, "[DMQ] dmq_push: can't send to queue");
 }
 
 static bool

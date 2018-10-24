@@ -93,7 +93,7 @@ SQL
 CONF
 
     pg_ctl -w -D tmp_check/node$i -l node$i.log start
-    psql -p $port -c 'create extension multimaster'
+    psql -p $port -c 'create extension multimaster;'
 
 done
 

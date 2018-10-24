@@ -64,6 +64,9 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 	x->containsDML = false; // will be set by executor hook
 	x->isTransactionBlock = IsTransactionBlock();
 
+
+	/* XXX: ugly hack with debug_query_string */
+
 	/* Application name can be changed using PGAPPNAME environment variable */
 	if (x->isDistributed && Mtm->status != MTM_ONLINE
 		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0

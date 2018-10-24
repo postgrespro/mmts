@@ -194,6 +194,10 @@ MtmTxStateMnem(MtmTxState state)
 		case MtmTxAborted:
 			return "MtmTxAborted";
 	}
+
+	/* silence compiler */
+	Assert(false);
+	return NULL;
 }
 
 /*****************************************************************************

@@ -78,6 +78,9 @@ class MtmClient(object):
         # logging.basicConfig(level=logging.DEBUG)
         self.n_accounts = n_accounts
         self.dsns = dsns
+
+        self.create_extension()
+
         self.total = 0
         self.aggregates = [{} for e in dsns]
         keep_trying(40, 1, self.initdb, 'self.initdb')
@@ -113,7 +116,7 @@ class MtmClient(object):
     def initdb(self):
         conn = psycopg2.connect(self.dsns[0])
         cur = conn.cursor()
-        cur.execute('create extension if not exists multimaster')
+        # cur.execute('create extension if not exists multimaster')
         conn.commit()
         cur.execute('drop table if exists bank_test')
         cur.execute('create table bank_test(uid int primary key, amount int)')
@@ -134,6 +137,16 @@ class MtmClient(object):
             cur.execute(statement)
         cur.close()
         con.close()
+
+    def create_extension(self):
+
+        for dsn in self.dsns:
+            con = psycopg2.connect(dsn)
+            con.autocommit = True
+            cur = con.cursor()
+            cur.execute('create extension multimaster;')
+            cur.close()
+            con.close()
 
     def is_data_identic(self):
         hashes = set()
