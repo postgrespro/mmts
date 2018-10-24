@@ -1,12 +1,20 @@
 
 EXTENSION = multimaster
 DATA = multimaster--1.0.sql
-OBJS = multimaster.o dmq.o commit.o bytebuf.o bgwpool.o pglogical_output.o \
-pglogical_proto.o pglogical_receiver.o pglogical_apply.o pglogical_hooks.o \
-pglogical_config.o pglogical_relid_map.o ddd.o bkb.o spill.o state.o resolver.o
+OBJS = src/multimaster.o src/dmq.o src/commit.o src/bytebuf.o src/bgwpool.o \
+src/pglogical_output.o src/pglogical_proto.o src/pglogical_receiver.o \
+src/pglogical_apply.o src/pglogical_hooks.o src/pglogical_config.o \
+src/pglogical_relid_map.o src/ddd.o src/bkb.o src/spill.o src/state.o \
+src/resolver.o
 MODULE_big = multimaster
 
-PG_CPPFLAGS = -I$(libpq_srcdir)
+ifdef USE_PGXS
+PG_CPPFLAGS += -I$(CURDIR)/src/include
+else
+PG_CPPFLAGS += -I$(top_srcdir)/$(subdir)/src/include
+endif
+
+PG_CPPFLAGS += -I$(libpq_srcdir)
 SHLIB_LINK = $(libpq)
 
 ifdef USE_PGXS

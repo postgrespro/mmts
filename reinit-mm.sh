@@ -1,6 +1,6 @@
 CURPATH=`pwd`
 USER=`whoami`
-BASEDIR=$CURPATH/../../..
+BASEDIR=$CURPATH/../..
 export PATH=$BASEDIR/tmp_install/usr/local/pgsql/bin/:$PATH
 export DESTDIR=$BASEDIR/tmp_install
 export PGHOST=127.0.0.1
@@ -11,8 +11,8 @@ n_nodes=3
 ulimit -c unlimited
 pkill -9 postgres
 
-# cd $BASEDIR
-# make install
+cd $BASEDIR
+make install
 
 cd $BASEDIR/contrib/mmts
 make clean && make install
@@ -20,7 +20,7 @@ make clean && make install
 # cd $BASEDIR/contrib/referee
 # make clean && make install
 
-cd $BASEDIR/contrib/mmts/tests
+cd $BASEDIR/contrib/mmts
 
 rm -rf tmp_check *.log
 
@@ -31,7 +31,7 @@ rm -rf tmp_check *.log
 #     listen_addresses='*'
 #     port = '5440'
 # SQL
-# pg_ctl -w -D tmp_check/referee -l referee.log start
+# pg_ctl -w -D tmp_check/referee -l tmp_check/referee.log start
 # createdb -p 5440
 # psql -p 5440 -c 'create extension referee'
 
@@ -51,10 +51,10 @@ do
         listen_addresses='*'
         port = '$port'
 SQL
-    pg_ctl -w -D tmp_check/node$i -l node$i.log start
+    pg_ctl -w -D tmp_check/node$i -l tmp_check/node$i.log start
     createdb -p $port
     # psql -p $port -c 'create extension multimaster'
-    pg_ctl -w -D tmp_check/node$i -l node$i.log stop
+    pg_ctl -w -D tmp_check/node$i -l tmp_check/node$i.log stop
 done
 
 echo "Starting nodes..."
@@ -92,7 +92,7 @@ SQL
         host replication all 0.0.0.0/0 trust
 CONF
 
-    pg_ctl -w -D tmp_check/node$i -l node$i.log start
+    pg_ctl -w -D tmp_check/node$i -l tmp_check/node$i.log start
     psql -p $port -c 'create extension multimaster;'
 
 done
@@ -100,7 +100,7 @@ done
 # for ((i=1;i<=n_nodes;i++))
 # do
 #     # cp pg_hba.conf tmp_check/node$i
-#     pg_ctl -w -D tmp_check/node$i -l node$i.log start
+#     pg_ctl -w -D tmp_check/node$i -l tmp_check/node$i.log start
 # done
 
 # sleep 10
