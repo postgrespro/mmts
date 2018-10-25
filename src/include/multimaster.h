@@ -507,7 +507,6 @@ extern void MtmRollbackPreparedTransaction(int nodeId, char const* gid);
 extern bool MtmFilterTransaction(char* record, int size);
 extern void MtmPrecommitTransaction(char const* gid);
 extern char* MtmGucSerialize(void);
-extern bool MtmTransIsActive(void);
 extern MtmTransState* MtmGetActiveTransaction(MtmL2List* list);
 extern void MtmReleaseLocks(void);
 extern void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code);
@@ -518,5 +517,7 @@ extern void MtmPollStatusOfPreparedTransactions(bool majorMode);
 extern int MtmGetNumberOfVotingNodes(void);
 extern void MtmToggleDML(void);
 extern void MtmUpdateControlFile(void);
+
+extern void MtmCheckSlots(void);
 
 #endif

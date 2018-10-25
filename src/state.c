@@ -1081,6 +1081,8 @@ MtmMonitor(Datum arg)
 
 		check_status_requests();
 
+		// MtmCheckSlots(); // XXX: add locking
+
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
 					   MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);

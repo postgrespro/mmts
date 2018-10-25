@@ -538,7 +538,7 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 
 	/* only for commit prepared */
-	pq_sendint64(out, MtmGetTransactionCSN(txn->xid));
+	pq_sendint64(out, 42);//MtmGetTransactionCSN(txn->xid));
 
 	pq_sendstring(out, txn->gid);
 }

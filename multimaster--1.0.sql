@@ -16,14 +16,6 @@ AS 'MODULE_PATHNAME','dmq_receiver_loop'
 LANGUAGE C;
 
 
-CREATE FUNCTION mtm.start_replication() RETURNS void
-AS 'MODULE_PATHNAME','mtm_start_replication'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.stop_replication() RETURNS void
-AS 'MODULE_PATHNAME','mtm_stop_replication'
-LANGUAGE C;
-
 -- Stop replication to the node. Node is didsabled, If drop_slot is true, then replication slot is dropped and node can be recovered using basebackup and recover_node function.
 -- If drop_slot is false and limit for maximal slot gap was not reached, then node can be restarted using resume_node function.
 CREATE FUNCTION mtm.stop_node(node integer, drop_slot bool default false) RETURNS void
@@ -46,18 +38,6 @@ CREATE FUNCTION mtm.resume_node(node integer) RETURNS void
 AS 'MODULE_PATHNAME','mtm_resume_node'
 LANGUAGE C;
 
-
-CREATE FUNCTION mtm.get_snapshot() RETURNS bigint
-AS 'MODULE_PATHNAME','mtm_get_snapshot'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.get_csn(xid bigint) RETURNS bigint
-AS 'MODULE_PATHNAME','mtm_get_csn'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.get_last_csn() RETURNS bigint
-AS 'MODULE_PATHNAME','mtm_get_last_csn'
-LANGUAGE C;
 
 CREATE TYPE mtm.node_state AS (
     "id" integer,
@@ -124,13 +104,6 @@ CREATE TYPE mtm.trans_state AS (
     "config_changes" integer
 );
 
-CREATE FUNCTION mtm.get_trans_by_gid(git text) RETURNS mtm.trans_state
-AS 'MODULE_PATHNAME','mtm_get_trans_by_gid'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.get_trans_by_xid(xid bigint) RETURNS mtm.trans_state
-AS 'MODULE_PATHNAME','mtm_get_trans_by_xid'
-LANGUAGE C;
 
 CREATE FUNCTION mtm.get_cluster_state() RETURNS mtm.cluster_state
 AS 'MODULE_PATHNAME','mtm_get_cluster_state'
@@ -158,10 +131,6 @@ LANGUAGE C;
 
 CREATE FUNCTION mtm.poll_node(node_id integer, no_wait boolean default FALSE) RETURNS boolean
 AS 'MODULE_PATHNAME','mtm_poll_node'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.inject_2pc_error(stage integer) RETURNS void
-AS 'MODULE_PATHNAME','mtm_inject_2pc_error'
 LANGUAGE C;
 
 CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean

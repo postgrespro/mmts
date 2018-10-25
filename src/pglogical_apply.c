@@ -585,7 +585,7 @@ process_remote_message(StringInfo s)
 				MTM_LOG1("Receive logical abort message for transaction %s from node %d: %llx < %llx", msg->gid, origin_node, Mtm->nodes[origin_node-1].restartLSN, msg->origin_lsn);
 				// Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
 				// replorigin_session_origin_lsn = msg->origin_lsn;
-				MtmRollbackPreparedTransaction(origin_node, msg->gid);
+				// MtmRollbackPreparedTransaction(origin_node, msg->gid);
 			} else { 
 				if (msg->origin_lsn != INVALID_LSN) { 
 					MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN %llx <= %llx", 
@@ -610,7 +610,7 @@ process_remote_message(StringInfo s)
 	    case 'S':
 		{
   		    Assert(messageSize == sizeof(csn_t));
-		    MtmSetSnapshot(*(csn_t*)messageBody);
+		    // MtmSetSnapshot(*(csn_t*)messageBody);
 			break;
 		}
 	    default:
@@ -941,7 +941,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
 			if (csn == INVALID_CSN && Mtm->status == MTM_RECOVERY)
-				MtmSetCurrentTransactionCSN(MtmAssignCSN());
+				MtmSetCurrentTransactionCSN(42);
 			else
 				MtmSetCurrentTransactionCSN(csn);
 			MtmSetCurrentTransactionGID(gid, origin_node);
@@ -950,7 +950,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			MTM_LOG2("Distributed transaction %s is committed", gid);
 			CommitTransactionCommand();
-			Assert(!MtmTransIsActive());
+			// Assert(!MtmTransIsActive());
 			MtmEndSession(origin_node, true);
 			break;
 		}

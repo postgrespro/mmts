@@ -253,9 +253,9 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
 
 void BgwPoolStop(BgwPool* pool)
 {
-    SpinLockAcquire(&pool->lock);
+    // SpinLockAcquire(&pool->lock);
 	pool->shutdown = true;
-    SpinLockRelease(&pool->lock);            
+    // SpinLockRelease(&pool->lock);            
 	PGSemaphoreUnlock(pool->available);
 	PGSemaphoreUnlock(pool->overflow);
 }
