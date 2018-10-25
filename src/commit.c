@@ -10,14 +10,15 @@
  */
 
 #include "postgres.h"
-#include "multimaster.h"
 #include "storage/proc.h"
 #include "utils/guc.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
 #include "tcop/tcopprot.h"
 
+#include "multimaster.h"
 #include "logger.h"
+#include "ddl.h"
 
 static Oid		MtmDatabaseId;
 static bool		DmqSubscribed;
@@ -64,6 +65,7 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 	x->containsDML = false; // will be set by executor hook
 	x->isTransactionBlock = IsTransactionBlock();
 
+	MtmDDLResetStatement();
 
 	/* XXX: ugly hack with debug_query_string */
 

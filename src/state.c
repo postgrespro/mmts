@@ -775,7 +775,7 @@ MtmRefereeGetWinner(void)
 	/* Save result locally */
 	if (MtmRefereeHasLocalTable())
 	{
-		MtmEnforceLocalTx = true;
+		// MtmEnforceLocalTx = true;
 		StartTransactionCommand();
 		SPI_connect();
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -807,7 +807,7 @@ MtmRefereeGetWinner(void)
 			MTM_ELOG(WARNING, "Failed to save referee decision, but proceeding anyway");
 		PopActiveSnapshot();
 		CommitTransactionCommand();
-		MtmEnforceLocalTx = false;
+		// MtmEnforceLocalTx = false;
 
 		if (old_winner > 0 && old_winner != winner_node_id)
 			MTM_LOG1("WARNING Overriding old referee decision (%d) with new one (%d)", old_winner, winner_node_id);

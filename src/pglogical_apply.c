@@ -62,6 +62,7 @@
 #include "spill.h"
 #include "state.h"
 #include "logger.h"
+#include "ddl.h"
 
 typedef struct TupleData
 {
@@ -501,72 +502,10 @@ process_remote_message(StringInfo s)
 		}
 		case 'D':
 		{
-			int rc;
 			GucAltered = true;
-			MTM_LOG1("%d: Executing utility statement %s", MyProcPid, messageBody);
-			SPI_connect();
-			ActivePortal->sourceText = messageBody;
-			MtmVacuumStmt = NULL;
-			MtmIndexStmt = NULL;
-			MtmDropStmt = NULL;
-			MtmTablespaceStmt = NULL;
-			debug_query_string = messageBody;
-			rc = SPI_execute(messageBody, false, 0);
-			debug_query_string = NULL;
-
-			SPI_finish();
-			if (rc < 0) { 
-				MTM_ELOG(ERROR, "Failed to execute utility statement %s", messageBody);
-			} else { 
-				MemoryContextSwitchTo(MtmApplyContext);
-				PushActiveSnapshot(GetTransactionSnapshot());
-
-				if (MtmVacuumStmt != NULL) { 
-					ExecVacuum(MtmVacuumStmt, 1);
-				} else if (MtmIndexStmt != NULL) {
-					Oid relid =	RangeVarGetRelidExtended(MtmIndexStmt->relation, ShareUpdateExclusiveLock,
-														 0,
-														 NULL,
-														 NULL);
-					/* Run parse analysis ... */
-					MtmIndexStmt = transformIndexStmt(relid, MtmIndexStmt, messageBody);
-
-					DefineIndex(relid,		/* OID of heap relation */
-								MtmIndexStmt,
-								InvalidOid, /* no predefined OID */
-								InvalidOid, /* no parent index */
-								InvalidOid, /* no parent constraint */
-								false,		/* is_alter_table */
-								true,		/* check_rights */
-								true,		/* check_not_in_use */
-								false,		/* skip_build */
-								false);		/* quiet */
-
-				}
-				else if (MtmDropStmt != NULL)
-				{
-					RemoveObjects(MtmDropStmt);
-				}
-				else if (MtmTablespaceStmt != NULL)
-				{
-					switch (nodeTag(MtmTablespaceStmt))
-					{
-						case T_CreateTableSpaceStmt:
-							CreateTableSpace((CreateTableSpaceStmt *) MtmTablespaceStmt);
-							break;
-						case T_DropTableSpaceStmt:
-							DropTableSpace((DropTableSpaceStmt *) MtmTablespaceStmt);
-							break;
-						default:
-							Assert(false);
-					}
-				}
-				if (ActiveSnapshotSet())
-					PopActiveSnapshot();
-			}
-			if (standalone) { 
+			MtmApplyDDLMessage(messageBody);
+			if (standalone)
 				CommitTransactionCommand();
-			}
 			break;
 		}
 	    case 'A':
@@ -1134,6 +1073,7 @@ process_remote_insert(StringInfo s, Relation rel)
 	if (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
+	// XXX: maybe just insert it during extension creation?
 	if (strcmp(RelationGetRelationName(rel), MULTIMASTER_LOCAL_TABLES_TABLE) == 0 &&
 		strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
 	{

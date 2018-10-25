@@ -42,6 +42,10 @@ typedef enum MtmLogTag
 	DeadlockUpdate			= LOG,
 	DeadlockSerialize		= DEBUG3,
 
+	DMLStmtOutgoing			= DEBUG1,
+	DMLStmtIncoming			= DEBUG1,
+	DMLProcessingTrace		= DEBUG1,
+
 } MtmLogTag;
 
 // XXX: also meaningful process name would be cool

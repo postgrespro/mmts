@@ -11,6 +11,7 @@
 #include "libpq-fe.h"
 
 #include "dmq.h"
+#include "mm.h"
 
 #ifndef DEBUG_LEVEL
 #define DEBUG_LEVEL 0
@@ -64,8 +65,6 @@
 #endif
 
 #define MULTIMASTER_NAME                 "multimaster"
-#define MULTIMASTER_SCHEMA_NAME          "mtm"
-#define MULTIMASTER_LOCAL_TABLES_TABLE   "local_tables"
 #define MULTIMASTER_SLOT_PATTERN         "mtm_slot_%d"
 #define MULTIMASTER_MIN_PROTO_VERSION    1
 #define MULTIMASTER_MAX_PROTO_VERSION    1
@@ -73,7 +72,6 @@
 #define MULTIMASTER_MAX_SLOT_NAME_SIZE   16
 #define MULTIMASTER_MAX_CONN_STR_SIZE    128
 #define MULTIMASTER_MAX_HOST_NAME_SIZE   64
-#define MULTIMASTER_MAX_LOCAL_TABLES     256
 #define MULTIMASTER_MAX_CTL_STR_SIZE     256
 #define MULTIMASTER_LOCK_BUF_INIT_SIZE   4096
 #define MULTIMASTER_BROADCAST_SERVICE    "mtm_broadcast"
@@ -92,10 +90,6 @@
 #define Anum_mtm_ddl_log_issued		1
 #define Anum_mtm_ddl_log_query		2
 
-#define Natts_mtm_local_tables 2
-#define Anum_mtm_local_tables_rel_schema 1
-#define Anum_mtm_local_tables_rel_name	 2
-
 #define Natts_mtm_trans_state   15
 #define Natts_mtm_nodes_state   17
 #define Natts_mtm_cluster_state 20
@@ -105,8 +99,6 @@ typedef ulong64 csn_t; /* commit serial number */
 
 typedef ulong64 lsn_t;
 #define INVALID_LSN  InvalidXLogRecPtr
-
-typedef char pgid_t[GIDSIZE];
 
 // XXX! need rename: that's actually a disconnectivity mask
 #define SELF_CONNECTIVITY_MASK  (Mtm->nodes[MtmNodeId-1].connectivityMask)
@@ -374,29 +366,6 @@ typedef struct MtmFlushPosition
 } MtmFlushPosition;
 
 
-typedef struct MtmSeqPosition
-{
-	Oid   seqid;
-	int64 next;
-} MtmSeqPosition;
-
-typedef struct {
-	TransactionId xid;	  /* local transaction ID	*/
-	GlobalTransactionId gtid; /* global transaction ID assigned by coordinator of transaction */
-	bool  isTwoPhase;	  /* user level 2PC */
-	bool  isReplicated;	  /* transaction on replica */
-	bool  isDistributed;  /* transaction performed INSERT/UPDATE/DELETE and has to be replicated to other nodes */
-	bool  isPrepared;	  /* transaction is prepared at first stage of 2PC */
-	bool  isSuspended;	  /* prepared transaction is suspended because coordinator node is switch to offline */
-	bool  isTransactionBlock; /* is transaction block */
-	bool  containsDML;	  /* transaction contains DML statements */
-	bool  isActive;		  /* transaction is active (nActiveTransaction counter is incremented) */
-	XidStatus status;	  /* transaction status */
-	csn_t snapshot;		  /* transaction snapshot */
-	csn_t csn;			  /* CSN */
-	pgid_t gid;			  /* global transaction identifier (used by 2pc) */
-} MtmCurrentTrans;
-
 #define MtmIsCoordinator(ts) (ts->gtid.node == MtmNodeId)
 
 extern char const* const MtmNodeStatusMnem[];
@@ -405,12 +374,10 @@ extern char const* const MtmMessageKindMnem[];
 
 extern MtmState* Mtm;
 
-extern int   MtmMaxNodes;
 extern int   MtmReplicationNodeId;
 extern int   MtmNodes;
 extern int   MtmArbiterPort;
 extern char* MtmDatabaseName;
-extern char* MtmDatabaseUser;
 extern int   MtmNodeDisableDelay;
 extern int   MtmTransSpillThreshold;
 extern int   MtmHeartbeatSendTimeout;
@@ -420,26 +387,18 @@ extern bool  MtmUseDtm;
 extern bool  MtmPreserveCommitOrder;
 extern HTAB* MtmXid2State;
 extern HTAB* MtmGid2State;
-extern VacuumStmt* MtmVacuumStmt;
-extern IndexStmt*  MtmIndexStmt;
-extern DropStmt*   MtmDropStmt;
-extern void*   MtmTablespaceStmt; /* CREATE/DELETE tablespace */
-extern MemoryContext MtmApplyContext;
+
 extern lsn_t MtmSenderWalEnd;
 extern timestamp_t MtmRefreshClusterStatusSchedule;
 extern MtmConnectionInfo* MtmConnections;
 extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
-extern bool  MtmEnforceLocalTx;
 extern bool MtmIsRecoverySession;
 extern int MtmWorkers;
 
-extern MtmCurrentTrans MtmTx;
-
 extern void  MtmXactCallback2(XactEvent event, void *arg);
 extern void  MtmMonitorInitialize(void);
-extern bool MtmTwoPhaseCommit(MtmCurrentTrans* x);
 extern bool MtmIsUserTransaction(void);
 extern void MtmGenerateGid(char *gid, TransactionId xid);
 extern int  MtmGidParseNodeId(const char* gid);
@@ -515,7 +474,6 @@ extern void MtmRefereeInitialize(void);
 extern void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool commitPrecommited);
 extern void MtmPollStatusOfPreparedTransactions(bool majorMode);
 extern int MtmGetNumberOfVotingNodes(void);
-extern void MtmToggleDML(void);
 extern void MtmUpdateControlFile(void);
 
 extern void MtmCheckSlots(void);

@@ -10,12 +10,14 @@ typedef struct {
 	int nodes[MAX_NODES];
 } NodeList;
 
-static void list_append(NodeList* list, int n)
+static void
+_list_append(NodeList* list, int n)
 {
 	list->nodes[list->size++] = n;
 }
 
-static void list_copy(NodeList* dst, NodeList const* src)
+static void
+_list_copy(NodeList* dst, NodeList const* src)
 {
 	int i;
 	int n = src->size;
@@ -80,10 +82,10 @@ static void findMaximumIndependentSet(NodeList* cur, NodeList* result, nodemask_
 				newSet[newce++] = oldSet[i];
 			}
 		}
-		list_append(cur, sel);
+		_list_append(cur, sel);
 		if (newce == 0) {
 			if (result->size < cur->size) {
-				list_copy(result, cur);
+				_list_copy(result, cur);
 			}
 		} else if (newne < newce) {
 			if (cur->size + newce - newne > result->size)  {

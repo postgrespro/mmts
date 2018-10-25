@@ -30,7 +30,7 @@ class RecoveryTest(unittest.TestCase):
         time.sleep(10)
         subprocess.check_call(['docker', 'exec',
             'node1',
-            '/pg/mmts/tests2/support/docker-regress.sh',
+            '/pg/mmts/tests/support/docker-regress.sh',
         ])
 
 if __name__ == '__main__':

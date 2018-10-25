@@ -13,7 +13,7 @@ RUN export USE_PGXS=1 && \
 RUN cp /pg/src/src/test/regress/*.so /pg/install/lib/postgresql/
 USER postgres
 ENV PGDATA /pg/data
-ENTRYPOINT ["/pg/mmts/tests2/docker-entrypoint.sh"]
+ENTRYPOINT ["/pg/mmts/tests/docker-entrypoint.sh"]
 
 EXPOSE 5432
 CMD ["postgres"]
