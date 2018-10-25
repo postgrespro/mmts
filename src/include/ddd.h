@@ -1,31 +1,14 @@
 #ifndef __DDD_H__
 #define __DDD_H__
 
-#include "multimaster.h"
+#include "mm.h"
 
-#define MAX_TRANSACTIONS  1024
-#define VISITED_NODE_MARK 0
+extern void MtmDeadlockDetectorInit(int n_nodes);
+extern void MtmDeadlockDetectorShmemStartup(int n_nodes);
 
-typedef struct MtmEdge {
-	struct MtmEdge*   next; /* list of outgoing edges */
-    struct MtmVertex* dst;
-    struct MtmVertex* src;
-} MtmEdge;
-
-typedef struct MtmVertex
-{    
-    struct MtmEdge* outgoingEdges;
-    struct MtmVertex* collision;
-	GlobalTransactionId gtid;
-} MtmVertex;
-
-typedef struct MtmGraph
-{
-    MtmVertex* hashtable[MAX_TRANSACTIONS];
-} MtmGraph;
-
-extern void MtmGraphInit(MtmGraph* graph);
-extern void MtmGraphAdd(MtmGraph* graph, GlobalTransactionId* subgraph, int size);
-extern bool MtmGraphFindLoop(MtmGraph* graph, GlobalTransactionId* root);
+extern bool MtmDetectGlobalDeadLock(PGPROC* proc);
+extern void MtmUpdateLockGraph(int nodeId, void const* messageBody, int messageSize);
+extern void MtmDeadlockDetectorRemoveXact(TransactionId xid);
+extern void MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid);
 
 #endif

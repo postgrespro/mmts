@@ -11,10 +11,11 @@
 #include "datatype/timestamp.h"
 #include "utils/portal.h"
 #include "tcop/pquery.h"
+#include "utils/guc.h"
 
 #include "bgwpool.h"
-#include "multimaster.h"
-#include "utils/guc.h"
+#include "mm.h"
+#include "logger.h"
 
 bool MtmIsLogicalReceiver;
 int  MtmMaxWorkers;
@@ -26,7 +27,6 @@ void BgwPoolDynamicWorkerMainLoop(Datum arg);
 
 static void BgwShutdownWorker(int sig)
 {
-	MTM_LOG1("Background worker %d received shutdown request", MyProcPid);
 	if (MtmPool) { 
 		BgwPoolStop(MtmPool);
 	}
@@ -38,12 +38,13 @@ static void BgwPoolMainLoop(BgwPool* pool)
     void* work;
 	static PortalData fakePortal;
 
-	MTM_ELOG(LOG, "Start background worker %d, shutdown=%d", MyProcPid, pool->shutdown);
+	mtm_log(BgwPoolEvent, "Start background worker %d, shutdown=%d", MyProcPid, pool->shutdown);
 
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
 	MtmPool = pool;
 
+	// XXX: fix that
 	pqsignal(SIGINT, BgwShutdownWorker);
 	pqsignal(SIGQUIT, BgwShutdownWorker);
 	pqsignal(SIGTERM, BgwShutdownWorker);
@@ -100,7 +101,7 @@ static void BgwPoolMainLoop(BgwPool* pool)
         SpinLockRelease(&pool->lock);
     }
 	SpinLockRelease(&pool->lock);
-	MTM_ELOG(LOG, "Shutdown background worker %d", MyProcPid);
+	mtm_log(BgwPoolEvent, "Shutdown background worker %d", MyProcPid);
 }
 
 void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  char const* dbuser, size_t queueSize, size_t nWorkers)

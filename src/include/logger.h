@@ -36,7 +36,11 @@ typedef enum MtmLogTag
 	/* status worker */
 	StatusRequest			= LOG,
 
+	BgwPoolEvent			= LOG,
 
+	DeadlockCheck			= LOG,
+	DeadlockUpdate			= LOG,
+	DeadlockSerialize		= DEBUG3,
 
 } MtmLogTag;
 

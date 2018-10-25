@@ -168,10 +168,6 @@ CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean
 AS 'MODULE_PATHNAME','mtm_check_deadlock'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.referee_poll(xid bigint) RETURNS bigint
-AS 'MODULE_PATHNAME','mtm_referee_poll'
-LANGUAGE C;
-
 CREATE TABLE IF NOT EXISTS mtm.local_tables(rel_schema name, rel_name name, primary key(rel_schema, rel_name));
 
 CREATE TABLE mtm.referee_decision(key text primary key not null, node_id int);

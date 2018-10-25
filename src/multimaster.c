@@ -119,10 +119,7 @@ PG_FUNCTION_INFO_V1(mtm_get_nodes_state);
 PG_FUNCTION_INFO_V1(mtm_get_cluster_state);
 PG_FUNCTION_INFO_V1(mtm_collect_cluster_info);
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
-PG_FUNCTION_INFO_V1(mtm_dump_lock_graph);
 PG_FUNCTION_INFO_V1(mtm_inject_2pc_error);
-PG_FUNCTION_INFO_V1(mtm_check_deadlock);
-PG_FUNCTION_INFO_V1(mtm_referee_poll);
 PG_FUNCTION_INFO_V1(mtm_broadcast_table);
 PG_FUNCTION_INFO_V1(mtm_copy_table);
 
@@ -138,7 +135,6 @@ static bool MtmTwoPhaseCommit0(MtmCurrentTrans* x);
 
 static void MtmAdjustOldestXid(void);
 
-static bool MtmDetectGlobalDeadLock(PGPROC* proc);
 static void MtmAddSubtransactions(MtmTransState* ts, TransactionId* subxids, int nSubxids);
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -2400,6 +2396,8 @@ static void MtmInitialize()
 	bool found;
 	int i;
 
+	MtmDeadlockDetectorShmemStartup(MtmMaxNodes);
+
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 	Mtm = (MtmState*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmState) + sizeof(MtmNodeInfo)*(MtmMaxNodes-1), &found);
 	if (!found)
@@ -3254,6 +3252,8 @@ _PG_init(void)
 	if (!ConfigIsSane()) {
 		MTM_ELOG(ERROR, "Multimaster config is insane, refusing to work");
 	}
+
+	MtmDeadlockDetectorInit(MtmMaxNodes);
 
 	MtmStartReceivers();
 
@@ -4439,39 +4439,6 @@ Datum mtm_make_table_local(PG_FUNCTION_ARGS)
 	return false;
 }
 
-Datum mtm_dump_lock_graph(PG_FUNCTION_ARGS)
-{
-	StringInfo s = makeStringInfo();
-	int i;
-	for (i = 0; i < Mtm->nAllNodes; i++)
-	{
-		size_t lockGraphSize;
-		char  *lockGraphData;
-		MtmLockNode(i + 1 + MtmMaxNodes, LW_SHARED);
-		lockGraphSize = Mtm->nodes[i].lockGraphUsed;
-		lockGraphData = palloc(lockGraphSize);
-		memcpy(lockGraphData, Mtm->nodes[i].lockGraphData, lockGraphSize);
-		MtmUnlockNode(i + 1 + MtmMaxNodes);
-
-		if (lockGraphData) {
-			GlobalTransactionId *gtid = (GlobalTransactionId *) lockGraphData;
-			GlobalTransactionId *last = (GlobalTransactionId *) (lockGraphData + lockGraphSize);
-			appendStringInfo(s, "node-%d lock graph: ", i+1);
-			while (gtid != last) {
-				GlobalTransactionId *src = gtid++;
-				appendStringInfo(s, "%d:%llu -> ", src->node, (long64)src->xid);
-				while (gtid->node != 0) {
-					GlobalTransactionId *dst = gtid++;
-					appendStringInfo(s, "%d:%llu, ", dst->node, (long64)dst->xid);
-				}
-				gtid += 1;
-			}
-			appendStringInfo(s, "\n");
-		}
-	}
-	return CStringGetTextDatum(s->data);
-}
-
 Datum mtm_inject_2pc_error(PG_FUNCTION_ARGS)
 {
 	Mtm->inject2PCError = PG_GETARG_INT32(0);
@@ -4956,25 +4923,6 @@ static void MtmFinishDDLCommand()
 	LogLogicalMessage("E", "", 1, true);
 }
 
-void MtmUpdateLockGraph(int nodeId, void const* messageBody, int messageSize)
-{
-	int allocated;
-	MtmLockNode(nodeId + MtmMaxNodes, LW_EXCLUSIVE);
-	allocated = Mtm->nodes[nodeId-1].lockGraphAllocated;
-	if (messageSize > allocated) {
-		allocated = Max(Max(MULTIMASTER_LOCK_BUF_INIT_SIZE, allocated*2), messageSize);
-		Mtm->nodes[nodeId-1].lockGraphData = ShmemAlloc(allocated);
-		if (Mtm->nodes[nodeId-1].lockGraphData == NULL) {
-			elog(PANIC, "Failed to allocate shared memory for lock graph: %d bytes requested",
-				 allocated);
-		}
-		Mtm->nodes[nodeId-1].lockGraphAllocated = allocated;
-	}
-	memcpy(Mtm->nodes[nodeId-1].lockGraphData, messageBody, messageSize);
-	Mtm->nodes[nodeId-1].lockGraphUsed = messageSize;
-	MtmUnlockNode(nodeId + MtmMaxNodes);
-	MTM_LOG1("Update deadlock graph for node %d size %d", nodeId, messageSize);
-}
 
 static bool MtmIsTempType(TypeName* typeName)
 {
@@ -5547,213 +5495,8 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next)
 	}
 }
 
-/*
- * -------------------------------------------
- * Deadlock detection
- * -------------------------------------------
- */
-
-void
-MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid)
-{
-	MtmTransState* ts;
-	bool found;
-
-	Assert(TransactionIdIsValid(xid));
-
-	MtmLock(LW_EXCLUSIVE);
-	ts = (MtmTransState *) hash_search(MtmXid2State, &xid, HASH_ENTER, &found);
-	ts->gtid = *gtid;
-	MtmUnlock();
-
-	Assert(!found);
-}
-
-void
-MtmDeadlockDetectorRemoveXact(TransactionId xid)
-{
-	bool found;
-
-	Assert(TransactionIdIsValid(xid));
-
-	MtmLock(LW_EXCLUSIVE);
-	hash_search(MtmXid2State, &xid, HASH_REMOVE, &found);
-	MtmUnlock();
-
-	Assert(found);
-}
-
-static void
-MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
-{
-	MtmTransState* ts;
-
-	MtmLock(LW_SHARED);
-	ts = (MtmTransState *) hash_search(MtmXid2State, &xid, HASH_FIND, NULL);
-	if (ts != NULL)
-	{
-		*gtid = ts->gtid;
-	}
-	else
-	{
-		// XXX: investigate how this assert happens
-		// Assert(TransactionIdIsInProgress(xid));
-		gtid->node = MtmNodeId;
-		gtid->xid = xid;
-	}
-	MtmUnlock();
-}
 
 
-static void
-MtmSerializeLock(PROCLOCK* proclock, void* arg)
-{
-	ByteBuffer* buf = (ByteBuffer*)arg;
-	LOCK* lock = proclock->tag.myLock;
-	PGPROC* proc = proclock->tag.myProc;
-	GlobalTransactionId gtid;
-	if (lock != NULL) {
-		PGXACT* srcPgXact = &ProcGlobal->allPgXact[proc->pgprocno];
-
-		if (TransactionIdIsValid(srcPgXact->xid) && proc->waitLock == lock) {
-			LockMethod lockMethodTable = GetLocksMethodTable(lock);
-			int numLockModes = lockMethodTable->numLockModes;
-			int conflictMask = lockMethodTable->conflictTab[proc->waitLockMode];
-			SHM_QUEUE *procLocks = &(lock->procLocks);
-			int lm;
-
-			MtmGetGtid(srcPgXact->xid, &gtid);	/* waiting transaction */
-
-			ByteBufferAppend(buf, &gtid, sizeof(gtid));
-
-			proclock = (PROCLOCK *) SHMQueueNext(procLocks, procLocks,
-												 offsetof(PROCLOCK, lockLink));
-			while (proclock)
-			{
-				if (proc != proclock->tag.myProc) {
-					PGXACT* dstPgXact = &ProcGlobal->allPgXact[proclock->tag.myProc->pgprocno];
-					if (TransactionIdIsValid(dstPgXact->xid)) {
-						Assert(srcPgXact->xid != dstPgXact->xid);
-						for (lm = 1; lm <= numLockModes; lm++)
-						{
-							if ((proclock->holdMask & LOCKBIT_ON(lm)) && (conflictMask & LOCKBIT_ON(lm)))
-							{
-								MTM_LOG3("%d: "XID_FMT"(%u) waits for "XID_FMT"(%u)",
-										 MyProcPid, srcPgXact->xid, proc->pid,
-										 dstPgXact->xid, proclock->tag.myProc->pid);
-								MtmGetGtid(dstPgXact->xid, &gtid); /* transaction holding lock */
-								ByteBufferAppend(buf, &gtid, sizeof(gtid));
-								break;
-							}
-						}
-					}
-				}
-				proclock = (PROCLOCK *) SHMQueueNext(procLocks, &proclock->lockLink,
-													 offsetof(PROCLOCK, lockLink));
-			}
-			gtid.node = 0;
-			gtid.xid = 0;
-			ByteBufferAppend(buf, &gtid, sizeof(gtid)); /* end of lock owners list */
-		}
-	}
-}
-
-static bool
-MtmDetectGlobalDeadLockForXid(TransactionId xid)
-{
-	bool hasDeadlock = false;
-	if (TransactionIdIsValid(xid) && Mtm->status == MTM_ONLINE) {
-		ByteBuffer buf;
-		MtmGraph graph;
-		GlobalTransactionId gtid;
-		int i;
-
-		ByteBufferAlloc(&buf);
-		EnumerateLocks(MtmSerializeLock, &buf);
-
-		Assert(replorigin_session_origin == InvalidRepOriginId);
-		XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
-
-		MtmGraphInit(&graph);
-		MtmGraphAdd(&graph, (GlobalTransactionId*)buf.data, buf.used/sizeof(GlobalTransactionId));
-		ByteBufferFree(&buf);
-		for (i = 0; i < Mtm->nAllNodes; i++) {
-			if (i+1 != MtmNodeId && !BIT_CHECK(Mtm->disabledNodeMask, i)) {
-				size_t lockGraphSize;
-				void* lockGraphData;
-				MtmLockNode(i + 1 + MtmMaxNodes, LW_SHARED);
-				lockGraphSize = Mtm->nodes[i].lockGraphUsed;
-				lockGraphData = palloc(lockGraphSize);
-				memcpy(lockGraphData, Mtm->nodes[i].lockGraphData, lockGraphSize);
-				MtmUnlockNode(i + 1 + MtmMaxNodes);
-
-				if (lockGraphData == NULL) {
-					return true;
-				} else {
-					MtmGraphAdd(&graph, (GlobalTransactionId*)lockGraphData, lockGraphSize/sizeof(GlobalTransactionId));
-				}
-			}
-		}
-		MtmGetGtid(xid, &gtid);
-		hasDeadlock = MtmGraphFindLoop(&graph, &gtid);
-		MTM_ELOG(LOG, "Distributed deadlock check by backend %d for %u:%llu = %d", MyProcPid, gtid.node, (long64)gtid.xid, hasDeadlock);
-		// if (!hasDeadlock) {
-		// 	/* There is no deadlock loop in graph, but deadlock can be caused by lack of apply workers: if all of them are busy, then some transactions
-		// 	 * can not be appied just because there are no vacant workers and it cause additional dependency between transactions which is not
-		// 	 * refelected in lock graph
-		// 	 */
-		// 	timestamp_t lastPeekTime = minBgwGetLastPeekTime(&Mtm->pool);
-		// 	if (lastPeekTime != 0 && MtmGetSystemTime() - lastPeekTime >= MSEC_TO_USEC(DeadlockTimeout)) {
-		// 		hasDeadlock = true;
-		// 		MTM_ELOG(WARNING, "Apply workers were blocked more than %d msec",
-		// 			 (int)USEC_TO_MSEC(MtmGetSystemTime() - lastPeekTime));
-		// 	} else {
-		// 		MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
-		// 		enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-		// 	}
-		// }
-
-		if (!hasDeadlock)
-		{
-			// TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
-			MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
-			enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-			// set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
-		}
-	}
-	return hasDeadlock;
-}
-
-static bool
-MtmDetectGlobalDeadLock(PGPROC* proc)
-{
-	PGXACT* pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
-
-	MTM_LOG1("Detect global deadlock for %llu by backend %d", (long64)pgxact->xid, MyProcPid);
-
-	return MtmDetectGlobalDeadLockForXid(pgxact->xid);
-}
-
-Datum mtm_check_deadlock(PG_FUNCTION_ARGS)
-{
-	TransactionId xid = PG_GETARG_INT64(0);
-	PG_RETURN_BOOL(MtmDetectGlobalDeadLockForXid(xid));
-}
-
-Datum mtm_referee_poll(PG_FUNCTION_ARGS)
-{
-	nodemask_t recoveredNodeMask;
-
-	MtmLock(LW_EXCLUSIVE);
-	recoveredNodeMask = Mtm->recoveredNodeMask;
-	Mtm->deadNodeMask = PG_GETARG_INT64(0);
-	Mtm->recoveredNodeMask &= ~Mtm->deadNodeMask;
-	// XXXX: FIXME: put some event here
-	// MtmCheckQuorum();
-	MtmUnlock();
-
-	PG_RETURN_INT64(recoveredNodeMask);
-}
 
 /*
  * Allow to replicate handcrafted heap inserts/updates.

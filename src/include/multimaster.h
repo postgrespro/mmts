@@ -137,12 +137,6 @@ typedef enum
 	PGLOGICAL_PRECOMMIT_PREPARED
 } PGLOGICAL_EVENT;
 
-/* Identifier of global transaction */
-typedef struct
-{
-	int node;          /* One based id of node initiating transaction */
-	TransactionId xid; /* Transaction ID at this node */
-} GlobalTransactionId;
 
 #define EQUAL_GTID(x,y) ((x).node == (y).node && (x).xid == (y).xid)
 
@@ -411,7 +405,6 @@ extern char const* const MtmMessageKindMnem[];
 
 extern MtmState* Mtm;
 
-extern int   MtmNodeId;
 extern int   MtmMaxNodes;
 extern int   MtmReplicationNodeId;
 extern int   MtmNodes;
@@ -463,9 +456,6 @@ extern char *MtmTxStateMnem(MtmTxState state);
 
 extern void MtmFollowerHandleAbort(void);
 
-extern void MtmDeadlockDetectorRemoveXact(TransactionId xid);
-extern void MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid);
-
 extern void  MtmStartReceivers(void);
 extern void  MtmStartReceiver(int nodeId, bool dynamic);
 extern csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_t* participantsMask);
@@ -508,7 +498,6 @@ extern lsn_t MtmGetFlushPosition(int nodeId);
 extern bool MtmWatchdog(timestamp_t now);
 extern void MtmCheckHeartbeat(void);
 extern void MtmResetTransaction(void);
-extern void MtmUpdateLockGraph(int nodeId, void const* messageBody, int messageSize);
 extern void MtmReleaseRecoverySlot(int nodeId);
 extern PGconn *PQconnectdb_safe(const char *conninfo, int timeout);
 extern void MtmBeginSession(int nodeId);
