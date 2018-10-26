@@ -70,8 +70,6 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 	if (Mtm->status == status)
 		return;
 
-	Mtm->nConfigChanges += 1; /* this will restart backends */
-
 	MTM_LOG1("[STATE]   Switching status from %s to %s: %s",
 			 MtmNodeStatusMnem[Mtm->status], MtmNodeStatusMnem[status],
 			 statusReason);
@@ -189,7 +187,6 @@ MtmCheckState(int severity)
 			if (!BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId-1))
 			{
 				MTM_LOG1("[LOCK] set lock on MTM_RECOVERY switch");
-				BIT_SET(Mtm->originLockNodeMask, MtmNodeId-1); // kk trick, XXXX: log that
 				MtmSetClusterStatus(MTM_RECOVERED, statusReason);
 
 				if (old_status != Mtm->status)
@@ -214,7 +211,6 @@ MtmCheckState(int severity)
 				 * so nobody will clean it.
 				 */
 				MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
-				BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
 				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
 				if (old_status != Mtm->status)
@@ -245,13 +241,15 @@ MtmCheckState(int severity)
 
 
 void
-MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase node_id
+MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // XXXX camelcase node_id
 {
 	MTM_LOG1("[STATE] Node %i: %s", node_id, MtmNeighborEventMnem[ev]);
 
 	Assert(node_id != MtmNodeId);
 
-	MtmLock(LW_EXCLUSIVE);
+	if (!locked)
+		MtmLock(LW_EXCLUSIVE);
+
 	switch(ev)
 	{
 		case MTM_NEIGHBOR_CLIQUE_DISABLE:
@@ -261,7 +259,6 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 		case MTM_NEIGHBOR_WAL_RECEIVER_START:
 			BIT_SET(Mtm->pglogicalReceiverMask, node_id - 1);
 			MTM_LOG1("[LOCK] release lock on MTM_NEIGHBOR_WAL_RECEIVER_START event");
-			BIT_CLEAR(Mtm->originLockNodeMask, MtmNodeId-1);
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY:
@@ -287,22 +284,25 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev) // XXXX camelcase
 
 		case MTM_NEIGHBOR_RECOVERY_CAUGHTUP:
 			MTM_LOG1("[LOCK] release lock on MTM_NEIGHBOR_RECOVERY_CAUGHTUP event");
-			BIT_CLEAR(Mtm->originLockNodeMask, node_id - 1);
 			MtmEnableNode(node_id);
 			break;
 
 	}
 	MtmCheckState(LOG);
-	MtmUnlock();
+
+	if (!locked)
+		MtmUnlock();
 }
 
 
 void
-MtmStateProcessEvent(MtmEvent ev)
+MtmStateProcessEvent(MtmEvent ev, bool locked)
 {
 	MTM_LOG1("[STATE] %s", MtmEventMnem[ev]);
 
-	MtmLock(LW_EXCLUSIVE);
+	if (!locked)
+		MtmLock(LW_EXCLUSIVE);
+
 	switch (ev)
 	{
 		case MTM_CLIQUE_DISABLE:
@@ -325,17 +325,11 @@ MtmStateProcessEvent(MtmEvent ev)
 		case MTM_RECOVERY_FINISH1:
 		case MTM_RECOVERY_FINISH2:
 			{
-				int i;
-
 				MtmEnableNode(MtmNodeId);
 
 				Mtm->recoveryCount++; /* this will restart replication connection */
-
 				Mtm->recoverySlot = 0;
 				Mtm->recoveredLSN = GetXLogInsertRecPtr();
-				Mtm->nConfigChanges += 1;
-				for (i = 0; i < Mtm->nAllNodes; i++)
-					Mtm->nodes[i].lastHeartbeat = 0; /* defuse watchdog until first heartbeat is received */
 			}
 			break;
 
@@ -345,7 +339,9 @@ MtmStateProcessEvent(MtmEvent ev)
 	}
 
 	MtmCheckState(LOG);
-	MtmUnlock();
+
+	if (!locked)
+		MtmUnlock();
 
 }
 
@@ -362,18 +358,15 @@ void MtmDisableNode(int nodeId)
 	MTM_LOG1("[STATE] Node %i: disabled", nodeId);
 
 	BIT_SET(Mtm->disabledNodeMask, nodeId-1);
-	Mtm->nConfigChanges += 1;
 	Mtm->nodes[nodeId-1].timeline += 1;
-	Mtm->nodes[nodeId-1].lastStatusChangeTime = MtmGetSystemTime();
-	Mtm->nodes[nodeId-1].lastHeartbeat = 0; /* defuse watchdog until first heartbeat is received */
 
 	if (Mtm->status == MTM_ONLINE) {
 		/* Make decision about prepared transaction status only in quorum */
-		MtmLock(LW_EXCLUSIVE);
+		// MtmLock(LW_EXCLUSIVE);
 		// MtmPollStatusOfPreparedTransactionsForDisabledNode(nodeId, false);
 		ResolveTransactionsForNode(nodeId);
 
-		MtmUnlock();
+		// MtmUnlock();
 	}
 }
 
@@ -382,21 +375,11 @@ void MtmDisableNode(int nodeId)
  * Node is enabled when it's recovery is completed.
  * This why node is mostly marked as recovered when logical sender/receiver to this node is (re)started.
  */
-void MtmEnableNode(int nodeId)
+void
+MtmEnableNode(int nodeId)
 {
 	MTM_LOG1("[STATE] Node %i: enabled", nodeId);
-
-	if (BIT_CHECK(Mtm->disabledNodeMask, nodeId-1)) {
-		BIT_CLEAR(Mtm->disabledNodeMask, nodeId-1);
-		BIT_CLEAR(Mtm->reconnectMask, nodeId-1);
-		BIT_SET(Mtm->recoveredNodeMask, nodeId-1);
-		Mtm->nConfigChanges += 1;
-		Mtm->nodes[nodeId-1].lastStatusChangeTime = MtmGetSystemTime();
-		Mtm->nodes[nodeId-1].lastHeartbeat = 0; /* defuse watchdog until first heartbeat is received */
-		if (nodeId != MtmNodeId) {
-			Mtm->nLiveNodes += 1;
-		}
-	}
+	BIT_CLEAR(Mtm->disabledNodeMask, nodeId-1);
 }
 
 /*
@@ -422,8 +405,6 @@ void MtmOnNodeDisconnect(char *node_name)
 	MtmLock(LW_EXCLUSIVE);
 	BIT_SET(SELF_CONNECTIVITY_MASK, nodeId-1);
 	MtmDisableNode(nodeId);
-	Mtm->nConfigChanges += 1;
-	BIT_SET(Mtm->reconnectMask, nodeId-1);
 	MtmCheckState(LOG);
 	MtmUnlock();
 }
@@ -435,29 +416,13 @@ void MtmOnNodeConnect(char *node_name)
 
 	sscanf(node_name, "node%d", &nodeId);
 
-	// if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, nodeId-1))
-	// 	return;
-
 	MTM_LOG1("[STATE] Node %i: connected", nodeId);
 
 	MtmLock(LW_EXCLUSIVE);
 	BIT_CLEAR(SELF_CONNECTIVITY_MASK, nodeId-1);
-	BIT_SET(Mtm->reconnectMask, nodeId-1);
-
 	MtmCheckState(LOG);
 	MtmUnlock();
-
-	// MtmRefreshClusterStatus();
 }
-
-void MtmReconnectNode(int nodeId) // XXXX evict that
-{
-	// MTM_LOG1("[STATE] ReconnectNode for node %u", nodeId);
-	MtmLock(LW_EXCLUSIVE);
-	BIT_SET(Mtm->reconnectMask, nodeId-1);
-	MtmUnlock();
-}
-
 
 /**
  * Build internode connectivity mask. 1 - means that node is disconnected.
@@ -468,7 +433,7 @@ MtmBuildConnectivityMatrix(nodemask_t* matrix)
 	int i, j, n = Mtm->nAllNodes;
 
 	for (i = 0; i < n; i++)
-		matrix[i] = Mtm->nodes[i].connectivityMask | Mtm->deadNodeMask;
+		matrix[i] = Mtm->nodes[i].connectivityMask;
 
 	/* make matrix symmetric: required for Bron–Kerbosch algorithm */
 	for (i = 0; i < n; i++) {
@@ -634,9 +599,9 @@ MtmRefreshClusterStatus()
 		if (new_status && new_status != old_status)
 		{
 			if ( i+1 == MtmNodeId )
-				MtmStateProcessEvent(MTM_CLIQUE_DISABLE);
+				MtmStateProcessEvent(MTM_CLIQUE_DISABLE, true);
 			else
-				MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE);
+				MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
 		}
 	}
 

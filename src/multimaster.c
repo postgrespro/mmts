@@ -178,18 +178,13 @@ bool  MtmBackgroundWorker;
 int	  MtmNodes;
 int	  MtmNodeId;
 int	  MtmReplicationNodeId;
-int	  MtmArbiterPort;
-int	  MtmNodeDisableDelay;
 int	  MtmTransSpillThreshold;
 int	  MtmMaxNodes;
 int	  MtmHeartbeatSendTimeout;
 int	  MtmHeartbeatRecvTimeout;
-
 bool  MtmPreserveCommitOrder;
-
 bool  MtmMajorNode;
 char* MtmRefereeConnStr;
-int	  MtmWorkers;
 
 static char* MtmConnStrs;
 static char* MtmClusterName;
@@ -197,7 +192,6 @@ static int	 MtmQueueSize;
 static int	 MtmMinRecoveryLag;
 static int	 MtmMaxRecoveryLag;
 
-static int	 MtmLockCount;
 static bool	 MtmBreakConnection;
 static bool  MtmBypass;
 static bool	 MtmInsideTransaction;
@@ -205,28 +199,7 @@ static bool	 MtmInsideTransaction;
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
 
-static bool MtmAtExitHookRegistered = false;
 
-/*
- * Release multimaster main lock if been hold.
- * This function is called when backend is terminated because of critical error or when error is catched
- * by FINALLY block
- */
-void MtmReleaseLocks(void)
-{
-	MtmResetTransaction();
-	if (MtmInsideTransaction)
-	{
-		MtmLock(LW_EXCLUSIVE);
-		Assert(Mtm->nRunningTransactions > 0);
-		Mtm->nRunningTransactions -= 1;
-		MtmInsideTransaction = false;
-		MtmUnlock();
-	}
-	// if (MtmClusterLocked) {
-	// 	MtmUnlockCluster();
-	// }
-}
 
 /*
  * -------------------------------------------
@@ -250,82 +223,12 @@ static size_t      MtmLockHitCount;
 
 void MtmLock(LWLockMode mode)
 {
-	if (!MtmAtExitHookRegistered) {
-		atexit(MtmReleaseLocks);
-		MtmAtExitHookRegistered = true;
-	}
-	if (MtmLockCount != 0 && Mtm->lastLockHolder == MyProcPid) {
-		MtmLockCount += 1;
-	}
-	else
-	{
-#if DEBUG_MTM_LOCK
-		timestamp_t start, stop;
-		start = MtmGetSystemTime();
-#endif
-		if (MyProc == NULL) { /* Can not wait if have no PGPROC. It can happen at process exit. TODO: without lock we can get race condition and corrupt Mtm state */
-			return;
-		}
-		LWLockAcquire((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID], mode);
-#if DEBUG_MTM_LOCK
-		stop = MtmGetSystemTime();
-		MtmLockElapsedWaitTime += stop - start;
-		if (stop - start > MtmLockMaxWaitTime) {
-			MtmLockMaxWaitTime = stop - start;
-		}
-		MtmLockHitCount += 1;
-		if (stop - MtmLockLastReportTime > USECS_PER_SEC) {
-			MTM_LOG1("%d: average lock wait time %lld usec, maximal lock wait time: %lld usec",
-					 MyProcPid, MtmLockElapsedWaitTime/MtmLockHitCount, MtmLockMaxWaitTime);
-			MtmLockLastReportTime = stop;
-			MtmLockMaxWaitTime = 0;
-			MtmLockElapsedWaitTime = 0;
-			MtmLockHitCount = 0;
-		}
-#endif
-		if (mode == LW_EXCLUSIVE) {
-			Assert(MyProcPid != 0);
-			Mtm->lastLockHolder = MyProcPid;
-			Assert(MyProcPid);
-			MtmLockCount = 1;
-		} else {
-			MtmLockCount = 0;
-		}
-	}
+	LWLockAcquire((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID], mode);
 }
 
 void MtmUnlock(void)
 {
-	if (Mtm->lastLockHolder == MyProcPid)
-	{
-		if (MtmLockCount != 0 && --MtmLockCount != 0) {
-			return;
-		}
-		Mtm->lastLockHolder = 0;
-	}
-	else
-	{
-		MtmLockCount = 0;
-	}
-
-	/* If we have no PGPROC, then lock was not obtained. */
-	if (MyProc != NULL)
-		LWLockRelease((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID]);
-}
-
-void MtmDeepUnlock(void)
-{
-	if (MtmLockCount == 0)
-		return;
-
-	Assert(Mtm->lastLockHolder == MyProcPid);
-
-	MtmLockCount = 0;
-	Mtm->lastLockHolder = 0;
-
-	/* If we have no PGPROC, then lock was not obtained. */
-	if (MyProc != NULL)
-		LWLockRelease((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID]);
+	LWLockRelease((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID]);
 }
 
 void MtmLockNode(int nodeId, LWLockMode mode)
@@ -503,11 +406,7 @@ void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
 	memset(msg, '\0', sizeof(MtmArbiterMessage));
 
 	msg->code = code;
-	msg->disabledNodeMask = Mtm->disabledNodeMask;
 	msg->connectivityMask = SELF_CONNECTIVITY_MASK;
-	msg->oldestSnapshot = Mtm->nodes[MtmNodeId-1].oldestSnapshot;
-	msg->lockReq = Mtm->originLockNodeMask != 0;
-	msg->locked = (Mtm->originLockNodeMask|Mtm->inducedLockNodeMask) != 0;
 	msg->node = MtmNodeId;
 }
 
@@ -541,7 +440,7 @@ TransactionId MtmGetCurrentTransactionId(void)
 	return MtmTx.xid;
 }
 
-void  MtmSetCurrentTransactionCSN(csn_t csn)
+void  MtmSetCurrentTransactionCSN()
 {
 	MTM_LOG3("Set current transaction CSN %lld", csn);
 	MtmTx.isDistributed = true;
@@ -562,7 +461,7 @@ void  MtmSetCurrentTransactionCSN(csn_t csn)
 void MtmHandleApplyError(void)
 {
 	ErrorData *edata = CopyErrorData();
-	MtmLockCount = 0; /* LWLocks will be released by AbortTransaction, we just need to clear owr MtmLockCount */
+
 	switch (edata->sqlerrcode) {
 		case ERRCODE_DISK_FULL:
 		case ERRCODE_INSUFFICIENT_RESOURCES:
@@ -574,7 +473,7 @@ void MtmHandleApplyError(void)
 		case ERRCODE_INTERNAL_ERROR:
 		case ERRCODE_OUT_OF_MEMORY:
 		  */
-			MtmStateProcessEvent(MTM_NONRECOVERABLE_ERROR);
+			MtmStateProcessEvent(MTM_NONRECOVERABLE_ERROR, false);
 	}
 	FreeErrorData(edata);
 }
@@ -639,7 +538,6 @@ bool MtmIsRecoveredNode(int nodeId)
 {
 	if (BIT_CHECK(Mtm->disabledNodeMask, nodeId-1)) {
 		if (!MtmIsRecoverySession) {
-			MtmDeepUnlock();
 			MTM_ELOG(ERROR, "Node %d is marked as disabled but is not in recovery mode", nodeId);
 		}
 		return true;
@@ -660,8 +558,7 @@ void MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN)
 	MtmLock(LW_EXCLUSIVE);
 	if (MtmIsRecoveredNode(nodeId)) {
 		lsn_t walLSN = GetXLogInsertRecPtr();
-		if (!BIT_CHECK(Mtm->originLockNodeMask, nodeId-1)
-			&& slotLSN + (long64) MtmMinRecoveryLag * 1024 > walLSN)
+		if (slotLSN + (long64) MtmMinRecoveryLag * 1024 > walLSN)
 		{
 			/*
 			 * Wal sender almost caught up.
@@ -669,18 +566,17 @@ void MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN)
 			 * We have to maintain two bitmasks: one is marking wal sender, another - correspondent nodes.
 			 * Is there some better way to establish mapping between nodes ad WAL-seconder?
 			 */
-			MTM_LOG1("Node %d is almost caught-up: slot position %llx, WAL position %llx, active transactions %d",
-				 nodeId, slotLSN, walLSN, Mtm->nActiveTransactions);
+			MTM_LOG1("Node %d is almost caught-up: slot position %llx, WAL position %llx",
+				 nodeId, slotLSN, walLSN);
 
 			MTM_LOG1("[LOCK] set lock on MtmCheckRecoveryCaughtUp");
-			BIT_SET(Mtm->originLockNodeMask, nodeId-1); // XXXX: log that
 		} else {
 			MTM_LOG2("Continue recovery of node %d, slot position %llx, WAL position %llx,"
-					 " WAL sender position %llx, lockers %llx, active transactions %d",
+					 " WAL sender position %llx, lockers %llx",
 					 nodeId, (long long unsigned int) slotLSN,
 					 (long long unsigned int) walLSN,
 					 (long long unsigned int) MyWalSnd->sentPtr,
-					 Mtm->originLockNodeMask, Mtm->nActiveTransactions);
+					 Mtm->originLockNodeMask);
 		}
 	}
 	MtmUnlock();
@@ -697,7 +593,7 @@ bool MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr)
 	MtmLock(LW_EXCLUSIVE);
 	if (MtmIsRecoveredNode(nodeId))
 	{
-		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP);
+		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP, true);
 		caughtUp = true;
 		MtmIsRecoverySession = false;
 	}
@@ -793,10 +689,7 @@ static void MtmInitialize()
 		Mtm->status = MTM_DISABLED; //MTM_INITIALIZATION;
 		Mtm->recoverySlot = 0;
 		Mtm->locks = GetNamedLWLockTranche(MULTIMASTER_NAME);
-		Mtm->csn = 42;
-		Mtm->lastCsn = INVALID_CSN;
-		Mtm->oldestXid = FirstNormalTransactionId;
-		Mtm->nLiveNodes = 0; //MtmNodes;
+
 		Mtm->nAllNodes = MtmNodes;
 		Mtm->disabledNodeMask =  (((nodemask_t)1 << MtmNodes) - 1);
 		Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1); //0;
@@ -804,60 +697,27 @@ static void MtmInitialize()
 		Mtm->refereeWinnerId = 0;
 		Mtm->stalledNodeMask = 0;
 		Mtm->stoppedNodeMask = 0;
-		Mtm->deadNodeMask = 0;
-		Mtm->recoveredNodeMask = 0;
 		Mtm->pglogicalReceiverMask = 0;
 		Mtm->pglogicalSenderMask = 0;
-		Mtm->inducedLockNodeMask = 0;
-		Mtm->currentLockNodeMask = 0;
-		Mtm->originLockNodeMask = 0;
-		Mtm->reconnectMask = 0;
 		Mtm->recoveredLSN = INVALID_LSN;
-		Mtm->nActiveTransactions = 0;
-		Mtm->nRunningTransactions = 0;
-		Mtm->votingTransactions = NULL;
-		Mtm->transListHead = NULL;
-		Mtm->transListTail = &Mtm->transListHead;
-		Mtm->activeTransList.next = Mtm->activeTransList.prev = &Mtm->activeTransList;
-		Mtm->nReceivers = 0;
-		Mtm->nSenders = 0;
-		Mtm->timeShift = 0;
-		Mtm->transCount = 0;
-		Mtm->gcCount = 0;
-		Mtm->nConfigChanges = 0;
 		Mtm->recoveryCount = 0;
 		Mtm->localTablesHashLoaded = false;
-		Mtm->preparedTransactionsLoaded = false;
-		Mtm->inject2PCError = 0;
-		Mtm->sendQueue = NULL;
-		Mtm->freeQueue = NULL;
+
 		for (i = 0; i < MtmMaxNodes; i++)
 		{
-			Mtm->nodes[i].oldestSnapshot = 0;
-			Mtm->nodes[i].disabledNodeMask = 0;
 			Mtm->nodes[i].connectivityMask = (((nodemask_t)1 << MtmNodes) - 1) & ~((nodemask_t)1 << (MtmNodeId-1));
-			Mtm->nodes[i].lockGraphUsed = 0;
-			Mtm->nodes[i].lockGraphAllocated = 0;
-			Mtm->nodes[i].lockGraphData = NULL;
-			Mtm->nodes[i].transDelay = 0;
-			Mtm->nodes[i].lastStatusChangeTime = MtmGetSystemTime();
 			Mtm->nodes[i].con = MtmConnections[i];
 			Mtm->nodes[i].flushPos = 0;
-			Mtm->nodes[i].lastHeartbeat = 0;
 			Mtm->nodes[i].restartLSN = INVALID_LSN;
 			Mtm->nodes[i].originId = InvalidRepOriginId;
 			Mtm->nodes[i].timeline = 0;
-			Mtm->nodes[i].nHeartbeats = 0;
 			Mtm->nodes[i].manualRecovery = false;
-			Mtm->nodes[i].slotDeleted = false;
 			BgwPoolInit(&Mtm->nodes[i].pool, MtmExecutor, MtmDatabaseName, MtmDatabaseUser, MtmQueueSize, 0);
 		}
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
 		Mtm->nodes[MtmNodeId-1].restartLSN = (lsn_t)PG_UINT64_MAX;
-		Mtm->sendSemaphore = PGSemaphoreCreate();
-		PGSemaphoreReset(Mtm->sendSemaphore);
-		SpinLockInit(&Mtm->queueSpinlock);
+
 		MtmTx.xid = InvalidTransactionId;
 	}
 
@@ -1652,7 +1512,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	MtmIsRecoverySession = false;
 	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
-	Mtm->nodes[MtmReplicationNodeId-1].senderStartTime = MtmGetSystemTime();
+
 	foreach(param, args->in_params)
 	{
 		DefElem	   *elem = lfirst(param);
@@ -1737,14 +1597,13 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		if (recoveryStartPos < MyReplicationSlot->data.restart_lsn) {
 			MTM_ELOG(WARNING, "Specified recovery start position %llx is beyond restart lsn %llx", recoveryStartPos, (long64)MyReplicationSlot->data.restart_lsn);
 		}
-		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY);
+		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, true);
 	} else { //if (BIT_CHECK(Mtm->disabledNodeMask,	 MtmReplicationNodeId-1)) {
 		if (recoveryCompleted) {
 			MTM_LOG1("Node %d consider that recovery of node %d is completed: start normal replication", MtmNodeId, MtmReplicationNodeId);
-			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED);
+			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, true);
 		} else {
 			/* Force arbiter to reestablish connection with this node, send heartbeat to inform this node that it was disabled and should perform recovery */
-			BIT_SET(Mtm->reconnectMask, MtmReplicationNodeId-1);
 			MtmUnlock();
 			MTM_ELOG(ERROR, "Disabled node %d tries to reconnect without recovery", MtmReplicationNodeId);
 		}
@@ -1754,7 +1613,6 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	// 	MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_NORMAL);
 	// }
 
-	BIT_SET(Mtm->reconnectMask, MtmReplicationNodeId-1); /* arbiter should try to reestablish connection with this node */
 	MtmUnlock();
 	on_shmem_exit(MtmOnProcExit, 0);
 }
@@ -1815,7 +1673,6 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
 	MtmLock(LW_EXCLUSIVE);
 	if (MtmReplicationNodeId >= 0 && BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1)) {
 		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
-		Mtm->nSenders -= 1;
 		MTM_LOG1("Logical replication to node %d is stopped", MtmReplicationNodeId);
 		/* MtmOnNodeDisconnect(MtmReplicationNodeId); */
 		MtmReplicationNodeId = -1; /* defuse MtmOnProcExit hook */
@@ -2048,13 +1905,9 @@ mtm_add_node(PG_FUNCTION_ARGS)
 			fclose(f);
 		}
 
-		Mtm->nodes[nodeId].transDelay = 0;
-		Mtm->nodes[nodeId].lastStatusChangeTime = MtmGetSystemTime();
 		Mtm->nodes[nodeId].flushPos = 0;
-		Mtm->nodes[nodeId].oldestSnapshot = 0;
 
 		BIT_SET(Mtm->disabledNodeMask, nodeId);
-		Mtm->nConfigChanges += 1;
 		Mtm->nAllNodes += 1;
 		MtmUnlock();
 
@@ -2136,19 +1989,19 @@ mtm_get_nodes_state(PG_FUNCTION_ARGS)
 	usrfctx->values[3] = BoolGetDatum(BIT_CHECK(Mtm->stalledNodeMask, usrfctx->nodeId-1));
 	usrfctx->values[4] = BoolGetDatum(BIT_CHECK(Mtm->stoppedNodeMask, usrfctx->nodeId-1));
 
-	usrfctx->values[5] = BoolGetDatum(BIT_CHECK(Mtm->originLockNodeMask, usrfctx->nodeId-1));
+	usrfctx->values[5] = BoolGetDatum(false);
 	lag = MtmGetSlotLag(usrfctx->nodeId);
 	usrfctx->values[6] = Int64GetDatum(lag);
 	usrfctx->nulls[6] = lag < 0;
 
-	usrfctx->values[7] = Int64GetDatum(Mtm->transCount ? Mtm->nodes[usrfctx->nodeId-1].transDelay/Mtm->transCount : 0);
-	usrfctx->values[8] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[usrfctx->nodeId-1].lastStatusChangeTime/USECS_PER_SEC));
-	usrfctx->values[9] = Int64GetDatum(Mtm->nodes[usrfctx->nodeId-1].oldestSnapshot);
+	usrfctx->values[7] = Int64GetDatum(42);
+	usrfctx->values[8] = TimestampTzGetDatum(42);
+	usrfctx->values[9] = Int64GetDatum(42);
 
 	usrfctx->values[10] = Int32GetDatum(Mtm->nodes[usrfctx->nodeId-1].senderPid);
-	usrfctx->values[11] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[usrfctx->nodeId-1].senderStartTime/USECS_PER_SEC));
+	usrfctx->values[11] = TimestampTzGetDatum(42);
 	usrfctx->values[12] = Int32GetDatum(Mtm->nodes[usrfctx->nodeId-1].receiverPid);
-	usrfctx->values[13] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[usrfctx->nodeId-1].receiverStartTime/USECS_PER_SEC));
+	usrfctx->values[13] = TimestampTzGetDatum(42);
 
 	if (usrfctx->nodeId == MtmNodeId)
 	{
@@ -2160,7 +2013,7 @@ mtm_get_nodes_state(PG_FUNCTION_ARGS)
 
 	usrfctx->values[14] = CStringGetTextDatum(Mtm->nodes[usrfctx->nodeId-1].con.connStr);
 	usrfctx->values[15] = Int64GetDatum(Mtm->nodes[usrfctx->nodeId-1].connectivityMask);
-	usrfctx->values[16] = Int64GetDatum(Mtm->nodes[usrfctx->nodeId-1].nHeartbeats);
+	usrfctx->values[16] = Int64GetDatum(42);
 	usrfctx->nodeId += 1;
 
 	SRF_RETURN_NEXT(funcctx, HeapTupleGetDatum(heap_form_tuple(usrfctx->desc, usrfctx->values, usrfctx->nulls)));
@@ -2190,22 +2043,22 @@ mtm_get_cluster_state(PG_FUNCTION_ARGS)
 	values[1] = CStringGetTextDatum(MtmNodeStatusMnem[Mtm->status]);
 	values[2] = Int64GetDatum(Mtm->disabledNodeMask);
 	values[3] = Int64GetDatum(SELF_CONNECTIVITY_MASK);
-	values[4] = Int64GetDatum(Mtm->originLockNodeMask);
-	values[5] = Int32GetDatum(Mtm->nAllNodes);
+	values[4] = Int64GetDatum(42);
+	values[5] = Int32GetDatum(42);
 	values[6] = Int32GetDatum(Mtm->nAllNodes);
 	values[7] = Int32GetDatum(pool_active);
 	values[8] = Int32GetDatum(pool_pending);
 	values[9] = Int64GetDatum(pool_queue_size);
-	values[10] = Int64GetDatum(Mtm->transCount);
-	values[11] = Int64GetDatum(Mtm->timeShift);
+	values[10] = Int64GetDatum(42);
+	values[11] = Int64GetDatum(42);
 	values[12] = Int32GetDatum(Mtm->recoverySlot);
 	values[13] = Int64GetDatum(0);
 	values[14] = Int64GetDatum(0);
-	values[15] = Int64GetDatum(Mtm->oldestXid);
-	values[16] = Int32GetDatum(Mtm->nConfigChanges);
+	values[15] = Int64GetDatum(42);
+	values[16] = Int32GetDatum(42);
 	values[17] = Int64GetDatum(Mtm->stalledNodeMask);
 	values[18] = Int64GetDatum(Mtm->stoppedNodeMask);
-	values[19] = TimestampTzGetDatum(time_t_to_timestamptz(Mtm->nodes[MtmNodeId-1].lastStatusChangeTime/USECS_PER_SEC));
+	values[19] = TimestampTzGetDatum(42);
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
 }

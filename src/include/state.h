@@ -21,8 +21,8 @@ typedef enum
 	MTM_NONRECOVERABLE_ERROR
 } MtmEvent;
 
-extern void MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev);
-extern void MtmStateProcessEvent(MtmEvent ev);
+extern void MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked);
+extern void MtmStateProcessEvent(MtmEvent ev, bool locked);
 extern void MtmDisableNode(int nodeId);
 extern void MtmEnableNode(int nodeId);
 

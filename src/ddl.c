@@ -40,6 +40,8 @@
 #include "ddl.h"
 #include "logger.h"
 
+#include "multimaster.h"
+
 
 // XXX: is it defined somewhere?
 #define GUC_KEY_MAXLEN					255
@@ -74,7 +76,6 @@ static VacuumStmt* MtmVacuumStmt;
 static IndexStmt*	MtmIndexStmt;
 static DropStmt*	MtmDropStmt;
 static void*		MtmTablespaceStmt; /* CREATE/DELETE tablespace */
-static bool			localTablesHashLoaded;
 
 static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
@@ -1115,14 +1116,14 @@ MtmIsRelationLocal(Relation rel)
 	bool found;
 
 	LWLockAcquire(MtmLocalTablesMapLock, LW_SHARED);
-	if (!localTablesHashLoaded)
+	if (!Mtm->localTablesHashLoaded)
 	{
 		LWLockRelease(MtmLocalTablesMapLock);
 		LWLockAcquire(MtmLocalTablesMapLock, LW_EXCLUSIVE);
-		if (!localTablesHashLoaded)
+		if (!Mtm->localTablesHashLoaded)
 		{
 			MtmLoadLocalTables();
-			localTablesHashLoaded = true;
+			Mtm->localTablesHashLoaded = true;
 		}
 	}
 

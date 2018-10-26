@@ -94,9 +94,6 @@
 #define Natts_mtm_nodes_state   17
 #define Natts_mtm_cluster_state 20
 
-typedef ulong64 csn_t; /* commit serial number */
-#define INVALID_CSN  ((csn_t)-1)
-
 typedef ulong64 lsn_t;
 #define INVALID_LSN  InvalidXLogRecPtr
 
@@ -170,49 +167,12 @@ typedef struct
 	MtmMessageCode code;   /* Message code: MSG_PREPARE, MSG_PRECOMMIT, MSG_COMMIT, MSG_ABORT,... */
 	MtmTxState     state;
     int            node;   /* Sender node ID */
-	bool           lockReq;/* Whether sender node needs to lock cluster to let wal-sender caught-up and complete recovery */
-	bool           locked; /* Whether sender node is locked */
 	TransactionId  dxid;   /* Transaction ID at destination node */
 	TransactionId  sxid;   /* Transaction ID at sender node */
     XidStatus      status; /* Transaction status */
-	csn_t          csn;    /* Local CSN in case of sending data from replica to master, global CSN master->replica */
-	csn_t          oldestSnapshot; /* Oldest snapshot used by active transactions at this node */
-	nodemask_t     disabledNodeMask; /* Bitmask of disabled nodes at the sender of message */
 	nodemask_t     connectivityMask; /* Connectivity bitmask at the sender of message */
 	pgid_t         gid;    /* Global transaction identifier */
 } MtmArbiterMessage;
-
-/*
- * Abort logical message is send by replica when error is happen while applying prepared transaction.
- * In this case we do not have prepared transaction and can not do abort-prepared.
- * But we have to record the fact of abort to be able to replay it in case of crash of coordinator of this transaction.
- * We are using logical abort message with code 'A' for it
- */
-typedef struct MtmAbortLogicalMessage
-{
-	pgid_t    gid;
-	int       origin_node;
-	lsn_t     origin_lsn;
-} MtmAbortLogicalMessage;
-
-typedef struct MtmMessageQueue
-{
-	MtmArbiterMessage msg;
-	struct MtmMessageQueue* next;
-} MtmMessageQueue;
-
-typedef struct
-{
-	MtmArbiterMessage hdr;
-	char connStr[MULTIMASTER_MAX_CONN_STR_SIZE];
-} MtmHandshakeMessage;
-
-typedef struct
-{
-	int used;
-	int size;
-	MtmArbiterMessage* data;
-} MtmBuffer;
 
 typedef struct
 {
@@ -222,138 +182,48 @@ typedef struct
 	int postmasterPort;
 } MtmConnectionInfo;
 
-
 typedef struct
 {
 	Oid sourceTable;
 	nodemask_t targetNodes;
 } MtmCopyRequest;
 
-
 typedef struct
 {
 	MtmConnectionInfo con;
 	/* Pool of background workers for applying logical replication */
 	BgwPool pool;
-	timestamp_t transDelay;
-	timestamp_t lastStatusChangeTime;
-	timestamp_t receiverStartTime;
-	timestamp_t senderStartTime;
-	timestamp_t lastHeartbeat;
-	nodemask_t  disabledNodeMask;      /* Bitmask of disabled nodes received from this node */
 	nodemask_t  connectivityMask;      /* Connectivity mask at this node */
 	int         senderPid;
 	int         receiverPid;
 	lsn_t       flushPos;
-	csn_t       oldestSnapshot;        /* Oldest snapshot used by active transactions at this node */
 	lsn_t       restartLSN;
 	RepOriginId originId;
 	int         timeline;
-	void*       lockGraphData;
-	int         lockGraphAllocated;
-	int         lockGraphUsed;
-	uint64      nHeartbeats;
 	bool		manualRecovery;
 	DmqDestinationId	destination_id;
-	bool		slotDeleted;			/* Signalizes that node is already deleted our slot and
-										 * recovery from that node isn't possible.
-										 */
 } MtmNodeInfo;
-
-typedef struct MtmL2List
-{
-	struct MtmL2List* next;
-	struct MtmL2List* prev;
-} MtmL2List;
-
-typedef struct MtmTransState
-{
-    TransactionId  xid;
-    XidStatus      status;
-	pgid_t         gid;                /* Global transaction ID (used for 2PC) */
-	GlobalTransactionId gtid;          /* Transaction id at coordinator */
-    csn_t          csn;                /* commit serial number */
-    csn_t          snapshot;           /* transaction snapshot, or INVALID_CSN for local transactions */
-	int            procno;             /* pgprocno of transaction coordinator waiting for responses from replicas,
-							              used to notify coordinator by arbiter */
-	int            nSubxids;           /* Number of subtransanctions */
-    struct MtmTransState* next;        /* Next element in L1 list of all finished transaction present in xid2state hash */
-	MtmL2List      activeList;         /* L2-list of active transactions */
-	bool           votingCompleted;    /* 2PC voting is completed */
-	bool           isLocal;            /* Transaction is either replicated, either doesn't contain DML statements, so it should be ignored by pglogical replication */
-	bool           isEnqueued;         /* Transaction is inserted in queue */
-	bool           isPrepared;         /* Transaction is prepared: now it is safe to commit transaction */
-	bool           isActive;           /* Transaction is active */
-	bool           isTwoPhase;         /* User level 2PC */
-	bool           isPinned;           /* Transaction oid protected from GC */
-	int            nConfigChanges;     /* Number of cluster configuration changes at moment of transaction start */
-	nodemask_t     participantsMask;   /* Mask of nodes involved in transaction */
-	nodemask_t     votedMask;          /* Mask of voted nodes */
-	int			   abortedByNode;      /* Store info about node on which this tx was aborted */
-	TransactionId  xids[1];            /* [Mtm->nAllNodes]: transaction ID at replicas */
-} MtmTransState;
-
-typedef struct {
-	pgid_t gid;
-	bool   abort;
-	XidStatus status;
-	MtmTransState* state;
-} MtmTransMap;
 
 typedef struct
 {
 	bool extension_created;
 	MtmNodeStatus status;              /* Status of this node */
-	/* A human-readable description of why the current status was set */
-	char *statusReason;
+	char *statusReason;                /* A human-readable description of why the current status was set */
 	int recoverySlot;                  /* NodeId of recovery slot or 0 if none */
-	volatile slock_t queueSpinlock;    /* spinlock used to protect sender queue */
-	PGSemaphore sendSemaphore;     /* semaphore used to notify mtm-sender about new responses to coordinator */
 	LWLockPadded *locks;               /* multimaster lock tranche */
-	TransactionId oldestXid;           /* XID of oldest transaction visible by any active transaction (local or global) */
 	nodemask_t disabledNodeMask;       /* Bitmask of disabled nodes */
 	nodemask_t clique;                 /* Bitmask of nodes that are connected and we allowed to connect/send wal/receive wal with them */
 	bool       refereeGrant;           /* Referee allowed us to work with half of the nodes */
 	int        refereeWinnerId;        /* Node that won referee contest */
-	nodemask_t deadNodeMask;           /* Bitmask of nodes considered as dead by referee */
-	nodemask_t recoveredNodeMask;      /* Bitmask of nodes recoverd after been reported as dead by referee */
 	nodemask_t stalledNodeMask;        /* Bitmask of stalled nodes (node with dropped replication slot which makes it not possible automatic recovery of such node) */
 	nodemask_t stoppedNodeMask;        /* Bitmask of stopped (permanently disabled nodes) */
 	nodemask_t pglogicalReceiverMask;  /* bitmask of started pglogic receivers */
 	nodemask_t pglogicalSenderMask;    /* bitmask of started pglogic senders */
-	nodemask_t currentLockNodeMask;    /* Mask of nodes IDs which are locking the cluster */
-	nodemask_t inducedLockNodeMask;    /* Mask of node IDs which requested cluster-wide lock */
-	nodemask_t originLockNodeMask;     /* Mask of node IDs which WAL-senders are locking the cluster.
-										* MtmNodeId bit is used by recovered node to complete recovery and by MtmLockCluster method */
-	nodemask_t reconnectMask; 	       /* Mask of nodes connection to which has to be reestablished by sender */
-	int        lastLockHolder;         /* PID of process last obtaining the node lock */
 	bool   localTablesHashLoaded;      /* Whether data from local_tables table is loaded in shared memory hash table */
-	bool   preparedTransactionsLoaded; /* GIDs of prepared transactions are loaded at startup */
-	int    inject2PCError;             /* Simulate error during 2PC commit at this node */
-    int    nLiveNodes;                 /* Number of active nodes */
-    int    nAllNodes;                  /* Total number of nodes */
-    int    nReceivers;                 /* Number of initialized logical receivers (used to determine moment when initialization/recovery is completed) */
-    int    nSenders;                   /* Number of started WAL senders (used to determine moment when recovery) */
-	int    nActiveTransactions;        /* Number of active 2PC transactions */
-	int    nRunningTransactions;       /* Number of all running transactions */
-	int    nConfigChanges;             /* Number of cluster configuration changes */
+	int    nAllNodes;                  /* Total number of nodes */
 	int    recoveryCount;              /* Number of completed recoveries */
 	int    donorNodeId;                /* Cluster node from which this node was populated */
-	int64  timeShift;                  /* Local time correction */
-	csn_t  csn;                        /* Last obtained timestamp: used to provide unique ascending CSNs based on system time */
-	csn_t  lastCsn;                    /* CSN of last committed transaction */
-	MtmTransState* votingTransactions; /* L1-list of replicated transactions notifications to coordinator.
-									 	 This list is used to pass information to mtm-sender BGW */
-    MtmTransState* transListHead;      /* L1 list of all finished transactions present in xid2state hash.
-									 	  It is cleanup by MtmGetOldestXmin */
-    MtmTransState** transListTail;     /* Tail of L1 list of all finished transactions, used to append new elements.
-								  		  This list is expected to be in CSN ascending order, by strict order may be violated */
-	MtmL2List activeTransList;         /* List of active transactions */
-	ulong64 transCount;                /* Counter of transactions performed by this node */
-	ulong64 gcCount;                   /* Number of global transactions performed since last GC */
-	MtmMessageQueue* sendQueue;        /* Messages to be sent by arbiter sender */
-	MtmMessageQueue* freeQueue;        /* Free messages */
-	lsn_t recoveredLSN;           /* LSN at the moment of recovery completion */
+	lsn_t recoveredLSN;                /* LSN at the moment of recovery completion */
 	MtmNodeInfo nodes[1];              /* [Mtm->nAllNodes]: per-node data */
 } MtmState;
 
@@ -366,8 +236,6 @@ typedef struct MtmFlushPosition
 } MtmFlushPosition;
 
 
-#define MtmIsCoordinator(ts) (ts->gtid.node == MtmNodeId)
-
 extern char const* const MtmNodeStatusMnem[];
 extern char const* const MtmTxnStatusMnem[];
 extern char const* const MtmMessageKindMnem[];
@@ -376,26 +244,17 @@ extern MtmState* Mtm;
 
 extern int   MtmReplicationNodeId;
 extern int   MtmNodes;
-extern int   MtmArbiterPort;
 extern char* MtmDatabaseName;
-extern int   MtmNodeDisableDelay;
 extern int   MtmTransSpillThreshold;
 extern int   MtmHeartbeatSendTimeout;
 extern int   MtmHeartbeatRecvTimeout;
-extern bool  MtmUseRDMA;
-extern bool  MtmUseDtm;
 extern bool  MtmPreserveCommitOrder;
-extern HTAB* MtmXid2State;
-extern HTAB* MtmGid2State;
 
-extern lsn_t MtmSenderWalEnd;
-extern timestamp_t MtmRefreshClusterStatusSchedule;
 extern MtmConnectionInfo* MtmConnections;
 extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
 extern bool MtmIsRecoverySession;
-extern int MtmWorkers;
 
 extern void  MtmXactCallback2(XactEvent event, void *arg);
 extern void  MtmMonitorInitialize(void);
@@ -413,67 +272,55 @@ extern void ResolveTransactionsForNode(int node_id);
 extern void ResolveAllTransactions(void);
 extern char *MtmTxStateMnem(MtmTxState state);
 
-extern void MtmFollowerHandleAbort(void);
-
 extern void  MtmStartReceivers(void);
 extern void  MtmStartReceiver(int nodeId, bool dynamic);
-extern csn_t MtmDistributedTransactionSnapshot(TransactionId xid, int nodeId, nodemask_t* participantsMask);
-extern csn_t MtmAssignCSN(void);
-extern csn_t MtmSyncClock(csn_t csn);
-extern void  MtmJoinTransaction(GlobalTransactionId* gtid, csn_t snapshot, nodemask_t participantsMask);
+
 extern MtmReplicationMode MtmGetReplicationMode(int nodeId);
 extern void  MtmExecutor(void* work, size_t size);
-extern void  MtmSend2PCMessage(MtmTransState* ts, MtmMessageCode cmd);
-extern void  MtmSendMessage(MtmArbiterMessage* msg);
-extern void  MtmAdjustSubtransactions(MtmTransState* ts);
+
+
+
 extern void  MtmLock(LWLockMode mode);
 extern void  MtmUnlock(void);
-extern void  MtmDeepUnlock(void);
 extern void  MtmLockNode(int nodeId, LWLockMode mode);
 extern bool  MtmTryLockNode(int nodeId, LWLockMode mode);
 extern void  MtmUnlockNode(int nodeId);
+
 extern void  MtmStopNode(int nodeId, bool dropSlot);
 extern void  MtmRecoverNode(int nodeId);
 extern void  MtmResumeNode(int nodeId);
-extern void  MtmWakeUpBackend(MtmTransState* ts);
+
 extern void  MtmSleep(timestamp_t interval);
-extern void  MtmAbortTransaction(MtmTransState* ts);
-extern void  MtmSetCurrentTransactionGID(char const* gid);
-extern csn_t MtmGetTransactionCSN(TransactionId xid);
-extern void  MtmSetCurrentTransactionCSN(csn_t csn);
+
+extern void  MtmSetCurrentTransactionGID(char const* gid, int node_id);
+
+extern void  MtmSetCurrentTransactionCSN(void);
+
 extern TransactionId MtmGetCurrentTransactionId(void);
 extern XidStatus MtmGetCurrentTransactionStatus(void);
-extern XidStatus MtmExchangeGlobalTransactionStatus(char const* gid, XidStatus status);
+
 extern bool  MtmIsRecoveredNode(int nodeId);
 extern void  MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr);
 extern void  MtmSetupReplicationHooks(struct PGLogicalHooks* hooks);
 extern bool  MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr);
 extern void  MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN);
-extern void  MtmMakeTableLocal(char const* schema, char const* name);
-extern void  MtmMakeRelationLocal(Oid relid);
+
 extern void  MtmHandleApplyError(void);
+
 extern void  MtmUpdateLsnMapping(int nodeId, lsn_t endLsn);
 extern lsn_t MtmGetFlushPosition(int nodeId);
-extern bool MtmWatchdog(timestamp_t now);
-extern void MtmCheckHeartbeat(void);
+
 extern void MtmResetTransaction(void);
 extern void MtmReleaseRecoverySlot(int nodeId);
 extern PGconn *PQconnectdb_safe(const char *conninfo, int timeout);
 extern void MtmBeginSession(int nodeId);
 extern void MtmEndSession(int nodeId, bool unlock);
-extern void MtmFinishPreparedTransaction(MtmTransState* ts, bool commit);
-extern void MtmRollbackPreparedTransaction(int nodeId, char const* gid);
+
 extern bool MtmFilterTransaction(char* record, int size);
-extern void MtmPrecommitTransaction(char const* gid);
-extern char* MtmGucSerialize(void);
-extern MtmTransState* MtmGetActiveTransaction(MtmL2List* list);
-extern void MtmReleaseLocks(void);
+
 extern void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code);
-extern void MtmSetSnapshot(csn_t snapshot);
+
 extern void MtmRefereeInitialize(void);
-extern void MtmPollStatusOfPreparedTransactionsForDisabledNode(int disabledNodeId, bool commitPrecommited);
-extern void MtmPollStatusOfPreparedTransactions(bool majorMode);
-extern int MtmGetNumberOfVotingNodes(void);
 extern void MtmUpdateControlFile(void);
 
 extern void MtmCheckSlots(void);

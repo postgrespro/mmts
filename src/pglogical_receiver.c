@@ -67,7 +67,6 @@ static char worker_proc[BGW_MAXLEN];
 
 /* Lastly written positions */
 static lsn_t output_written_lsn = INVALID_LSN;
-lsn_t MtmSenderWalEnd;
 
 /* Stream functions */
 static void fe_sendint64(int64 i, char *buf);
@@ -254,7 +253,6 @@ pglogical_receiver_main(Datum main_arg)
 	MtmCreateSpillDirectory(nodeId);
 
 	Mtm->nodes[nodeId-1].receiverPid = MyProcPid;
-	Mtm->nodes[nodeId-1].receiverStartTime = MtmGetSystemTime();
 	MtmReplicationNodeId = nodeId;
 
 	snprintf(worker_proc, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d", MtmNodeId, nodeId);
@@ -410,7 +408,7 @@ pglogical_receiver_main(Datum main_arg)
 		PQclear(res);
 		resetPQExpBuffer(query);
 
-		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_START);
+		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
 
 		for(;;)
 		{
@@ -540,9 +538,6 @@ pglogical_receiver_main(Datum main_arg)
 				walEnd = fe_recvint64(&copybuf[hdr_len]);
 				hdr_len += 8;		/* WALEnd */
 				hdr_len += 8;		/* sendTime */
-
-				/* WAL position of the end of this message at WAL sender */
-				MtmSenderWalEnd = walEnd;
 
 				/*ereport(LOG, (MTM_ERRMSG("%s: receive message %c length %d", worker_proc, copybuf[hdr_len], rc - hdr_len)));*/
 

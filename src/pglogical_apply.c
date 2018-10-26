@@ -510,34 +510,35 @@ process_remote_message(StringInfo s)
 		}
 	    case 'A':
 		{
-			MtmAbortLogicalMessage* msg = (MtmAbortLogicalMessage*)messageBody;
-			int origin_node = msg->origin_node;
-			Assert(messageSize == sizeof(MtmAbortLogicalMessage));
-			/* This function is called directly by receiver, so there is no race condition and we can update
-			 * restartLSN without locks
-			 */
-			if (origin_node == MtmReplicationNodeId) { 
-				Assert(msg->origin_lsn == INVALID_LSN);
-				msg->origin_lsn = MtmSenderWalEnd;
-			}
-			if (Mtm->nodes[origin_node-1].restartLSN < msg->origin_lsn) { 
-				MTM_LOG1("Receive logical abort message for transaction %s from node %d: %llx < %llx", msg->gid, origin_node, Mtm->nodes[origin_node-1].restartLSN, msg->origin_lsn);
-				// Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
-				// replorigin_session_origin_lsn = msg->origin_lsn;
-				// MtmRollbackPreparedTransaction(origin_node, msg->gid);
-			} else { 
-				if (msg->origin_lsn != INVALID_LSN) { 
-					MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN %llx <= %llx", 
-							 msg->gid, origin_node, msg->origin_lsn, Mtm->nodes[origin_node-1].restartLSN);
-				}
-				else
-				{
-					MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN is invalid", 
-							 msg->gid, origin_node);
-				}
-			}
-			standalone = true;
-			break;
+			Assert(false);
+			// MtmAbortLogicalMessage* msg = (MtmAbortLogicalMessage*)messageBody;
+			// int origin_node = msg->origin_node;
+			// Assert(messageSize == sizeof(MtmAbortLogicalMessage));
+			// /* This function is called directly by receiver, so there is no race condition and we can update
+			//  * restartLSN without locks
+			//  */
+			// if (origin_node == MtmReplicationNodeId) { 
+			// 	Assert(msg->origin_lsn == INVALID_LSN);
+			// 	msg->origin_lsn = MtmSenderWalEnd;
+			// }
+			// if (Mtm->nodes[origin_node-1].restartLSN < msg->origin_lsn) { 
+			// 	MTM_LOG1("Receive logical abort message for transaction %s from node %d: %llx < %llx", msg->gid, origin_node, Mtm->nodes[origin_node-1].restartLSN, msg->origin_lsn);
+			// 	// Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
+			// 	// replorigin_session_origin_lsn = msg->origin_lsn;
+			// 	// MtmRollbackPreparedTransaction(origin_node, msg->gid);
+			// } else { 
+			// 	if (msg->origin_lsn != INVALID_LSN) { 
+			// 		MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN %llx <= %llx", 
+			// 				 msg->gid, origin_node, msg->origin_lsn, Mtm->nodes[origin_node-1].restartLSN);
+			// 	}
+			// 	else
+			// 	{
+			// 		MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN is invalid", 
+			// 				 msg->gid, origin_node);
+			// 	}
+			// }
+			// standalone = true;
+			// break;
 		}
 		case 'L':
 		{
@@ -548,7 +549,7 @@ process_remote_message(StringInfo s)
 		}
 	    case 'S':
 		{
-  		    Assert(messageSize == sizeof(csn_t));
+  		    Assert(false);
 		    // MtmSetSnapshot(*(csn_t*)messageBody);
 			break;
 		}
@@ -733,7 +734,6 @@ static void
 process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 {
 	uint8 		event;
-	csn_t       csn;
 	lsn_t       end_lsn;
 	lsn_t       origin_lsn;
 	lsn_t       commit_lsn;
@@ -866,23 +866,19 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 		case PGLOGICAL_COMMIT_PREPARED:
 		{
 			Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
-			csn = pq_getmsgint64(in);
+			pq_getmsgint64(in); /* csn */
 			/*
 			 * Since our recovery method allows undershoot of lsn, we can receive
 			 * some already committed transactions. And in case of donor node reboot
 			 * xid<->csn mapping for them will be lost. However we must filter such
 			 * transactions in walreceiver before this code. --sk
 			 */
-			Assert(csn);
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MTM_LOG2("%d: PGLOGICAL_COMMIT_PREPARED %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			MtmResetTransaction();
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
-			if (csn == INVALID_CSN && Mtm->status == MTM_RECOVERY)
-				MtmSetCurrentTransactionCSN(42);
-			else
-				MtmSetCurrentTransactionCSN(csn);
+			MtmSetCurrentTransactionCSN();
 			MtmSetCurrentTransactionGID(gid, origin_node);
 			TXFINISH("%s COMMIT, PGLOGICAL_COMMIT_PREPARED csn=%lld", gid, csn);
 			FinishPreparedTransaction(gid, true, false);
@@ -1400,7 +1396,7 @@ void MtmExecutor(void* work, size_t size)
 			}
 			case 'Z':
 			{
-				MtmStateProcessEvent(MTM_RECOVERY_FINISH2);
+				MtmStateProcessEvent(MTM_RECOVERY_FINISH2, false);
 				inside_transaction = false;
 				break;
 			}
@@ -1445,6 +1441,5 @@ void MtmExecutor(void* work, size_t size)
 #endif
 	MemoryContextSwitchTo(top_context);
     MemoryContextResetAndDeleteChildren(MtmApplyContext);
-	MtmReleaseLocks();
 }
     
