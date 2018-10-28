@@ -63,6 +63,12 @@ sub new
 	{
 		my $host = "127.0.0.1";
 		my ($pgport, $arbiter_port) = allocate_ports($host, 2);
+
+		if(defined $ENV{MMPORT}) {
+			$pgport = $ENV{MMPORT};
+			delete $ENV{MMPORT};
+		}
+
 		my $node = new PostgresNode("node$i", $host, $pgport);
 		$node->{id} = $i;
 		$node->{arbiter_port} = $arbiter_port;
