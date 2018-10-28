@@ -460,18 +460,14 @@ pg_decode_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 void
 pg_decode_caughtup(LogicalDecodingContext *ctx)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
 	/*
 	 * MtmOutputPluginPrepareWrite send some bytes to downstream,
 	 * so we must avoid calling it in normal (non-recovery) situation.
-	 *
-	 * It's dirty hack to use MtmIsRecoverySession here and better to
-	 * provide also filter-like callback, but we plan to migrate to native
-	 * output plugin, so this code should anyway go away during next
-	 * release.
 	 */
-	if (data->api && MtmIsRecoverySession)
+	if (data->api && hooks_data->is_recovery)
 	{
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);

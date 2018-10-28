@@ -168,12 +168,12 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	}
 
 	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
-	mtm_log(MtmTxFinish, "TXFINISH: %s precommittted", gid);
+	mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 	GatherPrecommits(x, participantsMask);
 
 	StartTransactionCommand();
 	FinishPreparedTransaction(gid, true, false);
-	mtm_log(MtmTxFinish, "TXFINISH: %s committted", gid);
+	mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 
 	dmq_stream_unsubscribe(stream);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);

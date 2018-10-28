@@ -235,6 +235,11 @@ typedef struct MtmFlushPosition
 	lsn_t      remote_end;
 } MtmFlushPosition;
 
+typedef struct
+{
+	int magic;
+	bool is_recovery;
+} MtmDecoderPrivate;
 
 extern char const* const MtmNodeStatusMnem[];
 extern char const* const MtmTxnStatusMnem[];
@@ -254,7 +259,6 @@ extern MtmConnectionInfo* MtmConnections;
 extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
-extern bool MtmIsRecoverySession;
 
 extern void  MtmXactCallback2(XactEvent event, void *arg);
 extern void  MtmMonitorInitialize(void);
@@ -293,24 +297,18 @@ extern void  MtmResumeNode(int nodeId);
 extern void  MtmSleep(timestamp_t interval);
 
 extern void  MtmSetCurrentTransactionGID(char const* gid, int node_id);
-
 extern void  MtmSetCurrentTransactionCSN(void);
-
 extern TransactionId MtmGetCurrentTransactionId(void);
-extern XidStatus MtmGetCurrentTransactionStatus(void);
+extern void MtmResetTransaction(void);
 
-extern bool  MtmIsRecoveredNode(int nodeId);
 extern void  MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr);
-extern void  MtmSetupReplicationHooks(struct PGLogicalHooks* hooks);
-extern bool  MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr);
-extern void  MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN);
 
 extern void  MtmHandleApplyError(void);
 
 extern void  MtmUpdateLsnMapping(int nodeId, lsn_t endLsn);
 extern lsn_t MtmGetFlushPosition(int nodeId);
 
-extern void MtmResetTransaction(void);
+
 extern void MtmReleaseRecoverySlot(int nodeId);
 extern PGconn *PQconnectdb_safe(const char *conninfo, int timeout);
 extern void MtmBeginSession(int nodeId);

@@ -116,11 +116,11 @@ sub configure
 		my $unix_sock_dir = $ENV{PGHOST};
 
 		$node->append_conf("postgresql.conf", qq(
-			log_statement = all
+			# log_statement = all
 			listen_addresses = '$host'
 			unix_socket_directories = '$unix_sock_dir'
 			port = $pgport
-			max_prepared_transactions = 30
+			max_prepared_transactions = 150
 			max_connections = 10
 			max_worker_processes = 100
 			wal_level = logical

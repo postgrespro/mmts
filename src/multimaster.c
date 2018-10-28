@@ -135,7 +135,6 @@ MtmState* Mtm;
 MemoryContext MtmApplyContext;
 MtmConnectionInfo* MtmConnections;
 
-bool MtmIsRecoverySession;
 
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
@@ -526,79 +525,6 @@ static int64 MtmGetSlotLag(int nodeId)
 		}
 	}
 	return -1;
-}
-
-
-/*
- * This function is called by WAL sender when start sending new transaction.
- * It returns true if specified node is in recovery mode. In this case we should send to it all transactions from WAL,
- * not only coordinated by self node as in normal mode.
- */
-bool MtmIsRecoveredNode(int nodeId)
-{
-	if (BIT_CHECK(Mtm->disabledNodeMask, nodeId-1)) {
-		if (!MtmIsRecoverySession) {
-			MTM_ELOG(ERROR, "Node %d is marked as disabled but is not in recovery mode", nodeId);
-		}
-		return true;
-	} else {
-		return false;
-	}
-}
-
-/*
- * Check if wal sender replayed all transactions from WAL log.
- * It can never happen if there are many active transactions.
- * In this case we wait until gap between sent and current position in the
- * WAL becomes smaller than threshold value MtmMinRecoveryLag and
- * after it prohibit start of new transactions until WAL is completely replayed.
- */
-void MtmCheckRecoveryCaughtUp(int nodeId, lsn_t slotLSN)
-{
-	MtmLock(LW_EXCLUSIVE);
-	if (MtmIsRecoveredNode(nodeId)) {
-		lsn_t walLSN = GetXLogInsertRecPtr();
-		if (slotLSN + (long64) MtmMinRecoveryLag * 1024 > walLSN)
-		{
-			/*
-			 * Wal sender almost caught up.
-			 * Lock cluster preventing new transaction to start until wal is completely replayed.
-			 * We have to maintain two bitmasks: one is marking wal sender, another - correspondent nodes.
-			 * Is there some better way to establish mapping between nodes ad WAL-seconder?
-			 */
-			MTM_LOG1("Node %d is almost caught-up: slot position %llx, WAL position %llx",
-				 nodeId, slotLSN, walLSN);
-
-			MTM_LOG1("[LOCK] set lock on MtmCheckRecoveryCaughtUp");
-		} else {
-			MTM_LOG2("Continue recovery of node %d, slot position %llx, WAL position %llx,"
-					 " WAL sender position %llx, lockers %llx",
-					 nodeId, (long long unsigned int) slotLSN,
-					 (long long unsigned int) walLSN,
-					 (long long unsigned int) MyWalSnd->sentPtr,
-					 Mtm->originLockNodeMask);
-		}
-	}
-	MtmUnlock();
-}
-
-/*
- * Notification about node recovery completion.
- * If recovery is in progress and WAL sender replays all records in WAL,
- * then enable recovered node and send notification to it about end of recovery.
- */
-bool MtmRecoveryCaughtUp(int nodeId, lsn_t walEndPtr)
-{
-	bool caughtUp = false;
-	MtmLock(LW_EXCLUSIVE);
-	if (MtmIsRecoveredNode(nodeId))
-	{
-		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP, true);
-		caughtUp = true;
-		MtmIsRecoverySession = false;
-	}
-	MtmUnlock();
-	return caughtUp;
 }
 
 
@@ -1492,130 +1418,6 @@ void MtmStopNode(int nodeId, bool dropSlot)
 	}
 }
 
-static void
-MtmOnProcExit(int code, Datum arg)
-{
-	if (MtmReplicationNodeId > 0) {
-		Mtm->nodes[MtmReplicationNodeId-1].senderPid = -1;
-		MTM_LOG1("WAL-sender to %d is terminated", MtmReplicationNodeId);
-		/* MtmOnNodeDisconnect(MtmReplicationNodeId); */
-	}
-}
-
-static void
-MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
-{
-	ListCell *param;
-	bool recoveryCompleted = false;
-	ulong64 recoveryStartPos = INVALID_LSN;
-	int i;
-
-	MtmIsRecoverySession = false;
-	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
-
-	foreach(param, args->in_params)
-	{
-		DefElem	   *elem = lfirst(param);
-		if (strcmp("mtm_replication_mode", elem->defname) == 0) {
-			if (elem->arg != NULL && strVal(elem->arg) != NULL) {
-				if (strcmp(strVal(elem->arg), "recovery") == 0) {
-					MtmIsRecoverySession = true;
-				} else if (strcmp(strVal(elem->arg), "recovered") == 0) {
-					recoveryCompleted = true;
-				} else if (strcmp(strVal(elem->arg), "open_existed") != 0 && strcmp(strVal(elem->arg), "create_new") != 0) {
-					MTM_ELOG(ERROR, "Illegal recovery mode %s", strVal(elem->arg));
-				}
-			} else {
-				MTM_ELOG(ERROR, "Replication mode is not specified");
-			}
-		} else if (strcmp("mtm_restart_pos", elem->defname) == 0) {
-			if (elem->arg != NULL && strVal(elem->arg) != NULL) {
-				sscanf(strVal(elem->arg), "%llx", &recoveryStartPos);
-			} else {
-				MTM_ELOG(ERROR, "Restart position is not specified");
-			}
-		} else if (strcmp("mtm_recovered_pos", elem->defname) == 0) {
-			if (elem->arg != NULL && strVal(elem->arg) != NULL) {
-				ulong64 recoveredLSN;
-				sscanf(strVal(elem->arg), "%llx", &recoveredLSN);
-				MTM_LOG1("Recovered position of node %d is %llx", MtmReplicationNodeId, recoveredLSN);
-				// if (Mtm->nodes[MtmReplicationNodeId-1].restartLSN < recoveredLSN) {
-				// 	MTM_LOG1("Advance restartLSN for node %d from %llx to %llx (MtmReplicationStartupHook)",
-				// 			 MtmReplicationNodeId, Mtm->nodes[MtmReplicationNodeId-1].restartLSN, recoveredLSN);
-				// 	// Assert(Mtm->nodes[MtmReplicationNodeId-1].restartLSN == INVALID_LSN
-				// 	// 	   || recoveredLSN < Mtm->nodes[MtmReplicationNodeId-1].restartLSN + MtmMaxRecoveryLag);
-				// 	Mtm->nodes[MtmReplicationNodeId-1].restartLSN = recoveredLSN;
-				// }
-			} else {
-				MTM_ELOG(ERROR, "Recovered position is not specified");
-			}
-		}
-	}
-	MTM_LOG1("Startup of logical replication to node %d", MtmReplicationNodeId);
-	MtmLock(LW_EXCLUSIVE);
-
-	/*
-	 * Set proper originId mappings.
-	 *
-	 * This is copypasted from receiver. Better to have normal init method
-	 * to setup all stuff in shared memory. But seems that there is no such
-	 * callback in vanilla pg and adding one will require some carefull thoughts.
-	 */
-	for (i = 0; i < Mtm->nAllNodes; i++)
-	{
-		char	   *originName;
-		RepOriginId originId;
-
-		originName = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
-		originId = replorigin_by_name(originName, true);
-		if (originId == InvalidRepOriginId) {
-			originId = replorigin_create(originName);
-		}
-		CommitTransactionCommand();
-		StartTransactionCommand();
-		Mtm->nodes[i].originId = originId;
-	}
-
-	if (BIT_CHECK(Mtm->stalledNodeMask, MtmReplicationNodeId-1)) {
-		MtmUnlock();
-		MTM_ELOG(ERROR, "Stalled node %d tries to initiate recovery", MtmReplicationNodeId);
-	}
-
-	if (BIT_CHECK(Mtm->stoppedNodeMask, MtmReplicationNodeId-1)) {
-		MtmUnlock();
-		MTM_ELOG(ERROR, "Stopped node %d tries to connect", MtmReplicationNodeId);
-	}
-
-	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1)) {
-		MtmUnlock();
-		MTM_ELOG(ERROR, "Out-of-clique node %d tries to connect", MtmReplicationNodeId);
-	}
-
-	if (MtmIsRecoverySession) {
-		MTM_LOG1("%d: Node %d start recovery of node %d at position %llx", MyProcPid, MtmNodeId, MtmReplicationNodeId, recoveryStartPos);
-		Assert(MyReplicationSlot != NULL);
-		if (recoveryStartPos < MyReplicationSlot->data.restart_lsn) {
-			MTM_ELOG(WARNING, "Specified recovery start position %llx is beyond restart lsn %llx", recoveryStartPos, (long64)MyReplicationSlot->data.restart_lsn);
-		}
-		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, true);
-	} else { //if (BIT_CHECK(Mtm->disabledNodeMask,	 MtmReplicationNodeId-1)) {
-		if (recoveryCompleted) {
-			MTM_LOG1("Node %d consider that recovery of node %d is completed: start normal replication", MtmNodeId, MtmReplicationNodeId);
-			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, true);
-		} else {
-			/* Force arbiter to reestablish connection with this node, send heartbeat to inform this node that it was disabled and should perform recovery */
-			MtmUnlock();
-			MTM_ELOG(ERROR, "Disabled node %d tries to reconnect without recovery", MtmReplicationNodeId);
-		}
-	}
-	// else {
-	// 	// MTM_LOG1("Node %d start logical replication to node %d in normal mode", MtmNodeId, MtmReplicationNodeId);
-	// 	MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_NORMAL);
-	// }
-
-	MtmUnlock();
-	on_shmem_exit(MtmOnProcExit, 0);
-}
 
 lsn_t MtmGetFlushPosition(int nodeId)
 {
@@ -1664,74 +1466,6 @@ void  MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 	}
 	MtmUnlock();
 	MemoryContextSwitchTo(old_context);
-}
-
-
-static void
-MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
-{
-	MtmLock(LW_EXCLUSIVE);
-	if (MtmReplicationNodeId >= 0 && BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1)) {
-		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
-		MTM_LOG1("Logical replication to node %d is stopped", MtmReplicationNodeId);
-		/* MtmOnNodeDisconnect(MtmReplicationNodeId); */
-		MtmReplicationNodeId = -1; /* defuse MtmOnProcExit hook */
-	}
-	MtmUnlock();
-}
-
-/*
- * Filter transactions which should be replicated to other nodes.
- * This filter is applied at sender side (WAL sender).
- * Final filtering is also done at destination side by MtmFilterTransaction function.
- */
-static bool
-MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
-{
-	/* Do not replicate any transactions in recovery mode (because we should apply
-	 * changes sent to us rather than send our own pending changes)
-	 * and transactions received from other nodes
-	 * (originId should be non-zero in this case)
-	 * unless we are performing recovery of disabled node
-	 * (in this case all transactions should be sent)
-	 */
-	/*
-	 * I removed (Mtm->status != MTM_RECOVERY) here since in major
-	 * mode we need to recover from offline node too. Also it seems
-	 * that with amount of nodes >= 3 we also need that. --sk
-	 *
-	 * On a first look this works fine.
-	 */
-	bool res = (args->origin_id == InvalidRepOriginId
-			|| MtmIsRecoveredNode(MtmReplicationNodeId));
-	if (!res) {
-		MTM_LOG2("Filter transaction with origin_id=%d", args->origin_id);
-	}
-	return res;
-}
-
-/*
- * Filter record corresponding to local (non-distributed) tables
- */
-static bool
-MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
-{
-	bool isDistributed;
-
-	/*
-	 * We have several built-in local tables that shouldn't be replicated.
-	 * It is hard to insert them into MtmLocalTables properly on extension
-	 * creation so we just list them here.
-	 */
-	if (strcmp(args->changed_rel->rd_rel->relname.data, "referee_decision") == 0)
-		return false;
-
-	/*
-	 * Check in shared hash of local tables.
-	 */
-	isDistributed = !MtmIsRelationLocal(args->changed_rel);
-
-	return isDistributed;
 }
 
 /*
@@ -1815,14 +1549,6 @@ bool MtmFilterTransaction(char* record, int size)
 	}
 
 	return duplicate;
-}
-
-void MtmSetupReplicationHooks(struct PGLogicalHooks* hooks)
-{
-	hooks->startup_hook = MtmReplicationStartupHook;
-	hooks->shutdown_hook = MtmReplicationShutdownHook;
-	hooks->txn_filter_hook = MtmReplicationTxnFilterHook;
-	hooks->row_filter_hook = MtmReplicationRowFilterHook;
 }
 
 /*

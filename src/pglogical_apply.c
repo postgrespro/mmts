@@ -775,7 +775,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			} else {
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 			}
-			mtm_log(MtmTxFinish, "TXFINISH: %s precommittted", gid);
+			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
 			// MtmPrecommitTransaction(gid);
 

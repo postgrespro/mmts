@@ -37,6 +37,8 @@
 #include "utils/snapmgr.h"
 
 #include "multimaster.h"
+#include "state.h"
+#include "ddl.h"
 #include "pglogical_relid_map.h"
 
 static int MtmTransactionRecords;
@@ -136,9 +138,9 @@ static void
 pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 					  ReorderBufferTXN *txn)
 {
-	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
-	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
+	Assert(hooks_data->is_recovery || txn->origin_id == InvalidRepOriginId);
 
 	if (++MtmSenderTID == InvalidOid) { 
 		pglogical_relid_map_reset();
@@ -147,15 +149,14 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	MtmIsFilteredTxn = false;
-	MTM_LOG3("%d: pglogical_write_begin XID=%d node=%d recovery=%d restart_decoding_lsn=%llx first_lsn=%llx end_lsn=%llx confirmed_flush=%llx", 
-				MyProcPid, txn->xid, MtmReplicationNodeId, isRecovery,
+	MTM_LOG3("%d: pglogical_write_begin XID=%d node=%d restart_decoding_lsn=%llx first_lsn=%llx end_lsn=%llx confirmed_flush=%llx", 
+				MyProcPid, txn->xid, MtmReplicationNodeId,
 				(long64)txn->restart_decoding_lsn, (long64)txn->first_lsn, (long64)txn->end_lsn, (long64)MyReplicationSlot->data.confirmed_flush);
 	
 	MTM_LOG2("%d: pglogical_write_begin XID=%lld sent", MyProcPid, (long64)txn->xid);
 	pq_sendbyte(out, 'B');		/* BEGIN */
 	pq_sendint(out, MtmNodeId, 4);
-	// pq_sendint64(out, txn->xid);
-	pq_sendint64(out, isRecovery ? InvalidTransactionId : txn->xid);
+	pq_sendint64(out, txn->xid);
 	pq_sendint64(out, 42);
 	pq_sendint64(out, 142);
 
@@ -204,10 +205,14 @@ static void
 pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 						const char *prefix, Size sz, const char *message)
 {
+	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
+
 	MtmLastRelId = InvalidOid;
-	switch (*prefix) { 
+
+	switch (*prefix) {
 	  case 'L':
-		if (MtmIsRecoveredNode(MtmReplicationNodeId)) { 			
+		if (hooks_data->is_recovery) {
 			return;
 		} else { 
 			MTM_LOG1("Send deadlock message to node %d", MtmReplicationNodeId);
@@ -251,9 +256,10 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
 							  XLogRecPtr wal_end_ptr)
 {
-	if (MtmRecoveryCaughtUp(MtmReplicationNodeId, wal_end_ptr)) { 
-		pq_sendbyte(out, 'Z');		/* sending CAUGHT-UP */
-	}
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
+
+	Assert(hooks_data->is_recovery);
+	pq_sendbyte(out, 'Z');		/* sending CAUGHT-UP */
 }
 
 /*
@@ -405,18 +411,13 @@ void
 pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
-	uint8 event = PGLOGICAL_COMMIT_PREPARED;
-	// nodemask_t partisipantsMask = 0;
-	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
-
-	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
-
-	MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
+	Assert(hooks_data->is_recovery || txn->origin_id == InvalidRepOriginId);
 
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
-	pq_sendbyte(out, event);
+	pq_sendbyte(out, PGLOGICAL_COMMIT_PREPARED);
 	pq_sendbyte(out, MtmNodeId);
 
 	/* send fixed fields */
@@ -440,17 +441,13 @@ void
 pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
-	uint8 event = PGLOGICAL_ABORT_PREPARED;
-	// nodemask_t partisipantsMask = 0;
-	bool isRecovery = MtmIsRecoveredNode(MtmReplicationNodeId);
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
-	Assert(isRecovery || txn->origin_id == InvalidRepOriginId);
-
-	MtmCheckRecoveryCaughtUp(MtmReplicationNodeId, txn->end_lsn);
+	Assert(hooks_data->is_recovery || txn->origin_id == InvalidRepOriginId);
 
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
-	pq_sendbyte(out, event);
+	pq_sendbyte(out, PGLOGICAL_ABORT_PREPARED);
 	pq_sendbyte(out, MtmNodeId);
 
 	/* send fixed fields */
@@ -682,13 +679,183 @@ decide_datum_transfer(Form_pg_attribute att, Form_pg_type typclass,
 	return 't';
 }
 
+static void
+MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
+{
+	ListCell *param;
+	ulong64 recoveryStartPos = INVALID_LSN;
+	MtmDecoderPrivate   *hooks_data;
+	int i;
+
+	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
+	args->private_data = hooks_data;
+	hooks_data->magic = 42042042;
+
+	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
+
+	foreach(param, args->in_params)
+	{
+		DefElem	   *elem = lfirst(param);
+		if (strcmp("mtm_replication_mode", elem->defname) == 0)
+		{
+			if (elem->arg != NULL && strVal(elem->arg) != NULL)
+			{
+				if (strcmp(strVal(elem->arg), "recovery") == 0)
+				{
+					hooks_data->is_recovery = true;
+				}
+				else if (strcmp(strVal(elem->arg), "recovered") == 0)
+				{
+					hooks_data->is_recovery = false;
+				}
+				else if (strcmp(strVal(elem->arg), "open_existed") != 0 &&
+						 strcmp(strVal(elem->arg), "create_new") != 0)
+				{	// XXX: don't need that anymore
+					MTM_ELOG(ERROR, "Illegal recovery mode %s", strVal(elem->arg));
+				}
+			}
+			else
+			{
+				MTM_ELOG(ERROR, "Replication mode is not specified");
+			}
+		}
+	}
+
+	MTM_LOG1("Startup of logical replication to node %d", MtmReplicationNodeId);
+
+	MtmLock(LW_EXCLUSIVE);
+
+	/*
+	 * Set proper originId mappings.
+	 *
+	 * This is copypasted from receiver. Better to have normal init method
+	 * to setup all stuff in shared memory. But seems that there is no such
+	 * callback in vanilla pg and adding one will require some carefull thoughts.
+	 */
+	for (i = 0; i < Mtm->nAllNodes; i++)
+	{
+		char	   *originName;
+		RepOriginId originId;
+
+		originName = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
+		originId = replorigin_by_name(originName, true);
+		if (originId == InvalidRepOriginId) {
+			originId = replorigin_create(originName);
+		}
+		CommitTransactionCommand();
+		StartTransactionCommand();
+		Mtm->nodes[i].originId = originId;
+	}
+
+	if (BIT_CHECK(Mtm->stalledNodeMask, MtmReplicationNodeId-1)) {
+		MtmUnlock();
+		MTM_ELOG(ERROR, "Stalled node %d tries to initiate recovery",
+				 MtmReplicationNodeId);
+	}
+
+	if (BIT_CHECK(Mtm->stoppedNodeMask, MtmReplicationNodeId-1)) {
+		MtmUnlock();
+		MTM_ELOG(ERROR, "Stopped node %d tries to connect",
+				 MtmReplicationNodeId);
+	}
+
+	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1)) {
+		MtmUnlock();
+		MTM_ELOG(ERROR, "Out-of-clique node %d tries to connect",
+				 MtmReplicationNodeId);
+	}
+
+	if (hooks_data->is_recovery)
+	{
+		MTM_LOG1("%d: Node %d start recovery of node %d at position %llx",
+				 MyProcPid, MtmNodeId, MtmReplicationNodeId, recoveryStartPos);
+		Assert(MyReplicationSlot != NULL);
+		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, true);
+	}
+	else
+	{
+		MTM_LOG1("Node %d consider that recovery of node %d is completed: start normal replication",
+				 MtmNodeId, MtmReplicationNodeId);
+		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, true);
+	}
+	MtmUnlock();
+
+}
+
+static void
+MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
+{
+	MtmLock(LW_EXCLUSIVE);
+	if (MtmReplicationNodeId >= 0 && BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1)) {
+		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
+		MTM_LOG1("Logical replication to node %d is stopped", MtmReplicationNodeId);
+		/* MtmOnNodeDisconnect(MtmReplicationNodeId); */
+		MtmReplicationNodeId = -1; /* defuse MtmOnProcExit hook */
+	}
+	MtmUnlock();
+}
+
+/*
+ * Filter transactions which should be replicated to other nodes.
+ * This filter is applied at sender side (WAL sender).
+ * Final filtering is also done at destination side by MtmFilterTransaction function.
+ */
+static bool
+MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
+{
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) args->private_data;
+
+	/* Do not replicate any transactions in recovery mode (because we should apply
+	 * changes sent to us rather than send our own pending changes)
+	 * and transactions received from other nodes
+	 * (originId should be non-zero in this case)
+	 * unless we are performing recovery of disabled node
+	 * (in this case all transactions should be sent)
+	 */
+	bool res = (args->origin_id == InvalidRepOriginId ||
+				hooks_data->is_recovery);
+
+	return res;
+}
+
+/*
+ * Filter record corresponding to local (non-distributed) tables
+ */
+static bool
+MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
+{
+	bool isDistributed;
+
+	/*
+	 * We have several built-in local tables that shouldn't be replicated.
+	 * It is hard to insert them into MtmLocalTables properly on extension
+	 * creation so we just list them here.
+	 */
+	if (strcmp(args->changed_rel->rd_rel->relname.data, "referee_decision") == 0)
+		return false;
+
+	/*
+	 * Check in shared hash of local tables.
+	 */
+	isDistributed = !MtmIsRelationLocal(args->changed_rel);
+
+	return isDistributed;
+}
+
+static void
+MtmSetupReplicationHooks(struct PGLogicalHooks* hooks)
+{
+	hooks->startup_hook = MtmReplicationStartupHook;
+	hooks->shutdown_hook = MtmReplicationShutdownHook;
+	hooks->txn_filter_hook = MtmReplicationTxnFilterHook;
+	hooks->row_filter_hook = MtmReplicationRowFilterHook;
+}
 
 PGLogicalProtoAPI *
 pglogical_init_api(PGLogicalProtoType typ)
 {
     PGLogicalProtoAPI* res = palloc0(sizeof(PGLogicalProtoAPI));
 	sscanf(MyReplicationSlot->data.name.data, MULTIMASTER_SLOT_PATTERN, &MtmReplicationNodeId);
-	MTM_LOG1("%d: PRGLOGICAL init API for slot %s node %d", MyProcPid, MyReplicationSlot->data.name.data, MtmReplicationNodeId);
     res->write_rel = pglogical_write_rel;
     res->write_begin = pglogical_write_begin;
 	res->write_message = pglogical_write_message;
