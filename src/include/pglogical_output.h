@@ -41,6 +41,12 @@ typedef struct HookFuncName
 	char    schema[NAMEDATALEN];
 } HookFuncName;
 
+typedef struct MtmDecoderPrivate
+{
+	int magic;
+	bool is_recovery;
+} MtmDecoderPrivate;
+
 typedef struct PGLogicalOutputData
 {
 	MemoryContext context;

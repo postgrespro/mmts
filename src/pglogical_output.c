@@ -50,6 +50,7 @@
 #include "miscadmin.h"
 
 #include "multimaster.h"
+#include "logger.h"
 
 extern void		_PG_output_plugin_init(OutputPluginCallbacks *cb);
 
@@ -711,7 +712,5 @@ static void
 pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					 XLogRecPtr abort_lsn)
 {
-	// PGLogicalOutputData *data = ctx->output_plugin_private;
-
-	MTM_LOG1("pg_decode_abort_txn called for " XID_FMT, txn->xid);
+	return;
 }

@@ -1,14 +1,15 @@
 #include "postgres.h"
-#include "miscadmin.h" /* PostmasterPid */
-#include "multimaster.h"
-#include "state.h"
+#include "access/twophase.h"
 #include "executor/spi.h"
 #include "utils/snapmgr.h"
 #include "nodes/makefuncs.h"
 #include "catalog/namespace.h"
 #include "tcop/tcopprot.h"
 #include "storage/ipc.h"
+#include "miscadmin.h" /* PostmasterPid */
 
+#include "multimaster.h"
+#include "state.h"
 #include "logger.h"
 
 char const* const MtmNeighborEventMnem[] =
@@ -31,6 +32,14 @@ char const* const MtmEventMnem[] =
 	"MTM_RECOVERY_FINISH1",
 	"MTM_RECOVERY_FINISH2",
 	"MTM_NONRECOVERABLE_ERROR"
+};
+
+char const* const MtmNodeStatusMnem[] =
+{
+	"Disabled",
+	"Recovery",
+	"Recovered",
+	"Online"
 };
 
 static int  MtmRefereeGetWinner(void);
@@ -70,7 +79,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 	if (Mtm->status == status)
 		return;
 
-	MTM_LOG1("[STATE]   Switching status from %s to %s: %s",
+	mtm_log(MtmStateSwitch, "[STATE]   Switching status from %s to %s: %s",
 			 MtmNodeStatusMnem[Mtm->status], MtmNodeStatusMnem[status],
 			 statusReason);
 
@@ -118,7 +127,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 }
 
 static void
-MtmCheckState(int severity)
+MtmCheckState(void)
 {
 	// int nVotingNodes = MtmGetNumberOfVotingNodes();
 	bool isEnabledState;
@@ -131,7 +140,8 @@ MtmCheckState(int severity)
 
 	old_status = Mtm->status;
 
-	MTM_ELOG(severity, "[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
+	mtm_log(MtmStateMessage,
+		"[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
 		maskToString(Mtm->disabledNodeMask, Mtm->nAllNodes),
 		maskToString(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes),
 		maskToString(Mtm->clique, Mtm->nAllNodes),
@@ -178,7 +188,7 @@ MtmCheckState(int severity)
 				MtmSetClusterStatus(MTM_RECOVERY, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState(LOG);
+					MtmCheckState();
 				return;
 			}
 			break;
@@ -186,11 +196,10 @@ MtmCheckState(int severity)
 		case MTM_RECOVERY:
 			if (!BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId-1))
 			{
-				MTM_LOG1("[LOCK] set lock on MTM_RECOVERY switch");
 				MtmSetClusterStatus(MTM_RECOVERED, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState(LOG);
+					MtmCheckState();
 				return;
 			}
 			break;
@@ -205,16 +214,10 @@ MtmCheckState(int severity)
 		case MTM_RECOVERED:
 			if (nReceivers == nEnabled-1 && nSenders == nEnabled-1 && nEnabled == nConnected)
 			{
-				/*
-				 * It should be already cleaned by RECOVERY_CAUGHTUP, but
-				 * in major mode or with referee we can be working alone
-				 * so nobody will clean it.
-				 */
-				MTM_LOG1("[LOCK] release lock on MTM_RECOVERED switch");
 				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
 				if (old_status != Mtm->status)
-					MtmCheckState(LOG);
+					MtmCheckState();
 				return;
 			}
 			break;
@@ -227,7 +230,7 @@ MtmCheckState(int severity)
 				if ( !((nEnabled >= Mtm->nAllNodes/2+1) ||
 						(nEnabled == Mtm->nAllNodes/2 && Mtm->refereeGrant)) )
 				{
-					MTM_LOG1("[STATE] disable myself, nEnabled less then majority");
+					mtm_log(MtmStateMessage, "[STATE] disable myself, nEnabled less then majority");
 					MtmSetClusterStatus(MTM_DISABLED, statusReason);
 					MtmDisableNode(MtmNodeId);
 					/* do not recur */
@@ -243,7 +246,7 @@ MtmCheckState(int severity)
 void
 MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // XXXX camelcase node_id
 {
-	MTM_LOG1("[STATE] Node %i: %s", node_id, MtmNeighborEventMnem[ev]);
+	mtm_log(MtmStateMessage, "[STATE] Node %i: %s", node_id, MtmNeighborEventMnem[ev]);
 
 	Assert(node_id != MtmNodeId);
 
@@ -258,7 +261,6 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 
 		case MTM_NEIGHBOR_WAL_RECEIVER_START:
 			BIT_SET(Mtm->pglogicalReceiverMask, node_id - 1);
-			MTM_LOG1("[LOCK] release lock on MTM_NEIGHBOR_WAL_RECEIVER_START event");
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY:
@@ -272,23 +274,22 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 			 */
 			if (!BIT_CHECK(Mtm->disabledNodeMask, node_id-1))
 			{
-				MTM_LOG1("[WARN] node %d started recovery, but it wasn't disabled", node_id);
+				mtm_log(MtmStateMessage, "[WARN] node %d started recovery, but it wasn't disabled", node_id);
 				MtmDisableNode(node_id);
 			}
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED:
 			BIT_SET(Mtm->pglogicalSenderMask, node_id - 1);
-			MtmEnableNode(node_id); /// XXXX ?
+			MtmEnableNode(node_id);
 			break;
 
 		case MTM_NEIGHBOR_RECOVERY_CAUGHTUP:
-			MTM_LOG1("[LOCK] release lock on MTM_NEIGHBOR_RECOVERY_CAUGHTUP event");
 			MtmEnableNode(node_id);
 			break;
 
 	}
-	MtmCheckState(LOG);
+	MtmCheckState();
 
 	if (!locked)
 		MtmUnlock();
@@ -298,7 +299,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 void
 MtmStateProcessEvent(MtmEvent ev, bool locked)
 {
-	MTM_LOG1("[STATE] %s", MtmEventMnem[ev]);
+	mtm_log(MtmStateMessage, "[STATE] %s", MtmEventMnem[ev]);
 
 	if (!locked)
 		MtmLock(LW_EXCLUSIVE);
@@ -329,7 +330,6 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 
 				Mtm->recoveryCount++; /* this will restart replication connection */
 				Mtm->recoverySlot = 0;
-				Mtm->recoveredLSN = GetXLogInsertRecPtr();
 			}
 			break;
 
@@ -338,7 +338,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 			break;
 	}
 
-	MtmCheckState(LOG);
+	MtmCheckState();
 
 	if (!locked)
 		MtmUnlock();
@@ -355,7 +355,7 @@ void MtmDisableNode(int nodeId)
 	if (BIT_CHECK(Mtm->disabledNodeMask, nodeId-1))
 		return;
 
-	MTM_LOG1("[STATE] Node %i: disabled", nodeId);
+	mtm_log(MtmStateMessage, "[STATE] Node %i: disabled", nodeId);
 
 	BIT_SET(Mtm->disabledNodeMask, nodeId-1);
 	Mtm->nodes[nodeId-1].timeline += 1;
@@ -378,7 +378,7 @@ void MtmDisableNode(int nodeId)
 void
 MtmEnableNode(int nodeId)
 {
-	MTM_LOG1("[STATE] Node %i: enabled", nodeId);
+	mtm_log(MtmStateMessage, "[STATE] Node %i: enabled", nodeId);
 	BIT_CLEAR(Mtm->disabledNodeMask, nodeId-1);
 }
 
@@ -395,7 +395,7 @@ void MtmOnNodeDisconnect(char *node_name)
 	if (BIT_CHECK(SELF_CONNECTIVITY_MASK, nodeId-1))
 		return;
 
-	MTM_LOG1("[STATE] Node %i: disconnected", nodeId);
+	mtm_log(MtmStateMessage, "[STATE] Node %i: disconnected", nodeId);
 
 	/*
 	 * We should disable it, as clique detector will not necessarily
@@ -405,7 +405,7 @@ void MtmOnNodeDisconnect(char *node_name)
 	MtmLock(LW_EXCLUSIVE);
 	BIT_SET(SELF_CONNECTIVITY_MASK, nodeId-1);
 	MtmDisableNode(nodeId);
-	MtmCheckState(LOG);
+	MtmCheckState();
 	MtmUnlock();
 }
 
@@ -416,11 +416,11 @@ void MtmOnNodeConnect(char *node_name)
 
 	sscanf(node_name, "node%d", &nodeId);
 
-	MTM_LOG1("[STATE] Node %i: connected", nodeId);
+	mtm_log(MtmStateMessage, "[STATE] Node %i: connected", nodeId);
 
 	MtmLock(LW_EXCLUSIVE);
 	BIT_CLEAR(SELF_CONNECTIVITY_MASK, nodeId-1);
-	MtmCheckState(LOG);
+	MtmCheckState();
 	MtmUnlock();
 }
 
@@ -465,7 +465,7 @@ MtmRefreshClusterStatus()
 	 * See comment to MTM_RECOVERED -> MTM_ONLINE transition in MtmCheckState()
 	 */
 	MtmLock(LW_EXCLUSIVE);
-	MtmCheckState(DEBUG1);
+	MtmCheckState();
 	MtmUnlock();
 
 	return;
@@ -499,7 +499,7 @@ MtmRefreshClusterStatus()
 				if (countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes) == Mtm->nAllNodes/2 &&
 					!BIT_CHECK(SELF_CONNECTIVITY_MASK, winner_node_id - 1))
 				{
-					MTM_LOG1("[STATE] Referee allowed to proceed with half of the nodes (winner_id = %d)",
+					mtm_log(MtmStateMessage, "[STATE] Referee allowed to proceed with half of the nodes (winner_id = %d)",
 					winner_node_id);
 					Mtm->refereeGrant = true;
 					if (countZeroBits(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes) == 1)
@@ -508,7 +508,7 @@ MtmRefreshClusterStatus()
 						ResolveAllTransactions();
 					}
 					MtmEnableNode(MtmNodeId);
-					MtmCheckState(LOG);
+					MtmCheckState();
 				}
 				MtmUnlock();
 			}
@@ -529,7 +529,7 @@ MtmRefreshClusterStatus()
 		{
 			Mtm->refereeWinnerId = 0;
 			Mtm->refereeGrant = false;
-			MTM_LOG1("[STATE] Cleaning old referee decision");
+			mtm_log(MtmStateMessage, "[STATE] Cleaning old referee decision");
 		}
 	}
 
@@ -545,7 +545,7 @@ MtmRefreshClusterStatus()
 	if (newClique == Mtm->clique)
 		return;
 
-	MTM_LOG1("[STATE] Old clique: %s", maskToString(Mtm->clique, Mtm->nAllNodes));
+	mtm_log(MtmStateMessage, "[STATE] Old clique: %s", maskToString(Mtm->clique, Mtm->nAllNodes));
 
 	/*
 	 * Otherwise make sure that all nodes have a chance to replicate their connectivity
@@ -564,11 +564,11 @@ MtmRefreshClusterStatus()
 		newClique = MtmFindMaxClique(matrix, Mtm->nAllNodes, &cliqueSize);
 	} while (newClique != oldClique);
 
-	MTM_LOG1("[STATE] New clique: %s", maskToString(oldClique, Mtm->nAllNodes));
+	mtm_log(MtmStateMessage, "[STATE] New clique: %s", maskToString(oldClique, Mtm->nAllNodes));
 
 	if (newClique != trivialClique)
 	{
-		MTM_LOG1("[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique, Mtm->nAllNodes)); // XXXX some false-positives, fixme
+		mtm_log(MtmStateMessage, "[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique, Mtm->nAllNodes)); // XXXX some false-positives, fixme
 	}
 
 	/*
@@ -605,7 +605,7 @@ MtmRefreshClusterStatus()
 		}
 	}
 
-	MtmCheckState(LOG);
+	MtmCheckState();
 	MtmUnlock();
 }
 
@@ -667,7 +667,7 @@ MtmRefereeReadSaved(void)
 	rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
 	if (rc != SPI_OK_SELECT)
 	{
-		MTM_ELOG(WARNING, "Failed to load referee decision");
+		mtm_log(WARNING, "Failed to load referee decision");
 	}
 	else if (SPI_processed > 0)
 	{
@@ -686,7 +686,7 @@ MtmRefereeReadSaved(void)
 	if (txstarted)
 		CommitTransactionCommand();
 
-	MTM_LOG1("Read saved referee decision, winner=%d.", winner);
+	mtm_log(MtmStateMessage, "Read saved referee decision, winner=%d.", winner);
 	return winner;
 }
 
@@ -703,7 +703,7 @@ MtmRefereeGetWinner(void)
 	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
-		MTM_ELOG(WARNING, "Could not connect to referee");
+		mtm_log(WARNING, "Could not connect to referee");
 		PQfinish(conn);
 		return -1;
 	}
@@ -714,7 +714,7 @@ MtmRefereeGetWinner(void)
 		PQntuples(res) != 1 ||
 		PQnfields(res) != 1)
 	{
-		MTM_ELOG(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.get_winner()",
+		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.get_winner()",
 			PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
 		PQclear(res);
 		PQfinish(conn);
@@ -725,7 +725,7 @@ MtmRefereeGetWinner(void)
 
 	if (winner_node_id < 1 || winner_node_id > Mtm->nAllNodes)
 	{
-		MTM_ELOG(WARNING,
+		mtm_log(WARNING,
 			"Referee responded with node_id=%d, it's out of our node range",
 			winner_node_id);
 		PQclear(res);
@@ -748,7 +748,7 @@ MtmRefereeGetWinner(void)
 		rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
 		if (rc != SPI_OK_SELECT)
 		{
-			MTM_ELOG(WARNING, "Failed to load previous referee decision");
+			mtm_log(WARNING, "Failed to load previous referee decision");
 		}
 		else if (SPI_processed > 0)
 		{
@@ -769,16 +769,16 @@ MtmRefereeGetWinner(void)
 		rc = SPI_execute(sql, false, 0);
 		SPI_finish();
 		if (rc < 0)
-			MTM_ELOG(WARNING, "Failed to save referee decision, but proceeding anyway");
+			mtm_log(WARNING, "Failed to save referee decision, but proceeding anyway");
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		// MtmEnforceLocalTx = false;
 
 		if (old_winner > 0 && old_winner != winner_node_id)
-			MTM_LOG1("WARNING Overriding old referee decision (%d) with new one (%d)", old_winner, winner_node_id);
+			mtm_log(MtmStateMessage, "WARNING Overriding old referee decision (%d) with new one (%d)", old_winner, winner_node_id);
 	}
 
-	MTM_LOG1("Got referee response, winner node_id=%d.", winner_node_id);
+	mtm_log(MtmStateMessage, "Got referee response, winner node_id=%d.", winner_node_id);
 	return winner_node_id;
 }
 
@@ -809,7 +809,7 @@ MtmRefereeClearWinner(void)
 		CommitTransactionCommand();
 		if (rc < 0)
 		{
-			MTM_ELOG(WARNING, "Failed to clean referee decision");
+			mtm_log(WARNING, "Failed to clean referee decision");
 			return false;
 		}
 	}
@@ -818,7 +818,7 @@ MtmRefereeClearWinner(void)
 	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
-		MTM_ELOG(WARNING, "Could not connect to referee");
+		mtm_log(WARNING, "Could not connect to referee");
 		PQfinish(conn);
 		return false;
 	}
@@ -828,7 +828,7 @@ MtmRefereeClearWinner(void)
 		PQntuples(res) != 1 ||
 		PQnfields(res) != 1)
 	{
-		MTM_ELOG(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.clean().",
+		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.clean().",
 			PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
 		PQclear(res);
 		PQfinish(conn);
@@ -839,14 +839,14 @@ MtmRefereeClearWinner(void)
 
 	if (strncmp(response, "t", 1) != 0)
 	{
-		MTM_ELOG(WARNING, "Wrong response from referee.clean(): '%s'", response);
+		mtm_log(WARNING, "Wrong response from referee.clean(): '%s'", response);
 		PQclear(res);
 		PQfinish(conn);
 		return false;
 	}
 
 	/* Ok, we finally got it! */
-	MTM_LOG1("Got referee clear response '%s'", response);
+	mtm_log(MtmStateMessage, "Got referee clear response '%s'", response);
 	PQclear(res);
 	PQfinish(conn);
 	return true;

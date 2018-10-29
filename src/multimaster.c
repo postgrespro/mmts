@@ -4,85 +4,40 @@
  * Multimaster based on logical replication
  *
  */
-
+// XXX: evict that
 #include <unistd.h>
 #include <sys/time.h>
 #include <time.h>
 
 #include "postgres.h"
+#include "access/xtm.h"
+#include "access/clog.h"
+#include "access/transam.h"
+#include "access/twophase.h"
+#include "access/relscan.h"
+#include "common/username.h"
+#include "catalog/namespace.h"
+#include "nodes/makefuncs.h"
+#include "postmaster/autovacuum.h"
+#include "postmaster/postmaster.h"
+#include "replication/origin.h"
+#include "replication/slot.h"
+#include "replication/walsender.h"
+#include "storage/ipc.h"
+#include "utils/guc.h"
+#include "utils/builtins.h"
 #include "funcapi.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-// #include "common/pg_socket.h"
 #include "pgstat.h"
-#include "utils/regproc.h"
-
-#include "libpq-fe.h"
-#include "lib/stringinfo.h"
-#include "libpq/pqformat.h"
-#include "common/username.h"
-
-#include "postmaster/postmaster.h"
-#include "postmaster/bgworker.h"
-#include "storage/lwlock.h"
-#include "storage/s_lock.h"
-#include "storage/spin.h"
-#include "storage/lmgr.h"
-#include "storage/shmem.h"
-#include "storage/ipc.h"
-#include "storage/procarray.h"
-#include "access/xlogdefs.h"
-#include "access/xact.h"
-#include "access/xtm.h"
-#include "access/transam.h"
-#include "access/subtrans.h"
-#include "access/commit_ts.h"
-#include "access/xlog.h"
-#include "storage/proc.h"
-#include "executor/executor.h"
-#include "access/twophase.h"
-#include "utils/guc.h"
-#include "utils/guc_tables.h"
-#include "utils/hsearch.h"
-#include "utils/timeout.h"
-#include "utils/tqual.h"
-#include "utils/array.h"
-#include "utils/builtins.h"
-#include "utils/memutils.h"
-#include "commands/dbcommands.h"
-#include "commands/extension.h"
-#include "commands/sequence.h"
-#include "postmaster/autovacuum.h"
-#include "storage/pmsignal.h"
-#include "storage/proc.h"
-#include "utils/syscache.h"
-#include "utils/lsyscache.h"
-#include "replication/walsender.h"
-#include "replication/walsender_private.h"
-#include "replication/slot.h"
-#include "replication/message.h"
-#include "port/atomics.h"
-#include "tcop/utility.h"
-#include "nodes/makefuncs.h"
-#include "access/htup_details.h"
-#include "catalog/indexing.h"
-#include "catalog/namespace.h"
-#include "catalog/pg_constraint.h"
-#include "catalog/pg_proc.h"
-#include "pglogical_output/hooks.h"
-#include "parser/analyze.h"
-#include "parser/parse_relation.h"
-#include "parser/parse_type.h"
-#include "parser/parse_func.h"
-#include "catalog/pg_class.h"
-#include "catalog/pg_type.h"
-#include "tcop/pquery.h"
-#include "lib/ilist.h"
 
 #include "multimaster.h"
 #include "ddd.h"
 #include "ddl.h"
 #include "state.h"
+#include "receiver.h"
+#include "resolver.h"
+#include "logger.h"
 
 #include "compat.h"
 
@@ -91,8 +46,17 @@ typedef enum
 	MTM_STATE_LOCK_ID
 } MtmLockIds;
 
+#define Natts_mtm_nodes_state   17
+#define Natts_mtm_cluster_state 20
+typedef struct
+{
+	int		  nodeId;
+	TupleDesc desc;
+	Datum	  values[Natts_mtm_nodes_state];
+	bool	  nulls[Natts_mtm_nodes_state];
+} MtmGetNodeStateCtx;
+
 #define MTM_SHMEM_SIZE (8*1024*1024)
-#define STATUS_POLL_DELAY USECS_PER_SEC
 
 void _PG_init(void);
 void _PG_fini(void);
@@ -107,10 +71,6 @@ PG_FUNCTION_INFO_V1(mtm_resume_node);
 PG_FUNCTION_INFO_V1(mtm_get_nodes_state);
 PG_FUNCTION_INFO_V1(mtm_get_cluster_state);
 PG_FUNCTION_INFO_V1(mtm_collect_cluster_info);
-
-
-// PG_FUNCTION_INFO_V1(mtm_broadcast_table);
-// PG_FUNCTION_INFO_V1(mtm_copy_table);
 
 static void MtmInitialize(void);
 static void MtmBeginTransaction(MtmCurrentTrans* x);
@@ -127,6 +87,11 @@ static void   MtmResumeTransaction(void* ctx);
 
 static void MtmShmemStartup(void);
 
+static void MtmStopNode(int nodeId, bool dropSlot);
+static void MtmRecoverNode(int nodeId);
+static void MtmResumeNode(int nodeId);
+static void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr);
+
 static bool MtmRunUtilityStmt(PGconn* conn, char const* sql, char **errmsg);
 static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int forceOnNode);
 
@@ -134,9 +99,6 @@ MtmState* Mtm;
 
 MemoryContext MtmApplyContext;
 MtmConnectionInfo* MtmConnections;
-
-
-static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
 static TransactionManager MtmTM =
 {
@@ -150,22 +112,6 @@ static TransactionManager MtmTM =
 	MtmReleaseSavepointContext,
 	MtmSuspendTransaction,
 	MtmResumeTransaction
-};
-
-char const* const MtmNodeStatusMnem[] =
-{
-	"Disabled",
-	"Recovery",
-	"Recovered",
-	"Online"
-};
-
-char const* const MtmTxnStatusMnem[] =
-{
-	"InProgress",
-	"Committed",
-	"Aborted",
-	"Unknown"
 };
 
 bool  MtmDoReplication;
@@ -414,11 +360,11 @@ static void MtmDropSlot(int nodeId)
 {
 	if (MtmTryLockNode(nodeId, LW_EXCLUSIVE))
 	{
-		MTM_ELOG(INFO, "Drop replication slot for node %d", nodeId);
+		mtm_log(INFO, "Drop replication slot for node %d", nodeId);
 		ReplicationSlotDrop(psprintf(MULTIMASTER_SLOT_PATTERN, nodeId), false);
 		MtmUnlockNode(nodeId);
 	} else {
-		MTM_ELOG(WARNING, "Failed to drop replication slot for node %d", nodeId);
+		mtm_log(WARNING, "Failed to drop replication slot for node %d", nodeId);
 	}
 	MtmLock(LW_EXCLUSIVE);
 	BIT_SET(Mtm->stalledNodeMask, nodeId-1);
@@ -429,7 +375,6 @@ static void MtmDropSlot(int nodeId)
 
 void  MtmSetCurrentTransactionGID(char const* gid, int node_id)
 {
-	MTM_LOG3("Set current transaction xid="XID_FMT" GID %s", MtmTx.xid, gid);
 	strncpy(MtmTx.gid, gid, GIDSIZE);
 	MtmTx.isDistributed = true;
 }
@@ -441,7 +386,6 @@ TransactionId MtmGetCurrentTransactionId(void)
 
 void  MtmSetCurrentTransactionCSN()
 {
-	MTM_LOG3("Set current transaction CSN %lld", csn);
 	MtmTx.isDistributed = true;
 }
 
@@ -451,31 +395,6 @@ void  MtmSetCurrentTransactionCSN()
  * HA functions
  * -------------------------------------------
  */
-
-/*
- * Handle critical errors while applying transaction at replica.
- * Such errors should cause shutdown of this cluster node to allow other nodes to continue serving client requests.
- * Other error will be just reported and ignored
- */
-void MtmHandleApplyError(void)
-{
-	ErrorData *edata = CopyErrorData();
-
-	switch (edata->sqlerrcode) {
-		case ERRCODE_DISK_FULL:
-		case ERRCODE_INSUFFICIENT_RESOURCES:
-		case ERRCODE_IO_ERROR:
-		case ERRCODE_DATA_CORRUPTED:
-		case ERRCODE_INDEX_CORRUPTED:
-		  /* Should we really treate this errors as fatal?
-		case ERRCODE_SYSTEM_ERROR:
-		case ERRCODE_INTERNAL_ERROR:
-		case ERRCODE_OUT_OF_MEMORY:
-		  */
-			MtmStateProcessEvent(MTM_NONRECOVERABLE_ERROR, false);
-	}
-	FreeErrorData(edata);
-}
 
 
 
@@ -498,7 +417,7 @@ MtmCheckSlots()
 				&& slot->data.confirmed_flush + (long64) MtmMaxRecoveryLag * 1024 < GetXLogInsertRecPtr()
 				&& slot->data.confirmed_flush != 0)
 			{
-				MTM_ELOG(WARNING, "Drop slot for node %d which lag %lld B is larger than threshold %d kB",
+				mtm_log(WARNING, "Drop slot for node %d which lag %lld B is larger than threshold %d kB",
 					 nodeId,
 					 (long64)(GetXLogInsertRecPtr() - slot->data.restart_lsn),
 					 MtmMaxRecoveryLag);
@@ -552,14 +471,14 @@ static void MtmCheckControlFile(void)
 	if (f != NULL && fgets(buf, sizeof buf, f)) {
 		char* sep = strchr(buf, ':');
 		if (sep == NULL) {
-			MTM_ELOG(FATAL, "File mmts_control doesn't contain cluster name");
+			mtm_log(FATAL, "File mmts_control doesn't contain cluster name");
 		}
 		*sep = '\0';
 		if (strcmp(buf, MtmClusterName) != 0) {
-			MTM_ELOG(FATAL, "Database belongs to some other cluster %s rather than %s", buf, MtmClusterName);
+			mtm_log(FATAL, "Database belongs to some other cluster %s rather than %s", buf, MtmClusterName);
 		}
 		if (sscanf(sep+1, "%d", &Mtm->donorNodeId) != 1) {
-			MTM_ELOG(FATAL, "File mmts_control doesn't contain node id");
+			mtm_log(FATAL, "File mmts_control doesn't contain node id");
 		}
 		fclose(f);
 	} else {
@@ -568,7 +487,7 @@ static void MtmCheckControlFile(void)
 		}
 		f = fopen(controlFilePath, "w");
 		if (f == NULL) {
-			MTM_ELOG(FATAL, "Failed to create mmts_control file: %m");
+			mtm_log(FATAL, "Failed to create mmts_control file: %m");
 		}
 		Mtm->donorNodeId = MtmNodeId;
 		fprintf(f, "%s:%d\n", MtmClusterName, Mtm->donorNodeId);
@@ -591,7 +510,7 @@ void MtmUpdateControlFile()
 		snprintf(controlFilePath, MAXPGPATH, "%s/global/mmts_control", DataDir);
 		f = fopen(controlFilePath, "w");
 		if (f == NULL) {
-			MTM_ELOG(FATAL, "Failed to create mmts_control file: %m");
+			mtm_log(FATAL, "Failed to create mmts_control file: %m");
 		}
 		fprintf(f, "%s:%d\n", MtmClusterName, Mtm->donorNodeId);
 		fclose(f);
@@ -625,7 +544,6 @@ static void MtmInitialize()
 		Mtm->stoppedNodeMask = 0;
 		Mtm->pglogicalReceiverMask = 0;
 		Mtm->pglogicalSenderMask = 0;
-		Mtm->recoveredLSN = INVALID_LSN;
 		Mtm->recoveryCount = 0;
 		Mtm->localTablesHashLoaded = false;
 
@@ -682,7 +600,7 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 	int			connStrLen = (int)strlen(connStr);
 
 	if (connStrLen >= MULTIMASTER_MAX_CONN_STR_SIZE) {
-		MTM_ELOG(ERROR, "Too long (%d) connection string '%s': limit is %d",
+		mtm_log(ERROR, "Too long (%d) connection string '%s': limit is %d",
 			 connStrLen, connStr, MULTIMASTER_MAX_CONN_STR_SIZE-1);
 	}
 
@@ -693,13 +611,13 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 
 	host = strstr(connStr, "host=");
 	if (host == NULL) {
-		MTM_ELOG(ERROR, "Host not specified in connection string: '%s'", connStr);
+		mtm_log(ERROR, "Host not specified in connection string: '%s'", connStr);
 	}
 	host += 5;
 	for (end = host; *end != ' ' && *end != '\0'; end++);
 	hostLen = end - host;
 	if (hostLen >= MULTIMASTER_MAX_HOST_NAME_SIZE) {
-		MTM_ELOG(ERROR, "Too long (%d) host name '%.*s': limit is %d",
+		mtm_log(ERROR, "Too long (%d) host name '%.*s': limit is %d",
 			 hostLen, hostLen, host, MULTIMASTER_MAX_HOST_NAME_SIZE-1);
 	}
 	memcpy(conn->hostName, host, hostLen);
@@ -708,12 +626,12 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 	port = strstr(connStr, "arbiter_port=");
 	if (port != NULL) {
 		if (sscanf(port+13, "%d", &conn->arbiterPort) != 1) {
-			MTM_ELOG(ERROR, "Invalid arbiter port: %s", port+13);
+			mtm_log(ERROR, "Invalid arbiter port: %s", port+13);
 		}
 	} else {
 		conn->arbiterPort = MULTIMASTER_DEFAULT_ARBITER_PORT;
 	}
-	MTM_ELOG(INFO, "Using arbiter port: %d", conn->arbiterPort);
+	mtm_log(INFO, "Using arbiter port: %d", conn->arbiterPort);
 
 	port = strstr(connStr, " port=");
 	if (port == NULL && strncmp(connStr, "port=", 5) == 0) {
@@ -721,7 +639,7 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 	}
 	if (port != NULL) {
 		if (sscanf(port+6, "%d", &conn->postmasterPort) != 1) {
-			MTM_ELOG(ERROR, "Invalid postmaster port: %s", port+6);
+			mtm_log(ERROR, "Invalid postmaster port: %s", port+6);
 		}
 	} else {
 		conn->postmasterPort = DEF_PGPORT;
@@ -743,7 +661,7 @@ static void MtmSplitConnStrs(void)
 		f = fopen(MtmConnStrs+1, "r");
 		for (i = 0; fgets(buf, sizeof buf, f) != NULL; i++) {
 			if (strlen(buf) <= 1) {
-				MTM_ELOG(ERROR, "Empty lines are not allowed in %s file", MtmConnStrs+1);
+				mtm_log(ERROR, "Empty lines are not allowed in %s file", MtmConnStrs+1);
 			}
 		}
 	} else {
@@ -757,15 +675,15 @@ static void MtmSplitConnStrs(void)
 	}
 
 	if (i > MAX_NODES) {
-		MTM_ELOG(ERROR, "Multimaster with more than %d nodes is not currently supported", MAX_NODES);
+		mtm_log(ERROR, "Multimaster with more than %d nodes is not currently supported", MAX_NODES);
 	}
 	if (i < 2) {
-		MTM_ELOG(ERROR, "Multimaster should have at least two nodes");
+		mtm_log(ERROR, "Multimaster should have at least two nodes");
 	}
 	if (MtmMaxNodes == 0) {
 		MtmMaxNodes = i;
 	} else if (MtmMaxNodes < i) {
-		MTM_ELOG(ERROR, "More than %d nodes are specified", MtmMaxNodes);
+		mtm_log(ERROR, "More than %d nodes are specified", MtmMaxNodes);
 	}
 	MtmNodes = i;
 	MtmConnections = (MtmConnectionInfo*)palloc0(MtmMaxNodes*sizeof(MtmConnectionInfo));
@@ -799,25 +717,24 @@ static void MtmSplitConnStrs(void)
 
 		if (MtmNodeId == INT_MAX) {
 			if (gethostname(buf, sizeof buf) != 0) {
-				MTM_ELOG(ERROR, "Failed to get host name: %m");
+				mtm_log(ERROR, "Failed to get host name: %m");
 			}
 			for (i = 0; i < MtmNodes; i++) {
-				MTM_LOG3("Node %d, host %s, port=%d, my port %d", i, MtmConnections[i].hostName, MtmConnections[i].postmasterPort, PostPortNumber);
 				if ((strcmp(MtmConnections[i].hostName, buf) == 0 || strcmp(MtmConnections[i].hostName, "localhost") == 0 || strcmp(MtmConnections[i].hostName, "127.0.0.1") == 0)
 					&& MtmConnections[i].postmasterPort == PostPortNumber)
 				{
 					if (MtmNodeId == INT_MAX) {
 						MtmNodeId = i+1;
 					} else {
-						MTM_ELOG(ERROR, "multimaster.node_id is not explicitly specified and more than one nodes are configured for host %s port %d", buf, PostPortNumber);
+						mtm_log(ERROR, "multimaster.node_id is not explicitly specified and more than one nodes are configured for host %s port %d", buf, PostPortNumber);
 					}
 				}
 			}
 			if (MtmNodeId == INT_MAX) {
-				MTM_ELOG(ERROR, "multimaster.node_id is not specified and host name %s can not be located in connection strings list", buf);
+				mtm_log(ERROR, "multimaster.node_id is not specified and host name %s can not be located in connection strings list", buf);
 			}
 		} else if (MtmNodeId > i) {
-			MTM_ELOG(ERROR, "Multimaster node id %d is out of range [%d..%d]", MtmNodeId, 1, MtmNodes);
+			mtm_log(ERROR, "Multimaster node id %d is out of range [%d..%d]", MtmNodeId, 1, MtmNodes);
 		}
 		{
 			char* connStr = MtmConnections[MtmNodeId-1].connStr;
@@ -827,16 +744,16 @@ static void MtmSplitConnStrs(void)
 			size_t len;
 
 			if (dbName == NULL)
-				MTM_ELOG(ERROR, "Database is not specified in connection string: '%s'", connStr);
+				mtm_log(ERROR, "Database is not specified in connection string: '%s'", connStr);
 
 			if (dbUser == NULL)
 			{
 				char *errstr;
 				const char *username = get_user_name(&errstr);
 				if (!username)
-					MTM_ELOG(FATAL, "Database user is not specified in connection string '%s', fallback failed: %s", connStr, errstr);
+					mtm_log(FATAL, "Database user is not specified in connection string '%s', fallback failed: %s", connStr, errstr);
 				else
-					MTM_ELOG(WARNING, "Database user is not specified in connection string '%s', fallback to '%s'", connStr, username);
+					mtm_log(WARNING, "Database user is not specified in connection string '%s', fallback to '%s'", connStr, username);
 				MtmDatabaseUser = pstrdup(username);
 			}
 			else
@@ -869,20 +786,20 @@ static bool ConfigIsSane(void)
 #if 0
 	if (DefaultXactIsoLevel != XACT_REPEATABLE_READ)
 	{
-		MTM_ELOG(WARNING, "multimaster requires default_transaction_isolation = 'repeatable read'");
+		mtm_log(WARNING, "multimaster requires default_transaction_isolation = 'repeatable read'");
 		ok = false;
 	}
 #endif
 
 	if (MtmMaxNodes < 1)
 	{
-		MTM_ELOG(WARNING, "multimaster requires multimaster.max_nodes > 0");
+		mtm_log(WARNING, "multimaster requires multimaster.max_nodes > 0");
 		ok = false;
 	}
 
 	if (max_prepared_xacts < 1)
 	{
-		MTM_ELOG(WARNING,
+		mtm_log(WARNING,
 			 "multimaster requires max_prepared_transactions > 0, "
 			 "because all transactions are implicitly two-phase");
 		ok = false;
@@ -892,7 +809,7 @@ static bool ConfigIsSane(void)
 		int workers_required = 2 * MtmMaxNodes + 1;
 		if (max_worker_processes < workers_required)
 		{
-			MTM_ELOG(WARNING,
+			mtm_log(WARNING,
 				 "multimaster requires max_worker_processes >= %d",
 				 workers_required);
 			ok = false;
@@ -901,7 +818,7 @@ static bool ConfigIsSane(void)
 
 	if (wal_level != WAL_LEVEL_LOGICAL)
 	{
-		MTM_ELOG(WARNING,
+		mtm_log(WARNING,
 			 "multimaster requires wal_level = 'logical', "
 			 "because it is build on top of logical replication");
 		ok = false;
@@ -909,7 +826,7 @@ static bool ConfigIsSane(void)
 
 	if (max_wal_senders < MtmMaxNodes)
 	{
-		MTM_ELOG(WARNING,
+		mtm_log(WARNING,
 			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
 			 MtmMaxNodes);
 		ok = false;
@@ -917,7 +834,7 @@ static bool ConfigIsSane(void)
 
 	if (max_replication_slots < MtmMaxNodes)
 	{
-		MTM_ELOG(WARNING,
+		mtm_log(WARNING,
 			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
 			 MtmMaxNodes);
 		ok = false;
@@ -1223,7 +1140,7 @@ _PG_init(void)
 	MtmSplitConnStrs();
 
 	if (!ConfigIsSane()) {
-		MTM_ELOG(ERROR, "Multimaster config is insane, refusing to work");
+		mtm_log(ERROR, "Multimaster config is insane, refusing to work");
 	}
 
 	MtmDeadlockDetectorInit(MtmMaxNodes);
@@ -1267,64 +1184,6 @@ _PG_fini(void)
 }
 
 
-/*
- * Recovery slot is node ID from which new or crash node is performing recovery.
- * This function is called in case of logical receiver error to make it possible to try to perform
- * recovery from some other node
- */
-void MtmReleaseRecoverySlot(int nodeId)
-{
-	if (Mtm->recoverySlot == nodeId) {
-		Mtm->recoverySlot = 0;
-	}
-}
-
-/*
- * Determine when and how we should open replication slot.
- * During recovery we need to open only one replication slot from which node should receive all transactions.
- * Slots at other nodes should be removed.
- */
-MtmReplicationMode MtmGetReplicationMode(int nodeId)
-{
-	MtmLock(LW_EXCLUSIVE);
-
-	/* Await until node is connected and both receiver and sender are in clique */
-	while (BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, nodeId - 1) ||
-			BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, MtmNodeId - 1))
-	{
-		MtmUnlock();
-		MtmSleep(STATUS_POLL_DELAY);
-		MtmLock(LW_EXCLUSIVE);
-	}
-
-	if (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
-	{
-		/* Ok, then start recovery by luckiest walreceiver (if there is no donor node).
-		 * If this node was populated using basebackup, then donorNodeId is not zero and we should choose this node for recovery */
-		if ((Mtm->recoverySlot == 0 || Mtm->recoverySlot == nodeId)
-			&& (Mtm->donorNodeId == MtmNodeId || Mtm->donorNodeId == nodeId))
-		{
-			/* Lock on us */
-			Mtm->recoverySlot = nodeId;
-			// MtmPollStatusOfPreparedTransactions(false);
-			ResolveAllTransactions();
-			MtmUnlock();
-			return REPLMODE_RECOVERY;
-		}
-
-		/* And force less lucky walreceivers wait until recovery is completed */
-		while (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
-		{
-			MtmUnlock();
-			MtmSleep(STATUS_POLL_DELAY);
-			MtmLock(LW_EXCLUSIVE);
-		}
-	}
-
-	MtmUnlock();
-	return REPLMODE_RECOVERED;
-}
-
 static bool MtmIsBroadcast()
 {
 	return application_name != NULL && strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) == 0;
@@ -1339,7 +1198,7 @@ void MtmRecoverNode(int nodeId)
 {
 	if (nodeId <= 0 || nodeId > Mtm->nAllNodes)
 	{
-		MTM_ELOG(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
+		mtm_log(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
 	}
 	MtmLock(LW_EXCLUSIVE);
 	Mtm->nodes[nodeId-1].manualRecovery = true;
@@ -1367,13 +1226,13 @@ void MtmResumeNode(int nodeId)
 {
 	if (nodeId <= 0 || nodeId > Mtm->nAllNodes)
 	{
-		MTM_ELOG(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
+		mtm_log(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
 	}
 	MtmLock(LW_EXCLUSIVE);
 	if (BIT_CHECK(Mtm->stalledNodeMask, nodeId-1))
 	{
 		MtmUnlock();
-		MTM_ELOG(ERROR, "Node %d can not be resumed because it's replication slot is dropped", nodeId);
+		mtm_log(ERROR, "Node %d can not be resumed because it's replication slot is dropped", nodeId);
 	}
 	if (BIT_CHECK(Mtm->stoppedNodeMask, nodeId-1))
 	{
@@ -1396,7 +1255,7 @@ void MtmStopNode(int nodeId, bool dropSlot)
 {
 	if (nodeId <= 0 || nodeId > Mtm->nAllNodes)
 	{
-		MTM_ELOG(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
+		mtm_log(ERROR, "NodeID %d is out of range [1,%d]", nodeId, Mtm->nAllNodes);
 	}
 
 	if (!MtmIsBroadcast())
@@ -1417,176 +1276,6 @@ void MtmStopNode(int nodeId, bool dropSlot)
 		MtmDropSlot(nodeId);
 	}
 }
-
-
-lsn_t MtmGetFlushPosition(int nodeId)
-{
-	return Mtm->nodes[nodeId-1].flushPos;
-}
-
-/**
- * Keep track of progress of WAL writer.
- * We need to notify WAL senders at other nodes which logical records
- * are flushed to the disk and so can survive failure. In asynchronous commit mode
- * WAL is flushed by WAL writer. Current flush position can be obtained by GetFlushRecPtr().
- * So on applying new logical record we insert it in the MtmLsnMapping and compare
- * their poistions in local WAL log with current flush position.
- * The records which are flushed to the disk by WAL writer are removed from the list
- * and mapping ing mtm->nodes[].flushPos is updated for this node.
- */
-void  MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
-{
-	dlist_mutable_iter iter;
-	MtmFlushPosition* flushpos;
-	lsn_t local_flush = GetFlushRecPtr();
-	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
-
-	if (end_lsn != INVALID_LSN) {
-		/* Track commit lsn */
-		flushpos = (MtmFlushPosition *) palloc(sizeof(MtmFlushPosition));
-		flushpos->node_id = node_id;
-		flushpos->local_end = XactLastCommitEnd;
-		flushpos->remote_end = end_lsn;
-		dlist_push_tail(&MtmLsnMapping, &flushpos->node);
-	}
-	MtmLock(LW_EXCLUSIVE);
-	dlist_foreach_modify(iter, &MtmLsnMapping)
-	{
-		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
-		if (flushpos->local_end <= local_flush)
-		{
-			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end) {
-				Mtm->nodes[node_id-1].flushPos = flushpos->remote_end;
-			}
-			dlist_delete(iter.cur);
-			pfree(flushpos);
-		} else {
-			break;
-		}
-	}
-	MtmUnlock();
-	MemoryContextSwitchTo(old_context);
-}
-
-/*
- * Filter received transactions at destination side.
- * This function is executed by receiver,
- * so there are no race conditions and it is possible to update nodes[i].restartLSN without lock.
- * It is more efficient to filter records at senders size (done by MtmReplicationTxnFilterHook) to avoid sending useless data through network.
- * But asynchronous nature of logical replications makes it not possible to guarantee (at least I failed to do it)
- * that replica do not receive deteriorated data.
- */
-bool MtmFilterTransaction(char* record, int size)
-{
-	StringInfoData s;
-	uint8		event;
-	lsn_t		origin_lsn;
-	lsn_t		end_lsn;
-	lsn_t		restart_lsn;
-	int			replication_node;
-	int			origin_node;
-	char const* gid = "";
-	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
-	bool		duplicate = false;
-
-	s.data = record;
-	s.len = size;
-	s.maxlen = -1;
-	s.cursor = 0;
-
-	msgtype = pq_getmsgbyte(&s);
-	Assert(msgtype == 'C');
-	event = pq_getmsgbyte(&s); /* event */
-	replication_node = pq_getmsgbyte(&s);
-
-	/* read fields */
-	pq_getmsgint64(&s); /* commit_lsn */
-	end_lsn = pq_getmsgint64(&s); /* end_lsn */
-	pq_getmsgint64(&s); /* commit_time */
-
-	origin_node = pq_getmsgbyte(&s);
-	origin_lsn = pq_getmsgint64(&s);
-
-	Assert(replication_node == MtmReplicationNodeId);
-	if (!(origin_node != 0 &&
-		  (Mtm->status == MTM_RECOVERY || origin_node == replication_node)))
-	{
-		MTM_ELOG(WARNING, "Receive redirected commit event %d from node %d origin node %d origin LSN %llx in %s mode",
-			 event, replication_node, origin_node, origin_lsn, MtmNodeStatusMnem[Mtm->status]);
-	}
-
-	switch (event)
-	{
-	  case PGLOGICAL_PREPARE:
-	  case PGLOGICAL_PRECOMMIT_PREPARED:
-	  case PGLOGICAL_ABORT_PREPARED:
-		gid = pq_getmsgstring(&s);
-		break;
-	  case PGLOGICAL_COMMIT_PREPARED:
-		pq_getmsgint64(&s); /* CSN */
-		gid = pq_getmsgstring(&s);
-		break;
-	  default:
-		break;
-	}
-	restart_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
-	if (Mtm->nodes[origin_node-1].restartLSN < restart_lsn) {
-		MTM_LOG2("[restartlsn] node %d: %llx -> %llx (MtmFilterTransaction)", MtmReplicationNodeId, Mtm->nodes[MtmReplicationNodeId-1].restartLSN, restart_lsn);
-		// if (event != PGLOGICAL_PREPARE) {
-		// 	/* Transactions can be prepared in different order, so to avoid loosing transactions we should not update restartLsn for them */
-		// 	Mtm->nodes[origin_node-1].restartLSN = restart_lsn;
-		// }
-	} else {
-		duplicate = true;
-	}
-
-	if (duplicate) {
-		MTM_LOG1("Ignore transaction %s from node %d event=%x because our LSN position %llx for origin node %d is greater or equal than LSN %llx of this transaction (end_lsn=%llx, origin_lsn=%llx) mode %s",
-				 gid, replication_node, event, Mtm->nodes[origin_node-1].restartLSN, origin_node, restart_lsn, end_lsn, origin_lsn, MtmNodeStatusMnem[Mtm->status]);
-	} else {
-		MTM_LOG2("Apply transaction %s from node %d lsn %llx, event=%x, origin node %d, original lsn=%llx, current lsn=%llx",
-				 gid, replication_node, end_lsn, event, origin_node, origin_lsn, restart_lsn);
-	}
-
-	return duplicate;
-}
-
-/*
- * Setup replication session origin to include origin location in WAL and
- * update slot position.
- * Sessions are not reetrant so we have to use exclusive lock here.
- */
-void MtmBeginSession(int nodeId)
-{
-	// MtmLockNode(nodeId, LW_EXCLUSIVE);
-	Assert(replorigin_session_origin == InvalidRepOriginId);
-	replorigin_session_origin = Mtm->nodes[nodeId-1].originId;
-	Assert(replorigin_session_origin != InvalidRepOriginId);
-	MTM_LOG3("%d: Begin setup replorigin session: %d", MyProcPid, replorigin_session_origin);
-	replorigin_session_setup(replorigin_session_origin);
-	MTM_LOG3("%d: End setup replorigin session: %d", MyProcPid, replorigin_session_origin);
-}
-
-/*
- * Release replication session
- */
-void MtmEndSession(int nodeId, bool unlock)
-{
-	if (replorigin_session_origin != InvalidRepOriginId) {
-		MTM_LOG2("%d: Begin reset replorigin session for node %d: %d, progress %llx",
-				 MyProcPid, nodeId, replorigin_session_origin,
-				 (long long unsigned int) replorigin_session_get_progress(false));
-		replorigin_session_origin = InvalidRepOriginId;
-		replorigin_session_origin_lsn = INVALID_LSN;
-		replorigin_session_origin_timestamp = 0;
-		replorigin_session_reset();
-		// if (unlock) {
-		// 	MtmUnlockNode(nodeId);
-		// }
-		MTM_LOG3("%d: End reset replorigin session: %d", MyProcPid, replorigin_session_origin);
-	}
-}
-
 
 /*
  * -------------------------------------------
@@ -1609,7 +1298,7 @@ mtm_add_node(PG_FUNCTION_ARGS)
 	char *connStr = text_to_cstring(PG_GETARG_TEXT_PP(0));
 
 	if (Mtm->nAllNodes == MtmMaxNodes) {
-		MTM_ELOG(ERROR, "Maximal number of nodes %d is reached", MtmMaxNodes);
+		mtm_log(ERROR, "Maximal number of nodes %d is reached", MtmMaxNodes);
 	}
 	if (!MtmIsBroadcast())
 	{
@@ -1621,7 +1310,7 @@ mtm_add_node(PG_FUNCTION_ARGS)
 		int nodeId;
 		MtmLock(LW_EXCLUSIVE);
 		nodeId = Mtm->nAllNodes;
-		MTM_ELOG(NOTICE, "Add node %d: '%s'", nodeId+1, connStr);
+		mtm_log(NOTICE, "Add node %d: '%s'", nodeId+1, connStr);
 
 		MtmUpdateNodeConnectionInfo(&Mtm->nodes[nodeId].con, connStr);
 
@@ -1655,7 +1344,7 @@ mtm_poll_node(PG_FUNCTION_ARGS)
 			online = false;
 			break;
 		} else {
-			MtmSleep(STATUS_POLL_DELAY);
+			MtmSleep(USECS_PER_SEC);
 		}
 	}
 	PG_RETURN_BOOL(online);
@@ -1676,14 +1365,6 @@ mtm_resume_node(PG_FUNCTION_ARGS)
 	MtmResumeNode(nodeId);
 	PG_RETURN_VOID();
 }
-
-typedef struct
-{
-	int		  nodeId;
-	TupleDesc desc;
-	Datum	  values[Natts_mtm_nodes_state];
-	bool	  nulls[Natts_mtm_nodes_state];
-} MtmGetNodeStateCtx;
 
 Datum
 mtm_get_nodes_state(PG_FUNCTION_ARGS)
@@ -1824,7 +1505,7 @@ PQconnectdb_safe(const char *conninfo, int timeout)
 
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
-		MTM_ELOG(WARNING, "Could not connect to '%s': %s",
+		mtm_log(WARNING, "Could not connect to '%s': %s",
 			safe_connstr, PQerrorMessage(conn));
 		return conn;
 	}
@@ -1837,14 +1518,14 @@ PQconnectdb_safe(const char *conninfo, int timeout)
 
 		if (socket_fd < 0)
 		{
-			MTM_ELOG(WARNING, "Referee socket is invalid");
+			mtm_log(WARNING, "Referee socket is invalid");
 			return conn;
 		}
 
 		if (pg_setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO,
 									(char *)&tv, sizeof(tv), MtmUseRDMA) < 0)
 		{
-			MTM_ELOG(WARNING, "Could not set referee socket timeout: %s",
+			mtm_log(WARNING, "Could not set referee socket timeout: %s",
 						strerror(errno));
 			return conn;
 		}
@@ -1888,7 +1569,7 @@ mtm_collect_cluster_info(PG_FUNCTION_ARGS)
 	conn = PQconnectdb_safe(Mtm->nodes[usrfctx->nodeId-1].con.connStr, 0);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
-		MTM_ELOG(WARNING, "Failed to establish connection '%s' to node %d: error = %s", Mtm->nodes[usrfctx->nodeId-1].con.connStr, usrfctx->nodeId, PQerrorMessage(conn));
+		mtm_log(WARNING, "Failed to establish connection '%s' to node %d: error = %s", Mtm->nodes[usrfctx->nodeId-1].con.connStr, usrfctx->nodeId, PQerrorMessage(conn));
 		PQfinish(conn);
 		SRF_RETURN_NEXT_NULL(funcctx);
 	}
@@ -1897,7 +1578,7 @@ mtm_collect_cluster_info(PG_FUNCTION_ARGS)
 		result = PQexec(conn, "select * from mtm.get_cluster_state()");
 
 		if (PQresultStatus(result) != PGRES_TUPLES_OK || PQntuples(result) != 1) {
-			MTM_ELOG(WARNING, "Failed to receive data from %d", usrfctx->nodeId);
+			mtm_log(WARNING, "Failed to receive data from %d", usrfctx->nodeId);
 			PQclear(result);
 			PQfinish(conn);
 			SRF_RETURN_NEXT_NULL(funcctx);
@@ -1913,27 +1594,6 @@ mtm_collect_cluster_info(PG_FUNCTION_ARGS)
 		}
 	}
 }
-
-// Datum mtm_broadcast_table(PG_FUNCTION_ARGS)
-// {
-// 	MtmCopyRequest copy;
-// 	copy.sourceTable = PG_GETARG_OID(0);
-// 	copy.targetNodes = ~Mtm->disabledNodeMask;
-// 	LogLogicalMessage("B", (char*)&copy, sizeof(copy), true);
-// 	MtmTx.containsDML = true;
-// 	PG_RETURN_VOID();
-// }
-
-// Datum mtm_copy_table(PG_FUNCTION_ARGS)
-// {
-// 	MtmCopyRequest copy;
-// 	copy.sourceTable = PG_GETARG_OID(0);
-// 	copy.targetNodes = (nodemask_t)1 << (PG_GETARG_INT32(1) - 1);
-// 	LogLogicalMessage("B", (char*)&copy, sizeof(copy), true);
-// 	MtmTx.containsDML = true;
-// 	PG_RETURN_VOID();
-// }
-
 
 /*
  * -------------------------------------------
@@ -1983,21 +1643,21 @@ MtmNoticeReceiver(void *i, const PGresult *res)
 	{
 		/* Strip "NOTICE:  " from beginning and "\n" from end of error string */
 		strncpy(stripped_notice, notice + 9, len - 1 - 9);
-		MTM_ELOG(NOTICE, "%s", stripped_notice);
+		mtm_log(NOTICE, "%s", stripped_notice);
 	}
 	else if (*notice == 'W')
 	{
 		/* Strip "WARNING:	" from beginning and "\n" from end of error string */
 		strncpy(stripped_notice, notice + 10, len - 1 - 10);
-		MTM_ELOG(WARNING, "%s", stripped_notice);
+		mtm_log(WARNING, "%s", stripped_notice);
 	}
 	else
 	{
 		strncpy(stripped_notice, notice, len + 1);
-		MTM_ELOG(WARNING, "%s", stripped_notice);
+		mtm_log(WARNING, "%s", stripped_notice);
 	}
 
-	MTM_LOG1("%s", stripped_notice);
+	mtm_log(BroadcastNotice, "%s", stripped_notice);
 	pfree(stripped_notice);
 }
 
@@ -2027,7 +1687,7 @@ static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int force
 					do {
 						PQfinish(conns[i]);
 					} while (--i >= 0);
-					MTM_ELOG(ERROR, "Failed to establish connection '%s' to node %d, error = %s", Mtm->nodes[failedNode].con.connStr, failedNode+1, PQerrorMessage(conns[i]));
+					mtm_log(ERROR, "Failed to establish connection '%s' to node %d, error = %s", Mtm->nodes[failedNode].con.connStr, failedNode+1, PQerrorMessage(conns[i]));
 				}
 			}
 			PQsetNoticeReceiver(conns[i], MtmNoticeReceiver, &i);
@@ -2051,7 +1711,7 @@ static void MtmBroadcastUtilityStmt(char const* sql, bool ignoreError, int force
 					errorMsg = psprintf(MTM_TAG "%s", utility_errmsg);
 				else
 				{
-					MTM_ELOG(ERROR, "%s", utility_errmsg);
+					mtm_log(ERROR, "%s", utility_errmsg);
 					errorMsg = MTM_TAG "Failed to run command at node %d";
 				}
 

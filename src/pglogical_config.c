@@ -34,6 +34,7 @@
 #include "utils/typcache.h"
 
 #include "multimaster.h"
+#include "logger.h"
 
 typedef enum PGLogicalOutputParamType
 {

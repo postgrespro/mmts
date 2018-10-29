@@ -7,6 +7,7 @@
 #include "pgstat.h"
 
 #include "multimaster.h"
+#include "logger.h"
 
 void MtmSpillToFile(int fd, char const* data, size_t size)
 {

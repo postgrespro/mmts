@@ -18,6 +18,7 @@
 #include "pglogical_output.h"
 
 #include "multimaster.h"
+#include "logger.h"
 
 /*
  * Returns Oid of the hooks function specified in funcname.

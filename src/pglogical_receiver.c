@@ -50,10 +50,42 @@
 #include "spill.h"
 #include "state.h"
 #include "bgwpool.h"
-#include "common/pg_socket.h"
+#include "receiver.h"
+#include "resolver.h"
+#include "logger.h"
+#include "compat.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
+#define STATUS_POLL_DELAY USECS_PER_SEC
+
+typedef enum
+{
+	REPLMODE_EXIT,         /* receiver should exit */
+	REPLMODE_RECOVERED,    /* recovery of receiver node is completed so drop old slot and restart replication from the current position in WAL */
+	REPLMODE_RECOVERY,     /* perform recovery of the node by applying all data from the slot from specified point */
+	REPLMODE_CREATE_NEW,   /* destination node is recovered: drop old slot and restart from roveredLsn position */
+	REPLMODE_OPEN_EXISTED  /* normal mode: use existed slot or create new one and start receiving data from it from the remembered position */
+} MtmReplicationMode;
+
+typedef struct MtmFlushPosition
+{
+	dlist_node node;
+	int        node_id;
+	lsn_t      local_end;
+	lsn_t      remote_end;
+} MtmFlushPosition;
+
+static char const* const MtmReplicationModeName[] =
+{
+	"exit",
+	"recovered",   /* recovery of node is completed so drop old slot and restart replication from the current position in WAL */
+	"recovery",	   /* perform recorvery of the node by applying all data from theslot from specified point */
+	"create_new",  /* destination node is recovered: drop old slot and restart from roveredLsn position */
+	"open_existed" /* normal mode: use existed slot or create new one and start receiving data from it from the rememered position */
+};
+
+static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
 /* Signal handling */
 static volatile sig_atomic_t got_sighup = false;
@@ -73,6 +105,7 @@ static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
 void pglogical_receiver_main(Datum main_arg);
+static lsn_t MtmGetFlushPosition(int nodeId);
 
 static void
 receiver_raw_sighup(SIGNAL_ARGS)
@@ -195,14 +228,56 @@ feTimestampDifference(int64 start_time, int64 stop_time,
 	}
 }
 
-static char const* const MtmReplicationModeName[] =
+static lsn_t
+MtmGetFlushPosition(int nodeId)
 {
-	"exit",
-	"recovered",   /* recovery of node is completed so drop old slot and restart replication from the current position in WAL */
-	"recovery",	   /* perform recorvery of the node by applying all data from theslot from specified point */
-	"create_new",  /* destination node is recovered: drop old slot and restart from roveredLsn position */
-	"open_existed" /* normal mode: use existed slot or create new one and start receiving data from it from the rememered position */
-};
+	return Mtm->nodes[nodeId-1].flushPos;
+}
+
+/**
+ * Keep track of progress of WAL writer.
+ * We need to notify WAL senders at other nodes which logical records
+ * are flushed to the disk and so can survive failure. In asynchronous commit mode
+ * WAL is flushed by WAL writer. Current flush position can be obtained by GetFlushRecPtr().
+ * So on applying new logical record we insert it in the MtmLsnMapping and compare
+ * their poistions in local WAL log with current flush position.
+ * The records which are flushed to the disk by WAL writer are removed from the list
+ * and mapping ing mtm->nodes[].flushPos is updated for this node.
+ */
+void
+MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
+{
+	dlist_mutable_iter iter;
+	MtmFlushPosition* flushpos;
+	lsn_t local_flush = GetFlushRecPtr();
+	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
+
+	if (end_lsn != INVALID_LSN) {
+		/* Track commit lsn */
+		flushpos = (MtmFlushPosition *) palloc(sizeof(MtmFlushPosition));
+		flushpos->node_id = node_id;
+		flushpos->local_end = XactLastCommitEnd;
+		flushpos->remote_end = end_lsn;
+		dlist_push_tail(&MtmLsnMapping, &flushpos->node);
+	}
+	MtmLock(LW_EXCLUSIVE);
+	dlist_foreach_modify(iter, &MtmLsnMapping)
+	{
+		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
+		if (flushpos->local_end <= local_flush)
+		{
+			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end) {
+				Mtm->nodes[node_id-1].flushPos = flushpos->remote_end;
+			}
+			dlist_delete(iter.cur);
+			pfree(flushpos);
+		} else {
+			break;
+		}
+	}
+	MtmUnlock();
+	MemoryContextSwitchTo(old_context);
+}
 
 static void
 MtmExecute(void* work, int size)
@@ -214,6 +289,150 @@ MtmExecute(void* work, int size)
 		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size);
 }
 
+/*
+ * Filter received transactions at destination side.
+ * This function is executed by receiver,
+ * so there are no race conditions and it is possible to update nodes[i].restartLSN without lock.
+ * It is more efficient to filter records at senders size (done by MtmReplicationTxnFilterHook) to avoid sending useless data through network.
+ * But asynchronous nature of logical replications makes it not possible to guarantee (at least I failed to do it)
+ * that replica do not receive deteriorated data.
+ */
+static bool
+MtmFilterTransaction(char *record, int size)
+{
+	StringInfoData s;
+	uint8		event;
+	lsn_t		origin_lsn;
+	lsn_t		end_lsn;
+	lsn_t		tx_lsn;
+	int			replication_node;
+	int			origin_node;
+	char const* gid = "";
+	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
+	bool		duplicate = false;
+
+	s.data = record;
+	s.len = size;
+	s.maxlen = -1;
+	s.cursor = 0;
+
+	/* read fields */
+	msgtype = pq_getmsgbyte(&s);
+	Assert(msgtype == 'C');
+	event = pq_getmsgbyte(&s); /* event */
+	replication_node = pq_getmsgbyte(&s);
+	pq_getmsgint64(&s); /* commit_lsn */
+	end_lsn = pq_getmsgint64(&s); /* end_lsn */
+	pq_getmsgint64(&s); /* commit_time */
+
+	origin_node = pq_getmsgbyte(&s);
+	origin_lsn = pq_getmsgint64(&s);
+
+	switch (event)
+	{
+		case PGLOGICAL_PREPARE:
+		case PGLOGICAL_PRECOMMIT_PREPARED:
+		case PGLOGICAL_ABORT_PREPARED:
+			gid = pq_getmsgstring(&s);
+			break;
+		case PGLOGICAL_COMMIT_PREPARED:
+			pq_getmsgint64(&s); /* CSN */
+			gid = pq_getmsgstring(&s);
+			break;
+		default:
+			break;
+	}
+
+	Assert(replication_node == MtmReplicationNodeId);
+	tx_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
+
+	if (Mtm->nodes[origin_node-1].restartLSN >= tx_lsn)
+	{
+		duplicate = true;
+		mtm_log(MtmReceiverFilter,
+				"Filter transaction %s from node %d event=%x (restrt=%llx, tx=%lld)",
+				gid, replication_node, event,
+				Mtm->nodes[origin_node-1].restartLSN, tx_lsn);
+	}
+
+	return duplicate;
+}
+
+/*
+ * Determine when and how we should open replication slot.
+ * During recovery we need to open only one replication slot from which node should receive all transactions.
+ * Slots at other nodes should be removed.
+ */
+static MtmReplicationMode
+MtmGetReplicationMode(int nodeId)
+{
+	MtmLock(LW_EXCLUSIVE);
+
+	/* Await until node is connected and both receiver and sender are in clique */
+	while (BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, nodeId - 1) ||
+			BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, MtmNodeId - 1))
+	{
+		MtmUnlock();
+		MtmSleep(STATUS_POLL_DELAY);
+		MtmLock(LW_EXCLUSIVE);
+	}
+
+	if (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
+	{
+		/* Ok, then start recovery by luckiest walreceiver (if there is no donor node).
+		 * If this node was populated using basebackup, then donorNodeId is not zero and we should choose this node for recovery */
+		if ((Mtm->recoverySlot == 0 || Mtm->recoverySlot == nodeId)
+			&& (Mtm->donorNodeId == MtmNodeId || Mtm->donorNodeId == nodeId))
+		{
+			/* Lock on us */
+			Mtm->recoverySlot = nodeId;
+			// MtmPollStatusOfPreparedTransactions(false);
+			ResolveAllTransactions();
+			MtmUnlock();
+			return REPLMODE_RECOVERY;
+		}
+
+		/* And force less lucky walreceivers wait until recovery is completed */
+		while (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
+		{
+			MtmUnlock();
+			MtmSleep(STATUS_POLL_DELAY);
+			MtmLock(LW_EXCLUSIVE);
+		}
+	}
+
+	MtmUnlock();
+	return REPLMODE_RECOVERED;
+}
+
+/*
+ * Setup replication session origin to include origin location in WAL and
+ * update slot position.
+ * Sessions are not reetrant so we have to use exclusive lock here.
+ */
+void
+MtmBeginSession(int nodeId)
+{
+	Assert(replorigin_session_origin == InvalidRepOriginId);
+	replorigin_session_origin = Mtm->nodes[nodeId-1].originId;
+	Assert(replorigin_session_origin != InvalidRepOriginId);
+	replorigin_session_setup(replorigin_session_origin);
+}
+
+/*
+ * Release replication session
+ */
+void
+MtmEndSession(int nodeId, bool unlock)
+{
+	if (replorigin_session_origin != InvalidRepOriginId)
+	{
+		replorigin_session_origin = InvalidRepOriginId;
+		replorigin_session_origin_lsn = INVALID_LSN;
+		replorigin_session_origin_timestamp = 0;
+		replorigin_session_reset();
+	}
+}
 
 void
 pglogical_receiver_main(Datum main_arg)
@@ -309,7 +528,8 @@ pglogical_receiver_main(Datum main_arg)
 		 * Slots at other nodes should be removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
-		MTM_LOG1("[STATE] Node %i: wal_receiver starts in %s mode", nodeId, MtmReplicationModeName[mode]);
+		mtm_log(MtmReceiverMode, "WalReceiver to %d starts in %s mode",
+				nodeId, MtmReplicationModeName[mode]);
 
 		// if (mode == REPLMODE_RECOVERY)
 		// 	synchronous_twophase = false;
@@ -331,7 +551,8 @@ pglogical_receiver_main(Datum main_arg)
 			if (i == MtmNodeId - 1)
 				continue;
 			Mtm->nodes[i].restartLSN = replorigin_get_progress(Mtm->nodes[i].originId, false);
-			MTM_LOG1("Node %d restartLSN -> %llx", i + 1, Mtm->nodes[i].restartLSN);
+			mtm_log(MtmReceiverMode, "Node %d restartLSN = %llx",
+					i + 1, Mtm->nodes[i].restartLSN);
 		}
 
 		/* Establish connection to remote server */
@@ -373,37 +594,20 @@ pglogical_receiver_main(Datum main_arg)
 			Mtm->nodes[nodeId-1].manualRecovery = false;
 		}
 
-		MTM_LOG1("Start replication on slot %s from node %d at position %llx, mode %s, recovered lsn %llx",
-				 slotName, nodeId, originStartPos, MtmReplicationModeName[mode], Mtm->recoveredLSN);
-
-		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x (\"startup_params_format\" '1', \"max_proto_version\" '%d',  \"min_proto_version\" '%d', \"forward_changesets\" '1', \"mtm_replication_mode\" '%s', \"mtm_restart_pos\" '%llx', \"mtm_recovered_pos\" '%llx')",
+		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x (\"startup_params_format\" '1', \"max_proto_version\" '%d',  \"min_proto_version\" '%d', \"forward_changesets\" '1', \"mtm_replication_mode\" '%s', \"mtm_restart_pos\" '%llx')",
 						  slotName,
 						  (uint32) (originStartPos >> 32),
 						  (uint32) originStartPos,
 						  MULTIMASTER_MAX_PROTO_VERSION,
 						  MULTIMASTER_MIN_PROTO_VERSION,
 						  MtmReplicationModeName[mode],
-						  originStartPos,
-						  Mtm->recoveredLSN
+						  originStartPos
 			);
 		res = PQexec(conn, query->data);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
-			// int i, n_deleted_slots = 0;
-
 			elog(WARNING, "Can't find slot on node%d. Shutting down receiver. %s", nodeId, PQresultErrorMessage(res));
 			goto OnError;
-			// Mtm->nodes[nodeId-1].slotDeleted = true;
-			// for (i = 0; i < Mtm->nAllNodes; i++)
-			// {
-			// 	if (Mtm->nodes[i].slotDeleted)
-			// 		n_deleted_slots++;
-			// }
-			// if (n_deleted_slots == Mtm->nAllNodes - 1)
-			// {
-			// 	elog(FATAL, "All neighbour nopes have no replication slot for us. Exiting.");
-			// }
-			// proc_exit(1);
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);
@@ -547,7 +751,6 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int msg_len = rc - hdr_len;
 					stmt = copybuf + hdr_len;
-					MTM_LOG3("Receive message %c from node %d", stmt[0], nodeId);
 					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*1024L) {
 						if (spill_file < 0) {
 							int file_id;
@@ -563,7 +766,6 @@ pglogical_receiver_main(Datum main_arg)
 						ByteBufferReset(&buf);
 					}
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'A' || stmt[1] == 'C'))) {
-						MTM_LOG3("Process '%c' message from %d", stmt[1], nodeId);
 						if (stmt[0] == 'M' && stmt[1] == 'C') { /* concurrent DDL should be executed by parallel workers */
 							MtmExecute(stmt, msg_len);
 						} else {
@@ -709,7 +911,8 @@ pglogical_receiver_main(Datum main_arg)
 	  OnError:
 		ByteBufferReset(&buf);
 		PQfinish(conn);
-		MtmReleaseRecoverySlot(nodeId);
+		if (Mtm->recoverySlot == nodeId)
+			Mtm->recoverySlot = 0;
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
 	}
 	ByteBufferFree(&buf);

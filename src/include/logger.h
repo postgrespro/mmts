@@ -36,20 +36,46 @@ typedef enum MtmLogTag
 	/* status worker */
 	StatusRequest			= LOG,
 
+	/* ddd */
 	BgwPoolEvent			= LOG,
 
+	/* ddd */
 	DeadlockCheck			= LOG,
 	DeadlockUpdate			= LOG,
 	DeadlockSerialize		= DEBUG3,
 
+	/* ddl XXX! */
 	DMLStmtOutgoing			= DEBUG1,
 	DMLStmtIncoming			= DEBUG1,
 	DMLProcessingTrace		= DEBUG1,
 
+	/* broadcast service */
+	BroadcastNotice			= DEBUG1,
+
+	/* walsender's proto */
+	ProtoTraceFilter		= DEBUG1,
+	ProtoTraceTx			= DEBUG1,
+	ProtoTraceMode			= LOG,
+	ProtoTraceMessage		= LOG,
+
+	/* receiver */
+	MtmReceiverMode			= LOG,
+	MtmReceiverFilter		= LOG,
+	MtmApplyMessage			= LOG,
+	MtmApplyTrace			= DEBUG2,
+	MtmApplyError			= LOG,
+
+	/* state */
+	MtmStateSwitch			= LOG,
+	MtmStateMessage			= LOG
 } MtmLogTag;
 
 // XXX: also meaningful process name would be cool
 
+#define MTM_TAG "[MTM] "
+
+#define MTM_ERRMSG(fmt,...) errmsg(MTM_TAG fmt, ## __VA_ARGS__)
+
 #define mtm_log(tag, fmt, ...) ereport(tag, \
-								(errmsg("[MTM] " fmt, ## __VA_ARGS__), \
+								(errmsg(MTM_TAG fmt, ## __VA_ARGS__), \
 								errhidestmt(true), errhidecontext(true)))

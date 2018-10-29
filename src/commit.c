@@ -10,6 +10,8 @@
  */
 
 #include "postgres.h"
+#include "access/twophase.h"
+#include "access/transam.h"
 #include "storage/proc.h"
 #include "utils/guc.h"
 #include "miscadmin.h"
@@ -19,6 +21,7 @@
 #include "multimaster.h"
 #include "logger.h"
 #include "ddl.h"
+#include "state.h"
 
 static Oid		MtmDatabaseId;
 static bool		DmqSubscribed;
@@ -78,7 +81,7 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 		/* Reject all user's transactions at offline cluster.
 		 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
 		 */
-		MTM_ELOG(ERROR,
+		mtm_log(ERROR,
 				"Multimaster node is not online: current status %s",
 				MtmNodeStatusMnem[Mtm->status]);
 	}

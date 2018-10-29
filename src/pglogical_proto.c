@@ -36,10 +36,13 @@
 #include "utils/typcache.h"
 #include "utils/snapmgr.h"
 
+#include "pglogical_relid_map.h"
+
 #include "multimaster.h"
 #include "state.h"
 #include "ddl.h"
-#include "pglogical_relid_map.h"
+#include "logger.h"
+
 
 static int MtmTransactionRecords;
 static bool MtmIsFilteredTxn;
@@ -87,13 +90,14 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 	Oid         relid;
 	Oid         tid;
 
-	if (MtmIsFilteredTxn) {
-		MTM_LOG2("%d: pglogical_write_message filtered", MyProcPid);
+	if (MtmIsFilteredTxn)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_rel filtered");
 		return;
 	}
-
-	if (DDLInProgress) {
-		MTM_LOG2("%d: pglogical_write_message filtered DDLInProgress", MyProcPid);
+	if (DDLInProgress)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_rel filtered DDLInProgress");
 		return;
 	}
 
@@ -149,11 +153,7 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	MtmIsFilteredTxn = false;
-	MTM_LOG3("%d: pglogical_write_begin XID=%d node=%d restart_decoding_lsn=%llx first_lsn=%llx end_lsn=%llx confirmed_flush=%llx", 
-				MyProcPid, txn->xid, MtmReplicationNodeId,
-				(long64)txn->restart_decoding_lsn, (long64)txn->first_lsn, (long64)txn->end_lsn, (long64)MyReplicationSlot->data.confirmed_flush);
-	
-	MTM_LOG2("%d: pglogical_write_begin XID=%lld sent", MyProcPid, (long64)txn->xid);
+
 	pq_sendbyte(out, 'B');		/* BEGIN */
 	pq_sendint(out, MtmNodeId, 4);
 	pq_sendint64(out, txn->xid);
@@ -162,8 +162,9 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 
 	MtmTransactionRecords = 0;
 
+	mtm_log(ProtoTraceTx, "pglogical_write_begin xid=" XID_FMT " sent",
+			txn->xid);
 }
-
 
 static void pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition* pos)
 {
@@ -173,7 +174,6 @@ static void pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, M
 	pq_sendbyte(out, 'N');
 	pq_sendint64(out, pos->next);
 }
-	
 
 static void pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRequest* copy)
 {
@@ -210,40 +210,53 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 
 	MtmLastRelId = InvalidOid;
 
-	switch (*prefix) {
-	  case 'L':
-		if (hooks_data->is_recovery) {
-			return;
-		} else { 
-			MTM_LOG1("Send deadlock message to node %d", MtmReplicationNodeId);
-		}
-		break;
-	  case 'S':
-		if (MtmIsFilteredTxn) {
+	switch (*prefix)
+	{
+	case 'L':
+		if (hooks_data->is_recovery)
+		{
 			return;
 		}
+		mtm_log(ProtoTraceMessage, "Sent deadlock message to node %d",
+				MtmReplicationNodeId);
 		break;
-	  case 'D':
-		if (MtmIsFilteredTxn) {
-			MTM_LOG2("%d: pglogical_write_message filtered", MyProcPid);
+
+	case 'D':
+		if (MtmIsFilteredTxn)
+		{
+			mtm_log(ProtoTraceFilter, "pglogical_write_message filtered");
 			return;
 		}
 		DDLInProgress = true;
+		mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
+				MtmReplicationNodeId, message);
 		break;
-	  case 'E':
+
+	case 'C':
+		mtm_log(ProtoTraceMessage, "Sent non-tx DDL message to node %d: %s",
+				MtmReplicationNodeId, message);
+		break;
+
+	case 'E':
 		DDLInProgress = false;
 		/*
 		 * we use End message only as indicator of DDL transaction finish,
 		 * so no need to send that to replicas.
 		 */
 		return;
-	  case 'B':
+
+	case 'B':
 		pglogical_broadcast_table(out, ctx, (MtmCopyRequest*)message);
 		return;
-	  case 'N':
+
+
+	case 'N':
 		pglogical_seq_nextval(out, ctx, (MtmSeqPosition*)message);
-		return;		
+		mtm_log(ProtoTraceMessage, "Sent nextval message to node %d",
+				MtmReplicationNodeId);
+		return;
 	}
+
 	pq_sendbyte(out, 'M');
 	pq_sendbyte(out, *prefix);
 	pq_sendint(out, sz, 4);
@@ -269,13 +282,14 @@ static void
 pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
 						Relation rel, HeapTuple newtuple)
 {
-	if (MtmIsFilteredTxn) {
-		MTM_LOG2("%d: pglogical_write_insert filtered", MyProcPid);
+	if (MtmIsFilteredTxn)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_insert filtered");
 		return;
 	}
-
-	if (DDLInProgress) {
-		MTM_LOG2("%d: pglogical_write_insert filtered DDLInProgress", MyProcPid);
+	if (DDLInProgress)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_insert filtered DDLInProgress");
 		return;
 	}
 
@@ -292,19 +306,18 @@ static void
 pglogical_write_update(StringInfo out, PGLogicalOutputData *data,
 						Relation rel, HeapTuple oldtuple, HeapTuple newtuple)
 {
-	if (MtmIsFilteredTxn) {
-		MTM_LOG2("%d: pglogical_write_update filtered", MyProcPid);
+	if (MtmIsFilteredTxn)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_update filtered");
 		return;
 	}
-
-	if (DDLInProgress) {
-		MTM_LOG2("%d: pglogical_write_update filtered DDLInProgress", MyProcPid);
+	if (DDLInProgress)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_update filtered DDLInProgress");
 		return;
 	}
 
 	MtmTransactionRecords += 1;
-
-	MTM_LOG3("%d: pglogical_write_update confirmed_flush=%llx", MyProcPid, (long64)MyReplicationSlot->data.confirmed_flush);
 
 	pq_sendbyte(out, 'U');		/* action UPDATE */
 	/* FIXME support whole tuple (O tuple type) */
@@ -325,13 +338,14 @@ static void
 pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
 						Relation rel, HeapTuple oldtuple)
 {
-	if (MtmIsFilteredTxn) {
-		MTM_LOG2("%d: pglogical_write_delete filtered", MyProcPid);
+	if (MtmIsFilteredTxn)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_delete filtered");
 		return;
 	}
-
-	if (DDLInProgress) {
-		MTM_LOG2("%d: pglogical_write_delete filtered DDLInProgress", MyProcPid);
+	if (DDLInProgress)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_delete filtered DDLInProgress");
 		return;
 	}
 
@@ -359,7 +373,7 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn)
 			;
 		if (i == Mtm->nAllNodes)
 		{
-			elog(WARNING, "Failed to map origin %d", txn->origin_id);
+			mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
 			i = MtmNodeId - 1;
 		}
 		else
@@ -499,13 +513,14 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 	int			i;
 	uint16		nliveatts = 0;
 
-	if (MtmIsFilteredTxn) {
-		MTM_LOG2("%d: pglogical_write_tuple filtered", MyProcPid);
+	if (MtmIsFilteredTxn)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_tuple filtered");
 		return;
 	}
-
-	if (DDLInProgress) {
-		MTM_LOG2("%d: pglogical_write_tuple filtered DDLInProgress", MyProcPid);
+	if (DDLInProgress)
+	{
+		mtm_log(ProtoTraceFilter, "pglogical_write_tuple filtered DDLInProgress");
 		return;
 	}
 
@@ -683,7 +698,6 @@ static void
 MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 {
 	ListCell *param;
-	ulong64 recoveryStartPos = INVALID_LSN;
 	MtmDecoderPrivate   *hooks_data;
 	int i;
 
@@ -710,18 +724,17 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				}
 				else if (strcmp(strVal(elem->arg), "open_existed") != 0 &&
 						 strcmp(strVal(elem->arg), "create_new") != 0)
-				{	// XXX: don't need that anymore
-					MTM_ELOG(ERROR, "Illegal recovery mode %s", strVal(elem->arg));
+				{
+					// XXX: don't need that anymore
+					mtm_log(ERROR, "Illegal recovery mode %s", strVal(elem->arg));
 				}
 			}
 			else
 			{
-				MTM_ELOG(ERROR, "Replication mode is not specified");
+				mtm_log(ERROR, "Replication mode is not specified");
 			}
 		}
 	}
-
-	MTM_LOG1("Startup of logical replication to node %d", MtmReplicationNodeId);
 
 	MtmLock(LW_EXCLUSIVE);
 
@@ -749,33 +762,37 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	if (BIT_CHECK(Mtm->stalledNodeMask, MtmReplicationNodeId-1)) {
 		MtmUnlock();
-		MTM_ELOG(ERROR, "Stalled node %d tries to initiate recovery",
+		mtm_log(ERROR, "Stalled node %d tries to initiate recovery",
 				 MtmReplicationNodeId);
 	}
 
 	if (BIT_CHECK(Mtm->stoppedNodeMask, MtmReplicationNodeId-1)) {
 		MtmUnlock();
-		MTM_ELOG(ERROR, "Stopped node %d tries to connect",
+		mtm_log(ERROR, "Stopped node %d tries to connect",
 				 MtmReplicationNodeId);
 	}
 
 	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1)) {
 		MtmUnlock();
-		MTM_ELOG(ERROR, "Out-of-clique node %d tries to connect",
+		mtm_log(ERROR, "Out-of-clique node %d tries to connect",
 				 MtmReplicationNodeId);
 	}
 
 	if (hooks_data->is_recovery)
 	{
-		MTM_LOG1("%d: Node %d start recovery of node %d at position %llx",
-				 MyProcPid, MtmNodeId, MtmReplicationNodeId, recoveryStartPos);
+		mtm_log(ProtoTraceMode,
+				"Walsender starts in recovery mode to node %d",
+				MtmReplicationNodeId);
+
 		Assert(MyReplicationSlot != NULL);
 		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, true);
 	}
 	else
 	{
-		MTM_LOG1("Node %d consider that recovery of node %d is completed: start normal replication",
-				 MtmNodeId, MtmReplicationNodeId);
+		mtm_log(ProtoTraceMode,
+				"Walsender starts in recovered mode to node %d",
+				MtmReplicationNodeId);
+
 		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, true);
 	}
 	MtmUnlock();
@@ -785,14 +802,18 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 static void
 MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
 {
+	Assert(MtmReplicationNodeId >= 0);
+
 	MtmLock(LW_EXCLUSIVE);
-	if (MtmReplicationNodeId >= 0 && BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1)) {
+	if (BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1))
+	{
 		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
-		MTM_LOG1("Logical replication to node %d is stopped", MtmReplicationNodeId);
-		/* MtmOnNodeDisconnect(MtmReplicationNodeId); */
-		MtmReplicationNodeId = -1; /* defuse MtmOnProcExit hook */
+		MtmReplicationNodeId = -1;
 	}
 	MtmUnlock();
+
+	mtm_log(ProtoTraceMode, "Walsender to node %d exiting",
+			MtmReplicationNodeId);
 }
 
 /*

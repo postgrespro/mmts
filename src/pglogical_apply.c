@@ -63,6 +63,7 @@
 #include "state.h"
 #include "logger.h"
 #include "ddl.h"
+#include "receiver.h"
 
 typedef struct TupleData
 {
@@ -91,6 +92,33 @@ static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
 
 static bool          GucAltered; /* transaction is setting some GUC variables */
+
+/*
+ * Handle critical errors while applying transaction at replica.
+ * Such errors should cause shutdown of this cluster node to allow other nodes to continue serving client requests.
+ * Other error will be just reported and ignored
+ */
+static void
+MtmHandleApplyError(void)
+{
+	ErrorData *edata = CopyErrorData();
+
+	switch (edata->sqlerrcode) {
+		case ERRCODE_DISK_FULL:
+		case ERRCODE_INSUFFICIENT_RESOURCES:
+		case ERRCODE_IO_ERROR:
+		case ERRCODE_DATA_CORRUPTED:
+		case ERRCODE_INDEX_CORRUPTED:
+		  /* Should we really treate this errors as fatal?
+		case ERRCODE_SYSTEM_ERROR:
+		case ERRCODE_INTERNAL_ERROR:
+		case ERRCODE_OUT_OF_MEMORY:
+		  */
+			MtmStateProcessEvent(MTM_NONRECOVERABLE_ERROR, false);
+	}
+	FreeErrorData(edata);
+}
+
 
 bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
 {
@@ -177,7 +205,7 @@ retry:
 					heap_rescan(scan, NULL);
 					goto retry;
 				  default:
-					MTM_ELOG(ERROR, "unexpected HTSU_Result after locking: %u", res);
+					mtm_log(ERROR, "unexpected HTSU_Result after locking: %u", res);
 					break;
 				}
 			}
@@ -266,7 +294,7 @@ retry:
 						 MTM_ERRMSG("concurrent update, retrying")));
 				goto retry;
 			default:
-				MTM_ELOG(ERROR, "unexpected HTSU_Result after locking: %u", res);
+				mtm_log(ERROR, "unexpected HTSU_Result after locking: %u", res);
 				break;
 		}
 	}
@@ -362,7 +390,7 @@ build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup
 									   BTEqualStrategyNumber);
 
 		if (!OidIsValid(operator))
-			MTM_ELOG(ERROR,
+			mtm_log(ERROR,
 				 "could not lookup equality operator for type %u, optype %u in opfamily %u",
 				 atttype, optype, opfamily);
 
@@ -457,12 +485,10 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	pq_getmsgint64(s); // XXX: participantsMask
 	Assert(gtid->node > 0);
 
-	// MTM_LOG2("REMOTE begin node=%d xid=%llu snapshot=%lld participantsMask=%llx", gtid.node, (long64)gtid.xid, snapshot, participantsMask);
-	MtmResetTransaction();		
+	MtmResetTransaction();
+	SetCurrentStatementStartTimestamp();
 
-    SetCurrentStatementStartTimestamp();     
 	StartTransactionCommand();
-    // MtmJoinTransaction(&gtid, snapshot, participantsMask);
 
 	/* ddd */
 	xid = GetCurrentTransactionId();
@@ -474,7 +500,7 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 		rc = SPI_execute("RESET SESSION AUTHORIZATION; reset all;", false, 0);
 		SPI_finish();
 		if (rc < 0) { 
-			MTM_ELOG(ERROR, "Failed to set reset context: %d", rc);
+			mtm_log(ERROR, "Failed to set reset context: %d", rc);
 		}
 	}
 
@@ -493,7 +519,7 @@ process_remote_message(StringInfo s)
 	{
 		case 'C':
 		{
-			MTM_LOG1("%d: Executing non-tx utility statement %s", MyProcPid, messageBody);
+			mtm_log(MtmApplyMessage, "Executing non-tx DDL message %s", messageBody);
 			SetCurrentStatementStartTimestamp();
 			MtmResetTransaction();
 			StartTransactionCommand();
@@ -504,57 +530,20 @@ process_remote_message(StringInfo s)
 		{
 			GucAltered = true;
 			MtmApplyDDLMessage(messageBody);
+			mtm_log(MtmApplyMessage, "Executing tx DDL message %s", messageBody);
 			if (standalone)
 				CommitTransactionCommand();
 			break;
 		}
-	    case 'A':
-		{
-			Assert(false);
-			// MtmAbortLogicalMessage* msg = (MtmAbortLogicalMessage*)messageBody;
-			// int origin_node = msg->origin_node;
-			// Assert(messageSize == sizeof(MtmAbortLogicalMessage));
-			// /* This function is called directly by receiver, so there is no race condition and we can update
-			//  * restartLSN without locks
-			//  */
-			// if (origin_node == MtmReplicationNodeId) { 
-			// 	Assert(msg->origin_lsn == INVALID_LSN);
-			// 	msg->origin_lsn = MtmSenderWalEnd;
-			// }
-			// if (Mtm->nodes[origin_node-1].restartLSN < msg->origin_lsn) { 
-			// 	MTM_LOG1("Receive logical abort message for transaction %s from node %d: %llx < %llx", msg->gid, origin_node, Mtm->nodes[origin_node-1].restartLSN, msg->origin_lsn);
-			// 	// Mtm->nodes[origin_node-1].restartLSN = msg->origin_lsn;
-			// 	// replorigin_session_origin_lsn = msg->origin_lsn;
-			// 	// MtmRollbackPreparedTransaction(origin_node, msg->gid);
-			// } else { 
-			// 	if (msg->origin_lsn != INVALID_LSN) { 
-			// 		MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN %llx <= %llx", 
-			// 				 msg->gid, origin_node, msg->origin_lsn, Mtm->nodes[origin_node-1].restartLSN);
-			// 	}
-			// 	else
-			// 	{
-			// 		MTM_LOG1("Ignore rollback of transaction %s from node %d because it's LSN is invalid", 
-			// 				 msg->gid, origin_node);
-			// 	}
-			// }
-			// standalone = true;
-			// break;
-		}
 		case 'L':
 		{
-			MTM_LOG3("%lld: Process deadlock message with size %d from %d", MtmGetSystemTime(), messageSize, MtmReplicationNodeId);
+			mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
 			MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
 			standalone = true;
 			break;
 		}
-	    case 'S':
-		{
-  		    Assert(false);
-		    // MtmSetSnapshot(*(csn_t*)messageBody);
-			break;
-		}
-	    default:
-		    Assert(false);
+		default:
+			Assert(false);
  	}
 	return standalone;
 }
@@ -570,7 +559,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 	action = pq_getmsgbyte(s);
 
 	if (action != 'T')
-		MTM_ELOG(ERROR, "expected TUPLE, got %c", action);
+		mtm_log(ERROR, "expected TUPLE, got %c", action);
 
 	memset(tup->isnull, 1, sizeof(tup->isnull));
 	memset(tup->changed, 1, sizeof(tup->changed));
@@ -578,7 +567,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 	rnatts = pq_getmsgint(s, 2);
 
 	if (desc->natts < rnatts)
-		MTM_ELOG(ERROR, "tuple natts mismatch, %u vs %u", desc->natts, rnatts);
+		mtm_log(ERROR, "tuple natts mismatch, %u vs %u", desc->natts, rnatts);
 
 	/* FIXME: unaligned data accesses */
 
@@ -661,11 +650,11 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 				}
 				break;
 			default:
-				MTM_ELOG(ERROR, "unknown column type '%c'", kind);
+				mtm_log(ERROR, "unknown column type '%c'", kind);
 		}
 
 		if (att->attisdropped && !tup->isnull[i])
-			MTM_ELOG(ERROR, "data for dropped column");
+			mtm_log(ERROR, "data for dropped column");
 	}
 }
 
@@ -759,13 +748,10 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 
 	switch (event)
 	{
-	    case PGLOGICAL_PRECOMMIT_PREPARED:
+		case PGLOGICAL_PRECOMMIT_PREPARED:
 		{
-			// Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
-			MTM_LOG2("%d: PGLOGICAL_PRECOMMIT_PREPARED %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			MtmBeginSession(origin_node);
-			// MtmPrecommitTransaction(gid);
 
 			if (!IsTransactionState()) {
 				MtmResetTransaction();
@@ -777,8 +763,6 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			}
 			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
-			// MtmPrecommitTransaction(gid);
-
 			if (Mtm->status != MTM_RECOVERY)
 			{
 				TransactionId origin_xid = MtmGidParseXid(gid);
@@ -786,17 +770,20 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			}
 
 			MtmEndSession(origin_node, true);
+
+			mtm_log(MtmApplyTrace, "PGLOGICAL_PRECOMMIT %s", gid);
 			return;
 		}
 		case PGLOGICAL_COMMIT:
 		{
-			MTM_LOG1("%d: PGLOGICAL_COMMIT %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
-			if (IsTransactionState()) {
-				// Assert(TransactionIdIsValid(MtmGetCurrentTransactionId()));
+			// XXX: investigate
+			if (IsTransactionState())
+			{
 				MtmBeginSession(origin_node);
 				CommitTransactionCommand();
 				MtmEndSession(origin_node, true);
 			}
+			mtm_log(LOG, "PGLOGICAL_COMMIT (%llx,%llx,%llx)", commit_lsn, end_lsn, origin_lsn);
 			break;
 		}
 		case PGLOGICAL_PREPARE:
@@ -831,82 +818,50 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 
 			MtmEndSession(origin_node, true);
 
+			mtm_log(MtmApplyTrace, "PGLOGICAL_PREPARE %s", gid);
+
 			current_gtid->node = 0;
 			current_gtid->xid = InvalidTransactionId;
-
-			// MTM_LOG2("%d: PGLOGICAL_PREPARE %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
-			// if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_IN_PROGRESS) == TRANSACTION_STATUS_ABORTED) { 
-			// 	MTM_LOG1("Avoid prepare of previously aborted global transaction %s", gid);	
-			// 	AbortCurrentTransaction();
-			// } else { 				
-			// 	/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
-			// 	BeginTransactionBlock();
-			// 	CommitTransactionCommand();
-			// 	StartTransactionCommand();
-				
-			// 	MtmBeginSession(origin_node);
-			// 	/* PREPARE itself */
-			// 	MtmSetCurrentTransactionGID(gid, origin_node);
-			// 	PrepareTransactionBlock(gid);
-			// 	CommitTransactionCommand();
-
-			// 	if (MtmExchangeGlobalTransactionStatus(gid, TRANSACTION_STATUS_UNKNOWN) == TRANSACTION_STATUS_ABORTED) { 
-			// 		MTM_LOG1("Perform delayed rollback of prepared global transaction %s", gid);	
-			// 		StartTransactionCommand();
-			// 		MtmSetCurrentTransactionGID(gid, origin_node);
-			// 		TXFINISH("%s ABORT, PGLOGICAL_PREPARE", gid);
-			// 		FinishPreparedTransaction(gid, false, false);
-			// 		CommitTransactionCommand();					
-			// 		Assert(!MtmTransIsActive());
-			// 	}	
-			// 	MtmEndSession(origin_node, true);
-			// }
 			break;
 		}
 		case PGLOGICAL_COMMIT_PREPARED:
 		{
 			Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			pq_getmsgint64(in); /* csn */
-			/*
-			 * Since our recovery method allows undershoot of lsn, we can receive
-			 * some already committed transactions. And in case of donor node reboot
-			 * xid<->csn mapping for them will be lost. However we must filter such
-			 * transactions in walreceiver before this code. --sk
-			 */
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
-			MTM_LOG2("%d: PGLOGICAL_COMMIT_PREPARED %s, (%llx,%llx,%llx)", MyProcPid, gid, commit_lsn, end_lsn, origin_lsn);
 			MtmResetTransaction();
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
 			MtmSetCurrentTransactionCSN();
 			MtmSetCurrentTransactionGID(gid, origin_node);
-			TXFINISH("%s COMMIT, PGLOGICAL_COMMIT_PREPARED csn=%lld", gid, csn);
 			FinishPreparedTransaction(gid, true, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-			MTM_LOG2("Distributed transaction %s is committed", gid);
 			CommitTransactionCommand();
-			// Assert(!MtmTransIsActive());
 			MtmEndSession(origin_node, true);
+			mtm_log(MtmApplyTrace, "PGLOGICAL_COMMIT_PREPARED %s", gid);
 			break;
 		}
 		case PGLOGICAL_ABORT_PREPARED:
 		{
-			// Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
-			/* MtmRollbackPreparedTransaction will set origin session itself */
-			MTM_LOG1("PGLOGICAL_ABORT_PREPARED for transaction %s from node %d", gid, origin_node);
+
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, true);
-			CommitTransactionCommand();
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+			CommitTransactionCommand();
+			mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
 			break;
 		}
 		default:
 			Assert(false);
 	}
-	if (Mtm->status == MTM_RECOVERY) { 
-		MTM_LOG1("Recover transaction %s event=%d", gid,  event);
+
+	if (Mtm->status == MTM_RECOVERY)
+	{
+		// XXX
+		elog(LOG, "Recover transaction %s event=%d", gid, event);
 	}
+
 	MtmUpdateLsnMapping(MtmReplicationNodeId, end_lsn);
 }
 
@@ -1009,7 +964,7 @@ process_remote_insert(StringInfo s, Relation rel)
 		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
 
 		// if (rel->rd_rel->relkind != RELKIND_RELATION) // RELKIND_MATVIEW
-		// 	MTM_ELOG(ERROR, "unexpected relkind '%c' rel \"%s\"",
+		// 	mtm_log(ERROR, "unexpected relkind '%c' rel \"%s\"",
 		// 		 rel->rd_rel->relkind, RelationGetRelationName(rel));
 
 		/* debug output */
@@ -1103,7 +1058,7 @@ process_remote_update(StringInfo s, Relation rel)
 
 	/* old key present, identifying key changed */
 	if (action != 'K' && action != 'N')
-		MTM_ELOG(ERROR, "expected action 'N' or 'K', got %c",
+		mtm_log(ERROR, "expected action 'N' or 'K', got %c",
 			 action);
 
 	estate = create_rel_estate(rel);
@@ -1123,11 +1078,11 @@ process_remote_update(StringInfo s, Relation rel)
 
 	/* check for new  tuple */
 	if (action != 'N')
-		MTM_ELOG(ERROR, "expected action 'N', got %c",
+		mtm_log(ERROR, "expected action 'N', got %c",
 			 action);
 
 	if (rel->rd_rel->relkind != RELKIND_RELATION)
-		MTM_ELOG(ERROR, "unexpected relkind '%c' rel \"%s\"",
+		mtm_log(ERROR, "unexpected relkind '%c' rel \"%s\"",
 			 rel->rd_rel->relkind, RelationGetRelationName(rel));
 
 	/* read new tuple */
@@ -1177,7 +1132,7 @@ process_remote_update(StringInfo s, Relation rel)
 			tuple_to_stringinfo(&o,tupDesc, oldslot->tts_tuple, false);
 			appendStringInfo(&o, " to");
 			tuple_to_stringinfo(&o,tupDesc, remote_tuple, false);
-			MTM_LOG1("%lu: UPDATE: %s", GetCurrentTransactionId(), o.data);
+			mtm_log(LOG, "%lu: UPDATE: %s", GetCurrentTransactionId(), o.data);
 			resetStringInfo(&o);
 		}
 #endif
@@ -1239,7 +1194,7 @@ process_remote_delete(StringInfo s, Relation rel)
 		idxrel = index_open(idxoid, RowExclusiveLock);
 
 		if (rel->rd_rel->relkind != RELKIND_RELATION)
-			MTM_ELOG(ERROR, "unexpected relkind '%c' rel \"%s\"",
+			mtm_log(ERROR, "unexpected relkind '%c' rel \"%s\"",
 					 rel->rd_rel->relkind, RelationGetRelationName(rel));
 
 #ifdef VERBOSE_DELETE
@@ -1309,13 +1264,6 @@ void MtmExecutor(void* work, size_t size)
         do { 
             char action = pq_getmsgbyte(&s);
 			old_context = MemoryContextSwitchTo(MtmApplyContext);
-	
-            MTM_LOG2("%d: REMOTE process action %c", MyProcPid, action);
-#if 0
-			if (Mtm->status == MTM_RECOVERY) { 
-				MTM_LOG1("Replay action %c[%x]",   action, s.data[s.cursor]);
-			}
-#endif
 
             switch (action) {
                 /* BEGIN */
@@ -1400,9 +1348,9 @@ void MtmExecutor(void* work, size_t size)
 				inside_transaction = false;
 				break;
 			}
-            default:
-                MTM_ELOG(ERROR, "unknown action of type %c", action);
-            }        
+			default:
+				mtm_log(ERROR, "unknown action of type %c", action);
+			}
 			MemoryContextSwitchTo(old_context);
 			MemoryContextResetAndDeleteChildren(MtmApplyContext);
         } while (inside_transaction);
@@ -1413,9 +1361,11 @@ void MtmExecutor(void* work, size_t size)
 		MtmHandleApplyError();
 		MemoryContextSwitchTo(old_context);
 		EmitErrorReport();
-        FlushErrorState();
-		MTM_LOG1("%d: REMOTE begin abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
+		FlushErrorState();
 		MtmEndSession(MtmReplicationNodeId, false);
+
+		mtm_log(MtmApplyError, "Receiver: abort transaction " XID_FMT,
+				current_gtid.xid);
 
 		/* handle only prepare errors here */
 		if (TransactionIdIsValid(current_gtid.xid))
@@ -1426,20 +1376,11 @@ void MtmExecutor(void* work, size_t size)
 		}
 
 		AbortCurrentTransaction();
+	}
+	PG_END_TRY();
 
-		// Assert(!MtmTransIsActive());
-		MTM_LOG2("%d: REMOTE end abort transaction %llu", MyProcPid, (long64)MtmGetCurrentTransactionId());
-    }
-    PG_END_TRY();
-	if (s.data != work) { 
+	if (s.data != work)
 		pfree(s.data);
-	}
-#if 0 /* spill file is expecrted to be closed by tranaction commit or rollback */
-	if (spill_file >= 0) { 
-		MtmCloseSpillFile(spill_file);
-	}
-#endif
 	MemoryContextSwitchTo(top_context);
-    MemoryContextResetAndDeleteChildren(MtmApplyContext);
+	MemoryContextResetAndDeleteChildren(MtmApplyContext);
 }
-    

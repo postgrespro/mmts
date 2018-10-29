@@ -11,6 +11,7 @@
  */
 
 #include "postgres.h"
+#include "resolver.h"
 #include "multimaster.h"
 #include "logger.h"
 
