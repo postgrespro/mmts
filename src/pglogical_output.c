@@ -206,8 +206,6 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 {
 	PGLogicalOutputData  *data = palloc0(sizeof(PGLogicalOutputData));
 
-	elog(LOG, "%d: pg_decode_startup is_init=%d", MyProcPid, is_init);
-
 	data->context = AllocSetContextCreate(TopMemoryContext,
 										  "pglogical conversion context",
 										  ALLOCSET_DEFAULT_SIZES);
@@ -694,9 +692,13 @@ static bool
 pg_filter_decode_txn(LogicalDecodingContext *ctx,
 					   ReorderBufferTXN *txn)
 {
+	/* MTM replicates only two-phase transactions */
+	if (txn->gid[0] == '\0')
+		return true;
+
 	/*
-	 * Due to caching, repeated TransactionIdDidAbort calls
-	 * shouldn't be that expensive
+	 * XXX: that is called per-change and quite expensive for in-progress
+	 * transactions.
 	 */
 	if (txn != NULL &&
 			TransactionIdIsValid(txn->xid) &&

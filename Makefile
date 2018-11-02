@@ -39,7 +39,7 @@ check: temp-install
 submake-regress:
 	$(MAKE) -C $(top_builddir)/src/test/regress all
 
-run: temp-install
+start: temp-install
 	rm -rf '$(CURDIR)'/tmp_check
 	$(MKDIR_P) '$(CURDIR)'/tmp_check
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
@@ -65,4 +65,4 @@ regress: submake-regress
 	--bindir='' \
 	--use-existing \
 	--schedule=serial_schedule \
-	--dbname=postgres
+	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress

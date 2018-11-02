@@ -464,9 +464,9 @@ MtmRefreshClusterStatus()
 	 * Periodical check that we are still in RECOVERED state.
 	 * See comment to MTM_RECOVERED -> MTM_ONLINE transition in MtmCheckState()
 	 */
-	MtmLock(LW_EXCLUSIVE);
-	MtmCheckState();
-	MtmUnlock();
+	// MtmLock(LW_EXCLUSIVE);
+	// MtmCheckState();
+	// MtmUnlock();
 
 	return;
 

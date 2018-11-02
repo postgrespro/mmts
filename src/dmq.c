@@ -32,6 +32,7 @@
 #include "dmq.h"
 #include "logger.h"
 
+#include "access/transam.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -1012,6 +1013,9 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	if (dmq_receiver_start_hook)
 		dmq_receiver_start_hook(sender_name);
+
+	/* do not hold globalxmin. XXX: try to carefully release snaps */
+	MyPgXact->xmin = InvalidTransactionId;
 
 	for (;;)
 	{

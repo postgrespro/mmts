@@ -32,18 +32,9 @@ typedef struct
 
 typedef struct {
 	TransactionId xid;	  /* local transaction ID	*/
-	// GlobalTransactionId gtid; /* global transaction ID assigned by coordinator of transaction */
 	bool  isTwoPhase;	  /* user level 2PC */
-	// bool  isReplicated;	  /* transaction on replica */
 	bool  isDistributed;  /* transaction performed INSERT/UPDATE/DELETE and has to be replicated to other nodes */
-	// bool  isPrepared;	  /* transaction is prepared at first stage of 2PC */
-	// bool  isSuspended;	  /* prepared transaction is suspended because coordinator node is switch to offline */
-	bool  isTransactionBlock; /* is transaction block */
 	bool  containsDML;	  /* transaction contains DML statements */
-	// bool  isActive;		  /* transaction is active (nActiveTransaction counter is incremented) */
-	// XidStatus status;	  /* transaction status */
-	// csn_t snapshot;		  /* transaction snapshot */
-	// csn_t csn;			  /* CSN */
 	pgid_t gid;			  /* global transaction identifier (used by 2pc) */
 } MtmCurrentTrans;
 

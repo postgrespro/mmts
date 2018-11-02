@@ -71,8 +71,9 @@ sub new
 
 		my $node = new PostgresNode("node$i", $host, $pgport);
 		$node->{id} = $i;
+		$node->{dbname} = 'postgres';
 		$node->{arbiter_port} = $arbiter_port;
-		$node->{mmconnstr} = "${ \$node->connstr('postgres') } arbiter_port=${ \$node->{arbiter_port} }";
+		$node->{mmconnstr} = "${ \$node->connstr($node->{dbname}) } arbiter_port=${ \$node->{arbiter_port} }";
 		push(@$nodes, $node);
 	}
 
@@ -101,14 +102,29 @@ sub all_connstrs
 {
 	my ($self) = @_;
 	my $nodes = $self->{nodes};
-	return join(', ', map { "${ \$_->connstr('postgres') } arbiter_port=${ \$_->{arbiter_port} }" } @$nodes);
+	return join(', ', map { "${ \$_->connstr($_->{dbname}) } arbiter_port=${ \$_->{arbiter_port} }" } @$nodes);
 }
 
 
 sub configure
 {
-	my ($self) = @_;
+	my ($self, $dbname) = @_;
 	my $nodes = $self->{nodes};
+
+	if (defined $dbname)
+	{
+		foreach my $node (@$nodes)
+		{
+			$node->{dbname} = $dbname;
+			$node->append_conf("postgresql.conf", qq(
+				listen_addresses = '127.0.0.1'
+				unix_socket_directories = ''
+			));
+			$node->start();
+			$node->safe_psql('postgres', "CREATE DATABASE $dbname");
+			$node->stop();
+		}
+	}
 
 	my $connstr = $self->all_connstrs();
 	$connstr =~ s/'//gms;
@@ -135,17 +151,15 @@ sub configure
 			max_replication_slots = 6
 			shared_preload_libraries = 'multimaster'
 			shared_buffers = 16MB
-			wal_writer_delay = 2ms
 
-			multimaster.arbiter_port = $arbiter_port
-			multimaster.workers = 1
 			multimaster.node_id = $id
 			multimaster.conn_strings = '$connstr'
 			multimaster.heartbeat_recv_timeout = 8050
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_nodes = 6
-			multimaster.ignore_tables_without_pk = false
-			multimaster.queue_size = 4194304
+			# XXX try without ignore_tables_without_pk
+			multimaster.ignore_tables_without_pk = true
+			multimaster.volkswagen_mode = 1
 			log_line_prefix = '%t [%p]: '
 		));
 
@@ -165,8 +179,8 @@ sub start
 	foreach my $node (@$nodes)
 	{
 		$node->start();
-		$node->safe_psql('postgres', "create extension multimaster;");
-		note( "Starting node with connstr 'dbname=postgres port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
+		$node->safe_psql($node->{dbname}, "create extension multimaster;");
+		note( "Starting node with connstr 'port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
 	}
 }
 
@@ -304,7 +318,7 @@ sub pgbench_async()
 		@args,
 		-h => $self->{nodes}->[$node]->host(),
 		-p => $self->{nodes}->[$node]->port(),
-		'postgres',
+		$node->{dbname},
 	);
 	note("running pgbench: " . join(" ", @pgbench_command));
 	my $handle = IPC::Run::start(\@pgbench_command, $in, $out);
@@ -329,7 +343,7 @@ sub is_data_identic()
 	foreach my $i (@nodenums)
 	{
 		my $current_hash = '';
-		$self->{nodes}->[$i]->psql('postgres', $sql, stdout => \$current_hash);
+		$self->{nodes}->[$i]->psql($self->{nodes}->[$i]->{dbname}, $sql, stdout => \$current_hash);
 		note("hash$i: $current_hash");
 		if ($current_hash eq '')
 		{
@@ -372,7 +386,7 @@ sub add_node()
 		$node_id = scalar(@{$self->{nodes}}) + 1;
 		$pgport = (allocate_ports('127.0.0.1', 1))[0];
 		$arbiter_port = (allocate_ports('127.0.0.1', 1))[0];
-		$connstrs = $self->all_connstrs() . ", dbname=postgres host=127.0.0.1 port=$pgport arbiter_port=$arbiter_port";
+		$connstrs = $self->all_connstrs() . ", dbname=${ \$self->{nodes}->[0]->{dbname} } host=127.0.0.1 port=$pgport arbiter_port=$arbiter_port";
 	}
 
 	$connstrs =~ s/'//gms;
@@ -389,7 +403,7 @@ sub add_node()
 	$node->{port} = $pgport;
 	$node->{host} = '127.0.0.1';
 	$node->{arbiter_port} = $arbiter_port;
-	$node->{mmconnstr} = "${ \$node->connstr('postgres') } arbiter_port=${ \$node->{arbiter_port} }";
+	$node->{mmconnstr} = "${ \$node->connstr($node->{dbname}) } arbiter_port=${ \$node->{arbiter_port} }";
 	$node->append_conf("postgresql.conf", qq(
 		multimaster.arbiter_port = $arbiter_port
 		multimaster.conn_strings = '$connstrs'
@@ -411,7 +425,7 @@ sub await_nodes()
 
 	foreach my $i (@nodenums)
 	{
-		if (!$self->{nodes}->[$i]->poll_query_until('postgres', "select 't'"))
+		if (!$self->{nodes}->[$i]->poll_query_until($self->{nodes}->[$i]->{dbname}, "select 't'"))
 		{
 			# sleep(3600);
 			die "Timed out while waiting for mm node to became online";

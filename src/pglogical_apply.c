@@ -716,7 +716,7 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, msg.dxid),
 					&msg, sizeof(MtmArbiterMessage));
 
-	// elog(LOG, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
+	mtm_log(MtmApplyTrace, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
 }
 
 static void
@@ -837,7 +837,15 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			FinishPreparedTransaction(gid, true, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();
+
+			if (Mtm->status != MTM_RECOVERY)
+			{
+				TransactionId origin_xid = MtmGidParseXid(gid);
+				mtm_send_reply(origin_xid, origin_node, MSG_COMMITTED);
+			}
+
 			MtmEndSession(origin_node, true);
+
 			mtm_log(MtmApplyTrace, "PGLOGICAL_COMMIT_PREPARED %s", gid);
 			break;
 		}
@@ -1258,6 +1266,11 @@ void MtmExecutor(void* work, size_t size)
     }
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
+
+	StartTransactionCommand();
+	SetPGVariable("session_authorization", NIL, false);
+	CommitTransactionCommand();
+
     PG_TRY();
     {    
 		bool inside_transaction = true;
@@ -1265,7 +1278,10 @@ void MtmExecutor(void* work, size_t size)
             char action = pq_getmsgbyte(&s);
 			old_context = MemoryContextSwitchTo(MtmApplyContext);
 
-            switch (action) {
+			mtm_log(MtmApplyTrace, "got action '%c'", action);
+
+			switch (action)
+			{
                 /* BEGIN */
             case 'B':
 			    inside_transaction = process_remote_begin(&s, &current_gtid);

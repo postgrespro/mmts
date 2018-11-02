@@ -34,6 +34,7 @@
 #include "replication/message.h"
 #include "access/relscan.h"
 #include "commands/vacuum.h"
+#include "utils/inval.h"
 #include "miscadmin.h"
 
 #include "mm.h"
@@ -41,6 +42,9 @@
 #include "logger.h"
 
 #include "multimaster.h"
+
+
+// XXX: isQueryUsingTempRelation() may be helpful
 
 
 // XXX: is it defined somewhere?
@@ -401,10 +405,19 @@ MtmFinishDDLCommand()
 	LogLogicalMessage("E", "", 1, true);
 }
 
+
+/*
+ * Check whether given type is temporary.
+ * As LookupTypeName() can emit notices raise client_min_messages to ERROR
+ * level to avoid duplicated notices.
+ */
 static bool
 MtmIsTempType(TypeName* typeName)
 {
 	bool isTemp = false;
+	int saved_client_min_messages = client_min_messages;
+
+	client_min_messages = ERROR;
 
 	if (typeName != NULL)
 	{
@@ -419,12 +432,14 @@ MtmIsTempType(TypeName* typeName)
 			{
 				HeapTuple classTuple = SearchSysCache1(RELOID, relid);
 				Form_pg_class classStruct = (Form_pg_class) GETSTRUCT(classTuple);
-				if (classStruct->relpersistence == 't')
+				if (classStruct->relpersistence == RELPERSISTENCE_TEMP)
 					isTemp = true;
 				ReleaseSysCache(classTuple);
 			}
 		}
 	}
+
+	client_min_messages = saved_client_min_messages;
 	return isTemp;
 }
 
@@ -475,10 +490,6 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				TransactionStmt *stmt = (TransactionStmt *) parsetree;
 				switch (stmt->kind)
 				{
-				case TRANS_STMT_BEGIN:
-				case TRANS_STMT_START:
-					MtmTx.isTransactionBlock = true;
-					break;
 				case TRANS_STMT_COMMIT:
 					if (MtmTwoPhaseCommit(&MtmTx)) { // XXX: isn't this already handled by commit event?
 						return;
@@ -516,7 +527,6 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		case T_LockStmt: // XXX: check whether we should replicate that
 		case T_CheckPointStmt:
 		case T_ReindexStmt:
-		case T_ExplainStmt:
 		case T_AlterSystemStmt:
 			skipCommand = true;
 			break;
@@ -610,25 +620,30 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 			}
 			break;
 
-		// case T_ExplainStmt:
-		//	/*
-		//	 * EXPLAIN ANALYZE can create side-effects.
-		//	 * Better to catch that by some general mechanism of detecting
-		//	 * catalog and heap writes.
-		//	 */
-		//	{
-		//		ExplainStmt *stmt = (ExplainStmt *) parsetree;
-		//		ListCell   *lc;
+		/*
+		 * Explain will not call ProcessUtility for passed CreateTableAsStmt,
+		 * but will run it manually, so we will not catch it in a standart way.
+		 * So catch it in a non-standart way.
+		 */
+		case T_ExplainStmt:
+			{
+				ExplainStmt	   *stmt = (ExplainStmt *) parsetree;
+				Query		   *query = (Query *) stmt->query;
+				ListCell	   *lc;
 
-		//		skipCommand = true;
-		//		foreach(lc, stmt->options)
-		//		{
-		//			DefElem	   *opt = (DefElem *) lfirst(lc);
-		//			if (strcmp(opt->defname, "analyze") == 0)
-		//				skipCommand = false;
-		//		}
-		//	}
-		//	break;
+				skipCommand = true;
+				if (query->commandType == CMD_UTILITY &&
+					IsA(query->utilityStmt, CreateTableAsStmt))
+				{
+					foreach(lc, stmt->options)
+					{
+						DefElem	   *opt = (DefElem *) lfirst(lc);
+						if (strcmp(opt->defname, "analyze") == 0)
+							skipCommand = false;
+					}
+				}
+			}
+			break;
 
 		/* Save GUC context for consequent DDL execution */
 		case T_DiscardStmt:
@@ -642,6 +657,7 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				}
 			}
 			break;
+
 		case T_VariableSetStmt:
 			{
 				VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
@@ -1155,6 +1171,8 @@ MtmInitializeRemoteFunctionsMap()
 	char* p, *q;
 	int n_funcs = 1;
 	FuncCandidateList clist;
+	Oid			save_userid;
+	int			save_sec_context;
 
 	for (p = MtmRemoteFunctionsList; (q = strchr(p, ',')) != NULL; p = q + 1, n_funcs++);
 
@@ -1165,6 +1183,14 @@ MtmInitializeRemoteFunctionsMap()
 	info.hcxt = TopMemoryContext;
 	MtmRemoteFunctions = hash_create("MtmRemoteFunctions", n_funcs, &info,
 									 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	/*
+	 * Escalate our privileges, as current user may not have rights to access
+	 * mtm schema.
+	 */
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	SetUserIdAndSecContext(get_role_oid(MtmDatabaseUser, false),
+						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
 	p = pstrdup(MtmRemoteFunctionsList);
 	do {
@@ -1187,6 +1213,9 @@ MtmInitializeRemoteFunctionsMap()
 	if (clist != NULL) {
 		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 	}
+
+	/* restore back current user context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
 }
 
 /*****************************************************************************

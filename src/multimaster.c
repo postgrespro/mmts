@@ -331,12 +331,8 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 	x->xid = GetCurrentTransactionIdIfAny();
 
 	x->isDistributed = MtmIsUserTransaction();
-
-
 	x->isTwoPhase = false;
-	x->isTransactionBlock = IsTransactionBlock();
 	x->containsDML = false;
-
 	x->gid[0] = '\0';
 
 	MtmInsideTransaction = true;
