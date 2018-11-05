@@ -76,10 +76,9 @@ char   *MtmRemoteFunctionsList;
 bool	MtmIgnoreTablesWithoutPk;
 
 static void const* MtmDDLStatement;
-static VacuumStmt* MtmVacuumStmt;
-static IndexStmt*	MtmIndexStmt;
-static DropStmt*	MtmDropStmt;
-static void*		MtmTablespaceStmt; /* CREATE/DELETE tablespace */
+
+static Node *MtmCapturedDDL;
+static bool DDLApplyInProgress;
 
 static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
@@ -96,11 +95,24 @@ static seq_nextval_hook_t PreviousSeqNextvalHook;
 static void MtmSeqNextvalHook(Oid seqid, int64 next);
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
+
 static void MtmProcessUtility(PlannedStmt *pstmt,
-							const char *queryString, ProcessUtilityContext context,
-							ParamListInfo params,
-							QueryEnvironment *queryEnv,
-							DestReceiver *dest, char *completionTag);
+				const char *queryString,
+				ProcessUtilityContext context, ParamListInfo params,
+				QueryEnvironment *queryEnv, DestReceiver *dest,
+				char *completionTag);
+
+static void MtmProcessUtilityReciever(PlannedStmt *pstmt,
+				const char *queryString,
+				ProcessUtilityContext context, ParamListInfo params,
+				QueryEnvironment *queryEnv, DestReceiver *dest,
+				char *completionTag);
+
+static void MtmProcessUtilitySender(PlannedStmt *pstmt,
+				const char *queryString,
+				ProcessUtilityContext context, ParamListInfo params,
+				QueryEnvironment *queryEnv, DestReceiver *dest,
+				char *completionTag);
 
 static void MtmGucUpdate(const char *key, char *value);
 static void MtmInitializeRemoteFunctionsMap(void);
@@ -187,7 +199,7 @@ MtmGucInit(void)
 						HASH_ELEM | HASH_CONTEXT);
 
 	/*
-	 * If current role is not equal to MtmDatabaseUser, than set it bofore
+	 * If current role is not equal to MtmDatabaseUser, than set it before
 	 * any other GUC vars.
 	 *
 	 * XXX: try to avoid using MtmDatabaseUser somehow
@@ -384,7 +396,7 @@ MtmProcessDDLCommand(char const* queryString, bool transactional)
 	if (transactional)
 	{
 		char *gucCtx = MtmGucSerialize();
-		queryString = psprintf("RESET SESSION AUTHORIZATION; reset all; %s %s", gucCtx, queryString);
+		queryString = psprintf("%s %s", gucCtx, queryString);
 
 		/* Transactional DDL */
 		mtm_log(DMLStmtOutgoing, "Sending DDL: %s", queryString);
@@ -469,6 +481,135 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  char *completionTag)
 {
+	if (MtmIsLogicalReceiver)
+	{
+		MtmProcessUtilityReciever(pstmt, queryString, context, params,
+								  queryEnv, dest, completionTag);
+	}
+	else
+	{
+		MtmProcessUtilitySender(pstmt, queryString, context, params,
+								  queryEnv, dest, completionTag);
+	}
+
+}
+
+
+/*
+ * Process utility statements on receiver side.
+ *
+ * Some DDL isn't allowed to run inside transaction, so we are copying parse
+ * tree into MtmCapturedDDL and preventing it's execution by not calling
+ * standard_ProcessUtility() at the end of hook.
+ *
+ * Later MtmApplyDDLMessage() checks MtmCapturedDDL and executes it if something
+ * was caught.
+ *
+ * DDLApplyInProgress ensures that this hook will only called for DDL
+ * originated from MtmApplyDDLMessage(). In other cases of DDL happening in
+ * receiver (e.g calling DDL from trigger) this hook does nothing.
+ */
+static void
+MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
+				  ProcessUtilityContext context, ParamListInfo params,
+				  QueryEnvironment *queryEnv, DestReceiver *dest,
+				  char *completionTag)
+{
+	Node *parsetree = pstmt->utilityStmt;
+
+	/* catch only DDL produced by SPI in MtmApplyDDLMessage() */
+	if (DDLApplyInProgress)
+	{
+		MemoryContext oldMemContext = MemoryContextSwitchTo(MtmApplyContext);
+		bool		captured = false;
+
+		mtm_log(DMLProcessingTrace,
+				"MtmProcessUtilityReciever: tag=%s, context=%d, issubtrans=%d,  statement=%s",
+				CreateCommandTag(parsetree), context, IsSubTransaction(), queryString);
+
+		Assert(oldMemContext != MtmApplyContext);
+		Assert(MtmApplyContext != NULL);
+
+		/* copy parsetrees of interest to MtmCapturedDDL */
+		switch (nodeTag(parsetree))
+		{
+			case T_CreateTableSpaceStmt:
+			case T_DropTableSpaceStmt:
+			case T_VacuumStmt:
+				Assert(MtmCapturedDDL == NULL);
+				MtmCapturedDDL = copyObject(parsetree);
+				captured = true;
+				break;
+
+			case T_IndexStmt:
+			{
+				IndexStmt *stmt = (IndexStmt *) parsetree;
+				if (stmt->concurrent)
+				{
+					Assert(MtmCapturedDDL == NULL);
+					MtmCapturedDDL = (Node *) copyObject(stmt);
+					captured = true;
+				}
+				break;
+			}
+
+			case T_DropStmt:
+			{
+				DropStmt *stmt = (DropStmt *) parsetree;
+				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
+				{
+					Assert(MtmCapturedDDL == NULL);
+					MtmCapturedDDL = (Node *) copyObject(stmt);
+					captured = true;
+				}
+				/* Make it possible to drop functions which were not replicated */
+				else if (stmt->removeType == OBJECT_FUNCTION)
+				{
+					stmt->missing_ok = true;
+				}
+				break;
+			}
+
+			/* disable functiob body check at replica */
+			case T_CreateFunctionStmt:
+				check_function_bodies = false;
+				break;
+
+			default:
+				break;
+		}
+
+		MemoryContextSwitchTo(oldMemContext);
+
+		/* prevent captured statement from execution */
+		if (captured)
+		{
+			mtm_log(DMLProcessingTrace, "MtmCapturedDDL = %s", CreateCommandTag((Node *) MtmCapturedDDL));
+			return;
+		}
+	}
+
+	if (PreviousProcessUtilityHook != NULL)
+	{
+		PreviousProcessUtilityHook(pstmt, queryString,
+								   context, params, queryEnv,
+								   dest, completionTag);
+	}
+	else
+	{
+		standard_ProcessUtility(pstmt, queryString,
+								context, params, queryEnv,
+								dest, completionTag);
+	}
+}
+
+
+static void
+MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
+				  ProcessUtilityContext context, ParamListInfo params,
+				  QueryEnvironment *queryEnv, DestReceiver *dest,
+				  char *completionTag)
+{
 	bool skipCommand = false;
 	bool executed = false;
 	bool prevMyXactAccessedTempRel;
@@ -481,19 +622,19 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	stmt_string[stmt_len] = 0;
 
 	mtm_log(DMLProcessingTrace,
-			"%d: Process utility statement tag=%d, context=%d, issubtrans=%d,  statement=%s",
-			MyProcPid, nodeTag(parsetree), context, IsSubTransaction(), stmt_string);
+			"MtmProcessUtilitySender tag=%d, context=%d, issubtrans=%d,  statement=%s",
+			nodeTag(parsetree), context, IsSubTransaction(), stmt_string);
+
 	switch (nodeTag(parsetree))
 	{
 		case T_TransactionStmt:
+		{
+			TransactionStmt *stmt = (TransactionStmt *) parsetree;
+			switch (stmt->kind)
 			{
-				TransactionStmt *stmt = (TransactionStmt *) parsetree;
-				switch (stmt->kind)
-				{
 				case TRANS_STMT_COMMIT:
-					if (MtmTwoPhaseCommit(&MtmTx)) { // XXX: isn't this already handled by commit event?
+					if (MtmTwoPhaseCommit(&MtmTx))
 						return;
-					}
 					break;
 				case TRANS_STMT_PREPARE:
 					MtmTx.isTwoPhase = true;
@@ -501,13 +642,12 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					break;
 				case TRANS_STMT_COMMIT_PREPARED:
 				case TRANS_STMT_ROLLBACK_PREPARED:
-					Assert(!MtmTx.isTwoPhase);
 					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
 					break;
 				default:
 					break;
-				}
 			}
+		}
 			/* no break */
 		case T_PlannedStmt:
 		case T_ClosePortalStmt:
@@ -537,88 +677,70 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 			break;
 
 		case T_CreateSeqStmt:
-			{
-				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
-				if (!MtmVolksWagenMode)
-					AdjustCreateSequence(stmt->options);
-			}
+		{
+			CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
+			if (!MtmVolksWagenMode)
+				AdjustCreateSequence(stmt->options);
 			break;
+		}
 
 		case T_CreateTableSpaceStmt:
 		case T_DropTableSpaceStmt:
-			{
-				if (MtmApplyContext != NULL)
-				{
-					MemoryContext oldContext = MemoryContextSwitchTo(MtmApplyContext);
-					Assert(oldContext != MtmApplyContext);
-					MtmTablespaceStmt = copyObject(parsetree);
-					MemoryContextSwitchTo(oldContext);
-					return;
-				}
-				else
-				{
-					skipCommand = true;
-					MtmProcessDDLCommand(stmt_string, false);
-				}
-			}
+		{
+			skipCommand = true;
+			MtmProcessDDLCommand(stmt_string, false);
 			break;
+		}
 
 		case T_VacuumStmt:
 		{
-			// VacuumStmt* vacuum = (VacuumStmt*)parsetree;
 			skipCommand = true;
-			if (!MtmVolksWagenMode)
+			if (context == PROCESS_UTILITY_TOPLEVEL)
 			{
-				if (context == PROCESS_UTILITY_TOPLEVEL) {
-					MtmProcessDDLCommand(stmt_string, false);
-					MtmTx.isDistributed = false;
-				} else if (MtmApplyContext != NULL) {
-					MemoryContext oldContext = MemoryContextSwitchTo(MtmApplyContext);
-					Assert(oldContext != MtmApplyContext);
-					MtmVacuumStmt = (VacuumStmt*)copyObject(parsetree);
-					MemoryContextSwitchTo(oldContext);
-					return;
-				}
+				MtmProcessDDLCommand(stmt_string, false);
+				MtmTx.isDistributed = false;
 			}
 			break;
 		}
+
+		/* Detect temp tables access */
 		case T_CreateDomainStmt:
-			/* Detect temp tables access */
-			{
-				CreateDomainStmt *stmt = (CreateDomainStmt *) parsetree;
-				HeapTuple	typeTup;
-				Form_pg_type baseType;
-				Form_pg_type elementType;
-				Form_pg_class pgClassStruct;
-				int32		basetypeMod;
-				Oid			elementTypeOid;
-				Oid			tableOid;
-				HeapTuple pgClassTuple;
-				HeapTuple elementTypeTuple;
+		{
+			CreateDomainStmt *stmt = (CreateDomainStmt *) parsetree;
+			HeapTuple	typeTup;
+			Form_pg_type baseType;
+			Form_pg_type elementType;
+			Form_pg_class pgClassStruct;
+			int32		basetypeMod;
+			Oid			elementTypeOid;
+			Oid			tableOid;
+			HeapTuple pgClassTuple;
+			HeapTuple elementTypeTuple;
 
-				typeTup = typenameType(NULL, stmt->typeName, &basetypeMod);
-				baseType = (Form_pg_type) GETSTRUCT(typeTup);
-				elementTypeOid = baseType->typelem;
-				ReleaseSysCache(typeTup);
+			typeTup = typenameType(NULL, stmt->typeName, &basetypeMod);
+			baseType = (Form_pg_type) GETSTRUCT(typeTup);
+			elementTypeOid = baseType->typelem;
+			ReleaseSysCache(typeTup);
 
-				if (elementTypeOid == InvalidOid)
-					break;
+			if (elementTypeOid == InvalidOid)
+				break;
 
-				elementTypeTuple = SearchSysCache1(TYPEOID, elementTypeOid);
-				elementType = (Form_pg_type) GETSTRUCT(elementTypeTuple);
-				tableOid = elementType->typrelid;
-				ReleaseSysCache(elementTypeTuple);
+			elementTypeTuple = SearchSysCache1(TYPEOID, elementTypeOid);
+			elementType = (Form_pg_type) GETSTRUCT(elementTypeTuple);
+			tableOid = elementType->typrelid;
+			ReleaseSysCache(elementTypeTuple);
 
-				if (tableOid == InvalidOid)
-					break;
+			if (tableOid == InvalidOid)
+				break;
 
-				pgClassTuple = SearchSysCache1(RELOID, tableOid);
-				pgClassStruct = (Form_pg_class) GETSTRUCT(pgClassTuple);
-				if (pgClassStruct->relpersistence == 't')
-					MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
-				ReleaseSysCache(pgClassTuple);
-			}
+			pgClassTuple = SearchSysCache1(RELOID, tableOid);
+			pgClassStruct = (Form_pg_class) GETSTRUCT(pgClassTuple);
+			if (pgClassStruct->relpersistence == 't')
+				MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
+			ReleaseSysCache(pgClassTuple);
+
 			break;
+		}
 
 		/*
 		 * Explain will not call ProcessUtility for passed CreateTableAsStmt,
@@ -626,118 +748,95 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		 * So catch it in a non-standart way.
 		 */
 		case T_ExplainStmt:
-			{
-				ExplainStmt	   *stmt = (ExplainStmt *) parsetree;
-				Query		   *query = (Query *) stmt->query;
-				ListCell	   *lc;
+		{
+			ExplainStmt	   *stmt = (ExplainStmt *) parsetree;
+			Query		   *query = (Query *) stmt->query;
+			ListCell	   *lc;
 
-				skipCommand = true;
-				if (query->commandType == CMD_UTILITY &&
-					IsA(query->utilityStmt, CreateTableAsStmt))
+			skipCommand = true;
+			if (query->commandType == CMD_UTILITY &&
+				IsA(query->utilityStmt, CreateTableAsStmt))
+			{
+				foreach(lc, stmt->options)
 				{
-					foreach(lc, stmt->options)
-					{
-						DefElem	   *opt = (DefElem *) lfirst(lc);
-						if (strcmp(opt->defname, "analyze") == 0)
-							skipCommand = false;
-					}
+					DefElem	   *opt = (DefElem *) lfirst(lc);
+					if (strcmp(opt->defname, "analyze") == 0)
+						skipCommand = false;
 				}
 			}
 			break;
+		}
 
 		/* Save GUC context for consequent DDL execution */
 		case T_DiscardStmt:
-			{
-				DiscardStmt *stmt = (DiscardStmt *) parsetree;
+		{
+			DiscardStmt *stmt = (DiscardStmt *) parsetree;
 
-				if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
-				{
-					skipCommand = true;
-					MtmGucDiscard();
-				}
+			if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
+			{
+				skipCommand = true;
+				MtmGucDiscard();
 			}
 			break;
+		}
 
 		case T_VariableSetStmt:
+		{
+			VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
+
+			/* Prevent SET TRANSACTION from replication */
+			if (stmt->kind == VAR_SET_MULTI)
+				skipCommand = true;
+
+			if (!IsTransactionBlock())
 			{
-				VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
-
-				/* Prevent SET TRANSACTION from replication */
-				if (stmt->kind == VAR_SET_MULTI)
-					skipCommand = true;
-
-				if (!IsTransactionBlock())
-				{
-					skipCommand = true;
-					MtmGucSet(stmt, stmt_string);
-				}
+				skipCommand = true;
+				MtmGucSet(stmt, stmt_string);
 			}
-			break;
 
+			break;
+		}
+
+		/*
+		* Index is created at replicas completely asynchronously, so to prevent unintended interleaving with subsequent
+		* commands in this session, just wait here for a while.
+		* It will help to pass regression tests but will not be enough for construction of real large indexes
+		* where difference between completion of this operation at different nodes is unlimited
+		*/
 		case T_IndexStmt:
+		{
+			IndexStmt *indexStmt = (IndexStmt *) parsetree;
+			if (indexStmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 			{
-				IndexStmt *indexStmt = (IndexStmt *) parsetree;
-				if (indexStmt->concurrent)
-				{
-					 if (context == PROCESS_UTILITY_TOPLEVEL) {
-						 MtmProcessDDLCommand(stmt_string, false);
-						 MtmTx.isDistributed = false;
-						 skipCommand = true;
-						 /*
-						  * Index is created at replicas completely asynchronously, so to prevent unintended interleaving with subsequent
-						  * commands in this session, just wait here for a while.
-						  * It will help to pass regression tests but will not be enough for construction of real large indexes
-						  * where difference between completion of this operation at different nodes is unlimited
-						  */
-						 pg_usleep(USECS_PER_SEC); /* XXX */
-					 } else if (MtmApplyContext != NULL) {
-						 MemoryContext oldContext = MemoryContextSwitchTo(MtmApplyContext);
-						 Assert(oldContext != MtmApplyContext);
-						 MtmIndexStmt = (IndexStmt*)copyObject(indexStmt);
-						 MemoryContextSwitchTo(oldContext);
-						 return;
-					 }
-				}
+				MtmProcessDDLCommand(stmt_string, false);
+				MtmTx.isDistributed = false;
+				skipCommand = true;
+				pg_usleep(USECS_PER_SEC); /* XXX */
 			}
 			break;
-
-		case T_TruncateStmt:
-			skipCommand = false;
-			// MtmLockCluster();
-			break;
+		}
 
 		case T_DropStmt:
+		{
+			DropStmt *stmt = (DropStmt *) parsetree;
+			if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
 			{
-				DropStmt *stmt = (DropStmt *) parsetree;
-				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
-				{
-					if (context == PROCESS_UTILITY_TOPLEVEL) {
-						MtmProcessDDLCommand(stmt_string, false);
-						MtmTx.isDistributed = false;
-						skipCommand = true;
-					} else if (MtmApplyContext != NULL) {
-						 MemoryContext oldContext = MemoryContextSwitchTo(MtmApplyContext);
-						 Assert(oldContext != MtmApplyContext);
-						 MtmDropStmt = (DropStmt*)copyObject(stmt);
-						 MemoryContextSwitchTo(oldContext);
-						 return;
-					}
-				}
-				else if (stmt->removeType == OBJECT_FUNCTION && MtmIsLogicalReceiver)
-				{
-					/* Make it possible to drop functions which were not replicated */
-					stmt->missing_ok = true;
+				if (context == PROCESS_UTILITY_TOPLEVEL) {
+					MtmProcessDDLCommand(stmt_string, false);
+					MtmTx.isDistributed = false;
+					skipCommand = true;
 				}
 			}
 			break;
+		}
 
 		/* Copy need some special care */
 		case T_CopyStmt:
 		{
 			CopyStmt *copyStatement = (CopyStmt *) parsetree;
 			skipCommand = true;
-			if (copyStatement->is_from) {
-				ListCell *opt;
+			if (copyStatement->is_from)
+			{
 				RangeVar *relation = copyStatement->relation;
 
 				if (relation != NULL)
@@ -751,24 +850,6 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 						}
 						heap_close(rel, ShareLock);
 					}
-				}
-
-				foreach(opt, copyStatement->options)
-				{
-					DefElem	*elem = lfirst(opt);
-					if (strcmp("local", elem->defname) == 0) {
-						MtmTx.isDistributed = false; /* Skip */
-						MtmTx.containsDML = false;
-						break;
-					}
-				}
-			}
-		    case T_CreateFunctionStmt:
-		    {
-				if (MtmIsLogicalReceiver)
-				{
-					// disable functiob body cehck at replica
-					check_function_bodies = false;
 				}
 			}
 			break;
@@ -966,72 +1047,99 @@ MtmApplyDDLMessage(const char *messageBody)
 	mtm_log(DMLStmtIncoming, "%d: Executing utility statement %s",
 			MyProcPid, messageBody);
 
-	SPI_connect();
+	debug_query_string = messageBody;
 	ActivePortal->sourceText = messageBody;
 
-	MtmVacuumStmt = NULL;
-	MtmIndexStmt = NULL;
-	MtmDropStmt = NULL;
-	MtmTablespaceStmt = NULL;
-	debug_query_string = messageBody;
+	/*
+	 * Set proper context for running receiver DDL.
+	 *
+	 * MtmProcessUtilityReciever() will work only when DDLApplyInProgress is
+	 * set ti true. Captured non-transactional DDL will be placed into
+	 * MtmCapturedDDL. In case of error both of this variables are reset by
+	 * MtmDDLResetApplyState().
+	 */
+	Assert(DDLApplyInProgress == false);
+	Assert(MtmCapturedDDL == NULL);
 
+	DDLApplyInProgress = true;
+	SPI_connect();
 	rc = SPI_execute(messageBody, false, 0);
-	debug_query_string = NULL;
-
 	SPI_finish();
+	DDLApplyInProgress = false;
+
 	if (rc < 0)
 		elog(ERROR, "Failed to execute utility statement %s", messageBody);
 
-	MemoryContextSwitchTo(MtmApplyContext);
-	PushActiveSnapshot(GetTransactionSnapshot());
+	if (MtmCapturedDDL)
+	{
+		MemoryContextSwitchTo(MtmApplyContext);
+		PushActiveSnapshot(GetTransactionSnapshot());
 
-	if (MtmVacuumStmt != NULL)
-	{
-		ExecVacuum(MtmVacuumStmt, 1);
-	}
-	else if (MtmIndexStmt != NULL)
-	{
-		Oid relid =	RangeVarGetRelidExtended(MtmIndexStmt->relation,
-											ShareUpdateExclusiveLock,
-												0,
-												NULL,
-												NULL);
-		/* Run parse analysis ... */
-		MtmIndexStmt = transformIndexStmt(relid, MtmIndexStmt, messageBody);
-
-		DefineIndex(relid,		/* OID of heap relation */
-					MtmIndexStmt,
-					InvalidOid, /* no predefined OID */
-					InvalidOid, /* no parent index */
-					InvalidOid, /* no parent constraint */
-					false,		/* is_alter_table */
-					true,		/* check_rights */
-					true,		/* check_not_in_use */
-					false,		/* skip_build */
-					false);		/* quiet */
-	}
-	else if (MtmDropStmt != NULL)
-	{
-		RemoveObjects(MtmDropStmt);
-	}
-	else if (MtmTablespaceStmt != NULL)
-	{
-		switch (nodeTag(MtmTablespaceStmt))
+		switch (nodeTag(MtmCapturedDDL))
 		{
+			case T_VacuumStmt:
+			{
+				ExecVacuum((VacuumStmt *) MtmCapturedDDL, 1);
+				break;
+			}
+			case T_IndexStmt:
+			{
+				IndexStmt *indexStmt = (IndexStmt *) MtmCapturedDDL;
+				Oid relid =	RangeVarGetRelidExtended(indexStmt->relation,
+													ShareUpdateExclusiveLock,
+														0,
+														NULL,
+														NULL);
+				/* Run parse analysis ... */
+				indexStmt = transformIndexStmt(relid, indexStmt, messageBody);
+
+				DefineIndex(relid,		/* OID of heap relation */
+							indexStmt,
+							InvalidOid, /* no predefined OID */
+							InvalidOid, /* no parent index */
+							InvalidOid, /* no parent constraint */
+							false,		/* is_alter_table */
+							true,		/* check_rights */
+							true,		/* check_not_in_use */
+							false,		/* skip_build */
+							false);		/* quiet */
+
+				break;
+			}
+			case T_DropStmt:
+				RemoveObjects((DropStmt *) MtmCapturedDDL);
+				break;
+
 			case T_CreateTableSpaceStmt:
-				CreateTableSpace((CreateTableSpaceStmt *) MtmTablespaceStmt);
+				CreateTableSpace((CreateTableSpaceStmt *) MtmCapturedDDL);
 				break;
+
 			case T_DropTableSpaceStmt:
-				DropTableSpace((DropTableSpaceStmt *) MtmTablespaceStmt);
+				DropTableSpace((DropTableSpaceStmt *) MtmCapturedDDL);
 				break;
+
 			default:
 				Assert(false);
+
 		}
+
+		pfree(MtmCapturedDDL);
+		MtmCapturedDDL = NULL;
 	}
 
 	if (ActiveSnapshotSet())
 		PopActiveSnapshot();
+
+	debug_query_string = NULL;
 }
+
+void
+MtmDDLResetApplyState()
+{
+	MtmCapturedDDL = NULL;
+	DDLApplyInProgress = false;
+}
+
 
 /*****************************************************************************
  *

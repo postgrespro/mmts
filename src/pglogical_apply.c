@@ -91,8 +91,6 @@ static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
 
-static bool          GucAltered; /* transaction is setting some GUC variables */
-
 /*
  * Handle critical errors while applying transaction at replica.
  * Such errors should cause shutdown of this cluster node to allow other nodes to continue serving client requests.
@@ -472,7 +470,6 @@ create_rel_estate(Relation rel)
 static bool
 process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 {
-	int rc;
 	TransactionId xid;
 
 	gtid->node = pq_getmsgint(s, 4);
@@ -494,16 +491,6 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	xid = GetCurrentTransactionId();
 	MtmDeadlockDetectorAddXact(xid, gtid);
 
-	if (GucAltered) {
-		SPI_connect();
-		GucAltered = false;
-		rc = SPI_execute("RESET SESSION AUTHORIZATION; reset all;", false, 0);
-		SPI_finish();
-		if (rc < 0) { 
-			mtm_log(ERROR, "Failed to set reset context: %d", rc);
-		}
-	}
-
 	return true;
 }
 
@@ -523,16 +510,15 @@ process_remote_message(StringInfo s)
 			SetCurrentStatementStartTimestamp();
 			MtmResetTransaction();
 			StartTransactionCommand();
+			MtmApplyDDLMessage(messageBody);
+			CommitTransactionCommand(); // XXX
 			standalone = true;
-			/* intentional falldown to the next case */
+			break;
 		}
 		case 'D':
 		{
-			GucAltered = true;
-			MtmApplyDDLMessage(messageBody);
 			mtm_log(MtmApplyMessage, "Executing tx DDL message %s", messageBody);
-			if (standalone)
-				CommitTransactionCommand();
+			MtmApplyDDLMessage(messageBody);
 			break;
 		}
 		case 'L':
@@ -1269,6 +1255,7 @@ void MtmExecutor(void* work, size_t size)
 
 	StartTransactionCommand();
 	SetPGVariable("session_authorization", NIL, false);
+	ResetAllOptions();
 	CommitTransactionCommand();
 
     PG_TRY();
@@ -1373,12 +1360,16 @@ void MtmExecutor(void* work, size_t size)
     }
     PG_CATCH();
     {
+		// XXX: change all this to re-throw
+
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		MtmHandleApplyError();
 		MemoryContextSwitchTo(old_context);
 		EmitErrorReport();
 		FlushErrorState();
 		MtmEndSession(MtmReplicationNodeId, false);
+
+		MtmDDLResetApplyState();
 
 		mtm_log(MtmApplyError, "Receiver: abort transaction " XID_FMT,
 				current_gtid.xid);
@@ -1394,6 +1385,10 @@ void MtmExecutor(void* work, size_t size)
 		AbortCurrentTransaction();
 	}
 	PG_END_TRY();
+
+	// Assert(s.cursor == s.len);
+	// only non-error scenario
+	// Assert(s.data == work);
 
 	if (s.data != work)
 		pfree(s.data);

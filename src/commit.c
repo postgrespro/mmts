@@ -150,9 +150,13 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	x->xid = xid;
 
+	MtmLock(LW_SHARED);
 	participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) &
 								  ~Mtm->disabledNodeMask &
 								  ~((nodemask_t)1 << (MtmNodeId-1));
+	if (Mtm->status != MTM_ONLINE)
+		mtm_log(ERROR, "This node became offline during current transaction");
+	MtmUnlock();
 
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)

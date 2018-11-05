@@ -24,6 +24,7 @@ extern void MtmDDLReplicationShmemStartup(void);
 extern bool MtmIsRelationLocal(Relation rel);
 extern void MtmDDLResetStatement(void);
 extern void MtmApplyDDLMessage(const char *messageBody);
+extern void MtmDDLResetApplyState(void);
 extern void MtmSetRemoteFunction(char const* list, void* extra);
 extern void MtmToggleDML(void);
 extern void MtmMakeTableLocal(char const* schema, char const* name);
