@@ -4229,7 +4229,7 @@ mtm_get_cluster_state(PG_FUNCTION_ARGS)
 	values[2] = Int64GetDatum(Mtm->disabledNodeMask);
 	values[3] = Int64GetDatum(SELF_CONNECTIVITY_MASK);
 	values[4] = Int64GetDatum(Mtm->originLockNodeMask);
-	values[5] = Int32GetDatum(Mtm->nLiveNodes);
+	values[5] = Int32GetDatum(Mtm->nAllNodes);
 	values[6] = Int32GetDatum(Mtm->nAllNodes);
 	values[7] = Int32GetDatum(pool_active);
 	values[8] = Int32GetDatum(pool_pending);
