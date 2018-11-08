@@ -215,7 +215,6 @@ dmq_shmem_startup_hook(void)
 		}
 	}
 
-	// XXX: move it also under !found ?
 	dmq_state->subscriptions = ShmemInitHash("dmq_stream_subscriptions",
 								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
 								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,

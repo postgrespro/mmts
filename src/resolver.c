@@ -29,24 +29,9 @@
  * to create tasks for resolver from other backends.
  */
 
-typedef enum
-{
-	NoTask,
-	ResolveForNode,
-	ResolveAll
-} task_type;
-
-typedef struct
-{
-	task_type	type;
-	int			arg;
-} resolver_task;
-
 typedef struct
 {
 	LWLock		   *lock;
-	resolver_task	task_queue[MTM_MAX_NODES];
-	int				tasks;
 	pid_t			pid;
 } resolver_state_data;
 
@@ -89,6 +74,7 @@ resolver_shmem_size(void)
 static void
 resolver_shmem_startup_hook()
 {
+	HASHCTL	hash_info;
 	bool	found;
 
 	if (PreviousShmemStartupHook)
@@ -101,10 +87,15 @@ resolver_shmem_startup_hook()
 
 	if (!found)
 	{
-		resolver_state->lock = &(GetNamedLWLockTranche("resolver"))->lock;
-		resolver_state->tasks = 0;
+		resolver_state->lock = &(GetNamedLWLockTranche("resolver")->lock);
 		resolver_state->pid = 0;
 	}
+
+	/* init map with current unresolved transactions */
+	hash_info.keysize = GIDSIZE;
+	hash_info.entrysize = sizeof(resolver_tx);
+	gid2tx = ShmemInitHash("gid2tx", MaxBackends, 2*MaxBackends, &hash_info,
+						   HASH_ELEM);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -126,7 +117,7 @@ ResolverInit(void)
 	memset(&worker, 0, sizeof(worker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 5;
+	worker.bgw_restart_time = 1;
 	worker.bgw_notify_pid = 0;
 	worker.bgw_main_arg = 0;
 	sprintf(worker.bgw_library_name, "multimaster");
@@ -146,31 +137,73 @@ ResolverInit(void)
  *
  *****************************************************************************/
 
+
+
+static bool
+load_tasks(int node_id)
+{
+	PreparedTransaction	pxacts;
+	int					n_xacts,
+						added_xacts = 0,
+						i;
+
+	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
+	Assert(node_id == -1 || node_id > 0);
+
+	n_xacts = GetPreparedTransactions(&pxacts);
+
+	for (i = 0; i < n_xacts; i++)
+	{
+		char const *gid = pxacts[i].gid;
+		int			xact_node_id;
+
+		xact_node_id = MtmGidParseNodeId(gid);
+
+		if (xact_node_id > 0 &&
+			 (node_id == -1 || node_id == xact_node_id))
+		{
+			int				j;
+			resolver_tx	   *tx;
+
+			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
+			added_xacts++;
+
+			for (j = 0; j < Mtm->nAllNodes; j++)
+				tx->state[j] = MtmTxUnknown;
+
+			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
+				tx->state[MtmNodeId - 1] = MtmTxPreCommited;
+			else
+				tx->state[MtmNodeId - 1] = MtmTxPrepared;
+		}
+	}
+
+	mtm_log(ResolverTasks, "[RESOLVER] got %d transactions to resolve",
+			added_xacts);
+
+	return true;
+}
+
+
 void
 ResolveTransactionsForNode(int node_id)
 {
-	resolver_task task = {ResolveForNode, node_id};
+	pid_t resolver_pid;
 
 	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-
-	Assert(resolver_state->tasks < MTM_MAX_NODES);
-	resolver_state->task_queue[resolver_state->tasks++] = task;
-
+	load_tasks(node_id);
+	resolver_pid = resolver_state->pid;
 	LWLockRelease(resolver_state->lock);
+
+	if (resolver_pid)
+		kill(resolver_pid, SIGHUP);
 }
 
 
 void
 ResolveAllTransactions(void)
 {
-	resolver_task task = {ResolveAll, 0};
-
-	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-
-	Assert(resolver_state->tasks < MTM_MAX_NODES);
-	resolver_state->task_queue[resolver_state->tasks++] = task;
-
-	LWLockRelease(resolver_state->lock);
+	ResolveTransactionsForNode(-1);
 }
 
 char *
@@ -242,6 +275,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	bool found;
 	resolver_tx *tx;
 
+	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
 	Assert(state != MtmTxInProgress);
 
 	tx = hash_search(gid2tx, gid, HASH_FIND, &found);
@@ -316,65 +350,13 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
  *****************************************************************************/
 
 
-static bool
-load_tasks_if_any(void)
-{
-	PreparedTransaction	pxacts;
-	int					n_xacts, added_xacts = 0, i;
-	resolver_task		task = {NoTask, 0};
-
-	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-	if (resolver_state->tasks > 0)
-	{
-		task = resolver_state->task_queue[0];
-		resolver_state->task_queue[0] =
-						resolver_state->task_queue[--resolver_state->tasks];
-	}
-	LWLockRelease(resolver_state->lock);
-
-	if (task.type == NoTask)
-		return false;
-
-	n_xacts = GetPreparedTransactions(&pxacts);
-
-	for (i = 0; i < n_xacts; i++)
-	{
-		char const *gid = pxacts[i].gid;
-		int			xact_node_id;
-
-		xact_node_id = MtmGidParseNodeId(gid);
-
-		if (xact_node_id > 0 &&
-			 (task.type == ResolveAll ||
-			   (task.type == ResolveForNode && task.arg == xact_node_id)))
-		{
-			int				j;
-			resolver_tx	   *tx;
-
-			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
-			added_xacts++;
-
-			for (j = 0; j < Mtm->nAllNodes; j++)
-				tx->state[j] = MtmTxUnknown;
-
-			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
-				tx->state[MtmNodeId - 1] = MtmTxPreCommited;
-			else
-				tx->state[MtmNodeId - 1] = MtmTxPrepared;
-		}
-	}
-
-	mtm_log(ResolverTasks, "[RESOLVER] got %d transactions to resolve",
-			added_xacts);
-
-	return true;
-}
-
 static void
 scatter_status_requests(void)
 {
 	HASH_SEQ_STATUS		hash_seq;
 	resolver_tx		   *tx;
+
+	LWLockAcquire(resolver_state->lock, LW_SHARED);
 
 	hash_seq_init(&hash_seq, gid2tx);
 	while ((tx = hash_seq_search(&hash_seq)) != NULL)
@@ -404,6 +386,8 @@ scatter_status_requests(void)
 		}
 	}
 
+	LWLockRelease(resolver_state->lock);
+
 }
 
 static void
@@ -423,18 +407,20 @@ handle_responses(void)
 		Assert(msg->node == node_id);
 		Assert(msg->code == MSG_POLL_STATUS);
 
+		LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
 		resolve_tx(msg->gid, node_id, msg->state);
+		LWLockRelease(resolver_state->lock);
 	}
 }
 
 void
 ResolverMain(void)
 {
-	bool		new_tasks;
-	HASHCTL		ctl;
 	int			i, sender_id = 0;
+	bool		send_requests = true;
 
 	/* init this worker */
+	pqsignal(SIGHUP, PostgresSigHupHandler);
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
@@ -443,11 +429,6 @@ ResolverMain(void)
 	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
 
 	MtmWaitForExtensionCreation();
-
-	/* init map with current unresolved transactions */
-	ctl.keysize = GIDSIZE;
-	ctl.entrysize = sizeof(resolver_tx);
-	gid2tx = hash_create("gid2tx", MaxBackends, &ctl, HASH_ELEM);
 
 	/* subscribe to status-responses channels from other nodes */
 	for (i = 0; i < Mtm->nAllNodes; i++)
@@ -471,14 +452,11 @@ ResolverMain(void)
 
 		CHECK_FOR_INTERRUPTS();
 
-		/* Check if we got any new transactions to work on */
-		new_tasks = load_tasks_if_any();
-
 		/* Scatter requests for unresolved transactions */
-		if (new_tasks) /* XXX: retry after some timeout */
+		if (send_requests)
 		{
-			new_tasks = false;
 			scatter_status_requests();
+			send_requests = false;
 		}
 
 		/* Gather responses */
@@ -487,8 +465,12 @@ ResolverMain(void)
 		/* Sleep untl somebody wakes us */
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   250,
+					   3000,
 					   PG_WAIT_TIMEOUT);
+
+		/* re-try to send requests if there are some unresolved transactions */
+		if (rc & WL_TIMEOUT)
+			send_requests = true;
 
 		/* Emergency bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)
