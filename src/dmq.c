@@ -856,6 +856,8 @@ _pq_getmessage_if_avalable(StringInfo s)
 		recv_bytes += rc;
 		Assert(recv_bytes >= read_bytes && recv_bytes <= DMQ_RECV_BUFFER);
 
+		mtm_log(DmqTraceIncoming, "dmq: got %d bytes", rc);
+
 		/*
 		 * Here we need to re-check for full message again, so the caller will know
 		 * whether he should wait for event on socket.
@@ -881,7 +883,7 @@ _pq_getbyte_if_available(unsigned char *c)
 	int rc;
 
 	/*
-	 * That is why we re-implementing this function: byte ccan be already in
+	 * That is why we re-implementing this function: byte can be already in
 	 * our recv buffer, so pqcomm version will miss it.
 	 */
 	if (recv_bytes > read_bytes)

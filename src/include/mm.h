@@ -45,6 +45,13 @@ typedef struct MtmSeqPosition
 	int64	next;
 } MtmSeqPosition;
 
+typedef struct
+{
+	int node_id;
+	bool is_recovery;
+	bool parallel_allowed;
+} MtmReceiverContext;
+
 /* XXX: drop that */
 typedef long long long64; /* we are not using int64 here because we want to use %lld format for this type */
 typedef unsigned long long ulong64; /* we are not using uint64 here because we want to use %lld format for this type */

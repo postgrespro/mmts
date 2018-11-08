@@ -43,8 +43,9 @@ typedef struct HookFuncName
 
 typedef struct MtmDecoderPrivate
 {
-	int magic;
-	bool is_recovery;
+	int		magic; // XXX
+	bool	is_recovery;
+	int		node_id;
 } MtmDecoderPrivate;
 
 typedef struct PGLogicalOutputData

@@ -285,7 +285,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 			break;
 
 		case MTM_NEIGHBOR_RECOVERY_CAUGHTUP:
-			MtmEnableNode(node_id);
+			// MtmEnableNode(node_id);
 			break;
 
 	}

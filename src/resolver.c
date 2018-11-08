@@ -262,6 +262,8 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 
 	/* XXX: missing ok because we call this concurrently with logrep recovery */
 
+	/* XXX: set replication session to avoid sending it everywhere */
+
 	if (exists(tx, MtmTxAborted | MtmTxNotFound))
 	{
 		FinishPreparedTransaction(gid, false, true);

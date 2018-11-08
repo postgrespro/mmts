@@ -160,6 +160,8 @@ extern bool MtmMajorNode;
 extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
 
+extern LWLock *MtmCommitBarrier;
+
 extern void MtmXactCallback2(XactEvent event, void *arg);
 extern bool MtmIsUserTransaction(void);
 extern void MtmGenerateGid(char *gid, TransactionId xid);

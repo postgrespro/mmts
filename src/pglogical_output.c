@@ -36,6 +36,8 @@
 #include "replication/message.h"
 #include "replication/origin.h"
 
+#include "storage/ipc.h"
+
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/guc.h"
@@ -471,6 +473,13 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
 		MtmOutputPluginWrite(ctx, true, true);
+
+		/*
+		 * This hook can be called mupltiple times when there is concurrent
+		 * load, so exit right after we wrote recovery message first time during
+		 * current recovery session.
+		 */
+		proc_exit(0);
 	}
 }
 

@@ -114,6 +114,8 @@ static TransactionManager MtmTM =
 	MtmResumeTransaction
 };
 
+LWLock *MtmCommitBarrier;
+
 bool  MtmDoReplication;
 char* MtmDatabaseName;
 char* MtmDatabaseUser;
@@ -530,7 +532,6 @@ static void MtmInitialize()
 		Mtm->status = MTM_DISABLED; //MTM_INITIALIZATION;
 		Mtm->recoverySlot = 0;
 		Mtm->locks = GetNamedLWLockTranche(MULTIMASTER_NAME);
-
 		Mtm->nAllNodes = MtmNodes;
 		Mtm->disabledNodeMask =  (((nodemask_t)1 << MtmNodes) - 1);
 		Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1); //0;
@@ -562,6 +563,8 @@ static void MtmInitialize()
 	}
 
 	RegisterXactCallback(MtmXactCallback2, NULL);
+
+	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+1].lock);
 
 	MtmDoReplication = true;
 	TM = &MtmTM;
@@ -1149,7 +1152,7 @@ _PG_init(void)
 	 * resources in mtm_shmem_startup().
 	 */
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize);
-	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2);
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 1);
 
 	MtmMonitorInitialize();
 

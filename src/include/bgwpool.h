@@ -4,9 +4,11 @@
 #include "storage/s_lock.h"
 #include "storage/spin.h"
 #include "storage/pg_sema.h"
-#include "bkb.h"
+#include "bkb.h" // XXX
 
-typedef void(*BgwPoolExecutor)(void* work, size_t size);
+#include "mm.h"
+
+typedef void(*BgwPoolExecutor)(void* work, size_t size, MtmReceiverContext *ctx);
 
 typedef long timestamp_t;
 

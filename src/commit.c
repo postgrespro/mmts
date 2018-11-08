@@ -150,6 +150,21 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	x->xid = xid;
 
+	/*
+	 * This lock is taken for a quite a long period of time but normally
+	 * all callers lock it in shared mode, so it shouldn't be noticeable
+	 * performance-wise.
+	 *
+	 * It is only used during startup of WalSender(node_id) in recovered mode
+	 * to create a barrier after which all transactions doing our 3PC are
+	 * guaranted to have seen participantsMask with node_id enabled, so the
+	 * receiver can apply them in parallel and be sure that precommit will
+	 * not happens before node_id applies prepare.
+	 *
+	 * See also comments at the end of MtmReplicationStartupHook().
+	 */
+	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
+
 	MtmLock(LW_SHARED);
 	participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) &
 								  ~Mtm->disabledNodeMask &
@@ -186,6 +201,8 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	FinishPreparedTransaction(gid, true, false);
 	mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 	GatherPrecommits(x, participantsMask, MSG_COMMITTED);
+
+	LWLockRelease(MtmCommitBarrier);
 
 	dmq_stream_unsubscribe(stream);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);

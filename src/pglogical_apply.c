@@ -85,7 +85,7 @@ static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
 static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
 
 static bool process_remote_begin(StringInfo s, GlobalTransactionId *gtid);
-static bool process_remote_message(StringInfo s);
+static bool process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx);
 static void process_remote_commit(StringInfo s, GlobalTransactionId *current_gtid);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
@@ -495,7 +495,7 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 }
 
 static bool
-process_remote_message(StringInfo s)
+process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 {
 	char action = pq_getmsgbyte(s);
 	int messageSize = pq_getmsgint(s, 4);
@@ -526,6 +526,23 @@ process_remote_message(StringInfo s)
 			mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
 			MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
 			standalone = true;
+			break;
+		}
+		case 'P':
+		{
+			int node_id = -1;
+
+			sscanf(messageBody, "%d", &node_id);
+
+			Assert(node_id > 0);
+			Assert(receiver_ctx != NULL);
+			// XXX assert that it is receiver itself
+
+			if (!receiver_ctx->is_recovery && node_id == MtmNodeId)
+			{
+				Assert(!receiver_ctx->parallel_allowed);
+				receiver_ctx->parallel_allowed = true;
+			}
 			break;
 		}
 		default:
@@ -1229,7 +1246,8 @@ process_remote_delete(StringInfo s, Relation rel)
 	CommandCounterIncrement();
 }
 
-void MtmExecutor(void* work, size_t size)
+void
+MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 {
     StringInfoData s;
     Relation rel = NULL;
@@ -1342,7 +1360,7 @@ void MtmExecutor(void* work, size_t size)
 			{
   			    close_rel(rel);
 				rel = NULL;
-				inside_transaction = !process_remote_message(&s);
+				inside_transaction = !process_remote_message(&s, receiver_ctx);
 				break;
 			}
 			case 'Z':

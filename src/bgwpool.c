@@ -93,7 +93,7 @@ static void BgwPoolMainLoop(BgwPool* pool)
 			pool->lastPeakTime = 0;
         }
         SpinLockRelease(&pool->lock);
-        pool->executor(work, size);
+		pool->executor(work, size, NULL);
         pfree(work);
         SpinLockAcquire(&pool->lock);
         pool->active -= 1;
@@ -209,7 +209,7 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
 		 * Size of work is larger than size of shared buffer: 
 		 * run it immediately
 		 */
-		pool->executor(work, size);
+		pool->executor(work, size, NULL);
 		return;
 	}
  

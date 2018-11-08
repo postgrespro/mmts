@@ -36,6 +36,8 @@
 #include "utils/typcache.h"
 #include "utils/snapmgr.h"
 
+#include "replication/message.h"
+
 #include "pglogical_relid_map.h"
 
 #include "multimaster.h"
@@ -272,7 +274,9 @@ void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
 	Assert(hooks_data->is_recovery);
-	pq_sendbyte(out, 'Z');		/* sending CAUGHT-UP */
+	/* sending CAUGHT-UP */
+	pq_sendbyte(out, 'Z');
+	MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP, false);
 }
 
 /*
@@ -736,8 +740,6 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		}
 	}
 
-	MtmLock(LW_EXCLUSIVE);
-
 	/*
 	 * Set proper originId mappings.
 	 *
@@ -745,6 +747,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	 * to setup all stuff in shared memory. But seems that there is no such
 	 * callback in vanilla pg and adding one will require some carefull thoughts.
 	 */
+	MtmLock(LW_EXCLUSIVE);
 	for (i = 0; i < Mtm->nAllNodes; i++)
 	{
 		char	   *originName;
@@ -777,6 +780,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		mtm_log(ERROR, "Out-of-clique node %d tries to connect",
 				 MtmReplicationNodeId);
 	}
+	MtmUnlock();
 
 	if (hooks_data->is_recovery)
 	{
@@ -785,7 +789,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				MtmReplicationNodeId);
 
 		Assert(MyReplicationSlot != NULL);
-		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, true);
+		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, false);
 	}
 	else
 	{
@@ -793,9 +797,32 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				"Walsender starts in recovered mode to node %d",
 				MtmReplicationNodeId);
 
-		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, true);
+		/*
+		 * Indicate receiver that after this point in wal it is safe to send
+		 * transaction to the pool of workers. Before this point in wal (or in other
+		 * words before we processed MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY event
+		 * and enabled this node in our disabledNodeMask) our backends are not waiting
+		 * for prepare confirmations from this node, so receiver can get precommit
+		 * before it will finish prepare. This will leave receiver with lots of
+		 * prepared transactions that will never be commited as precommit and commit
+		 * already happend before prepare.
+		 *
+		 * To ensure that all transactions ended after this message had seen right
+		 * disabledNodeMask we took MtmCommitBarrier in exclusive mode to await
+		 * finish of all transactions with potentially old disabledNodeMask.
+		 */
+		if (!hooks_data->is_recovery)
+		{
+			char *dest_id = psprintf("%d", MtmReplicationNodeId);
+
+			LWLockAcquire(MtmCommitBarrier, LW_EXCLUSIVE);
+			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
+			LWLockRelease(MtmCommitBarrier);
+
+			XLogFlush(LogLogicalMessage("P", dest_id, strlen(dest_id), false));
+		}
 	}
-	MtmUnlock();
+
 
 }
 

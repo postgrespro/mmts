@@ -280,11 +280,13 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 }
 
 static void
-MtmExecute(void* work, int size)
+MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx)
 {
-	/* During recovery apply changes sequentially to preserve commit order */
-	if (Mtm->status == MTM_RECOVERY)
-		MtmExecutor(work, size);
+	/* parallel_allowed should never be set during recovery */
+	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
+
+	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed)
+		MtmExecutor(work, size, receiver_ctx);
 	else
 		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size);
 }
@@ -443,6 +445,7 @@ pglogical_receiver_main(Datum main_arg)
 	PGconn *conn;
 	PGresult *res;
 	MtmReplicationMode mode;
+	MtmReceiverContext receiver_ctx = {nodeId, false, false};
 
 	ByteBuffer buf;
 	/* Buffer for COPY data */
@@ -612,6 +615,9 @@ pglogical_receiver_main(Datum main_arg)
 		PQclear(res);
 		resetPQExpBuffer(query);
 
+		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
+		receiver_ctx.parallel_allowed = false;
+
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
 
 		for(;;)
@@ -765,11 +771,11 @@ pglogical_receiver_main(Datum main_arg)
 						MtmSpillToFile(spill_file, buf.data, buf.used);
 						ByteBufferReset(&buf);
 					}
-					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'A' || stmt[1] == 'C'))) {
+					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C'))) {
 						if (stmt[0] == 'M' && stmt[1] == 'C') { /* concurrent DDL should be executed by parallel workers */
-							MtmExecute(stmt, msg_len);
+							MtmExecute(stmt, msg_len, &receiver_ctx);
 						} else {
-							MtmExecutor(stmt, msg_len); /* all other messages can be processed by receiver itself */
+							MtmExecutor(stmt, msg_len, &receiver_ctx); /* all other messages can be processed by receiver itself */
 						}
 					} else {
 						ByteBufferAppend(&buf, stmt, msg_len);
@@ -783,14 +789,14 @@ pglogical_receiver_main(Datum main_arg)
 									pq_sendint(&spill_info, buf.used, 4);
 									MtmSpillToFile(spill_file, buf.data, buf.used);
 									MtmCloseSpillFile(spill_file);
-									MtmExecute(spill_info.data, spill_info.len);
+									MtmExecute(spill_info.data, spill_info.len, &receiver_ctx);
 									spill_file = -1;
 									resetStringInfo(&spill_info);
 								} else {
 									if (MtmPreserveCommitOrder && buf.used == msg_len) {
 										/* Perform commit-prepared and rollback-prepared requested directly in receiver */
 										// timestamp_t stop, start = MtmGetSystemTime();
-										MtmExecutor(buf.data, buf.used);
+										MtmExecutor(buf.data, buf.used, &receiver_ctx);
 										// stop = MtmGetSystemTime();
 										// if (stop - start > USECS_PER_SEC) {
 										// 	elog(WARNING, "Commit of prepared transaction takes %lld usec, flags=%x", stop - start, stmt[1]);
@@ -798,7 +804,7 @@ pglogical_receiver_main(Datum main_arg)
 									} else {
 										/* all other commits should be applied in place */
 										// Assert(stmt[1] == PGLOGICAL_PREPARE || stmt[1] == PGLOGICAL_COMMIT || stmt[1] == PGLOGICAL_PRECOMMIT_PREPARED);
-										MtmExecute(buf.data, buf.used);
+										MtmExecute(buf.data, buf.used, &receiver_ctx);
 									}
 								}
 							} else if (spill_file >= 0) {
