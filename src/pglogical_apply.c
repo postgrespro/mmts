@@ -543,6 +543,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 				Assert(!receiver_ctx->parallel_allowed);
 				receiver_ctx->parallel_allowed = true;
 			}
+			standalone = true;
 			break;
 		}
 		default:

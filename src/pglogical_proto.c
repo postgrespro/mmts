@@ -819,7 +819,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
 			LWLockRelease(MtmCommitBarrier);
 
-			XLogFlush(LogLogicalMessage("P", dest_id, strlen(dest_id), false));
+			XLogFlush(LogLogicalMessage("P", dest_id, strlen(dest_id) + 1, false));
 		}
 	}
 
