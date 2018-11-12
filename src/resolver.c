@@ -269,6 +269,18 @@ majority_in(resolver_tx *tx, MtmTxStateMask mask)
 	return (hits > Mtm->nAllNodes/2);
 }
 
+
+/*
+ * resolve_tx
+ *
+ * This handles respenses with tx status and makes decision based on
+ * 3PC resolving protocol.
+ *
+ * Here we can get an error when trying to commit transaction that
+ * is already during commit by receiver (see gxact->locking_backend).
+ * We can catch those, but better just let it happend, restart bgworker
+ * and continue resolving.
+ */
 static void
 resolve_tx(const char *gid, int node_id, MtmTxState state)
 {

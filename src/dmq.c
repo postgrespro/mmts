@@ -110,6 +110,7 @@ struct DmqSharedState
 		dsm_handle	dsm_h;
 		int			procno;
 		bool		active;
+		pid_t		pid;
 	} receivers[DMQ_MAX_RECEIVERS];
 
 } *dmq_state;
@@ -317,6 +318,23 @@ fe_send(PGconn *conn, char *msg, size_t len)
 	return 0;
 }
 
+static void
+dmq_sender_at_exit(int status, Datum arg)
+{
+	int		i;
+
+	LWLockAcquire(dmq_state->lock, LW_SHARED);
+	for (i = 0; i < dmq_state->n_receivers; i++)
+	{
+		if (dmq_state->receivers[i].active &&
+			dmq_state->receivers[i].pid > 0)
+		{
+			kill(dmq_state->receivers[i].pid, SIGTERM);
+		}
+	}
+	LWLockRelease(dmq_state->lock);
+}
+
 void
 dmq_sender_main(Datum main_arg)
 {
@@ -328,6 +346,8 @@ dmq_sender_main(Datum main_arg)
 	DmqDestination	conns[DMQ_MAX_DESTINATIONS];
 
 	double	prev_timer_at = dmq_now();
+
+	on_shmem_exit(dmq_sender_at_exit, (Datum) 0);
 
 	/* init this worker */
 	pqsignal(SIGHUP, dmq_sighup_handler);
@@ -662,12 +682,10 @@ dmq_sender_main(Datum main_arg)
 		}
 		else if (nevents > 0 && event.events & WL_POSTMASTER_DEATH)
 		{
-			exit(1);
+			proc_exit(1);
 		}
 
 		CHECK_FOR_INTERRUPTS();
-
-		// XXX: handle WL_POSTMASTER_DEATH ?
 	}
 	FreeWaitEventSet(set);
 
@@ -997,6 +1015,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	dmq_state->receivers[receiver_id].dsm_h = dsm_segment_handle(seg);
 	dmq_state->receivers[receiver_id].procno = MyProc->pgprocno;
 	dmq_state->receivers[receiver_id].active = true;
+	dmq_state->receivers[receiver_id].pid = MyProcPid;
 	LWLockRelease(dmq_state->lock);
 
 	on_shmem_exit(dmq_receiver_at_exit, Int32GetDatum(receiver_id));
@@ -1073,6 +1092,13 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		if (nevents > 0 && event.events & WL_LATCH_SET)
 		{
 			ResetLatch(MyLatch);
+		}
+
+		if (nevents > 0 && event.events & WL_POSTMASTER_DEATH)
+		{
+			ereport(FATAL,
+				(errcode(ERRCODE_ADMIN_SHUTDOWN),
+				 errmsg("[DMQ] exit receiver due to unexpected postmaster exit")));
 		}
 
 		// XXX: is it enough?
