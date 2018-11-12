@@ -137,7 +137,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	if (!IsTransactionBlock())
 	{
-		BeginTransactionBlock();
+		BeginTransactionBlock(false);
 		CommitTransactionCommand();
 		StartTransactionCommand();
 	}
