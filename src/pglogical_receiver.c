@@ -470,6 +470,7 @@ pglogical_receiver_main(Datum main_arg)
 	/* Register functions for SIGTERM/SIGHUP management */
 	pqsignal(SIGHUP, receiver_raw_sighup);
 	// pqsignal(SIGTERM, receiver_raw_sigterm);
+	// XXX: also need to unlock overflow semaphore (or rewrite it on latches)
 	pqsignal(SIGTERM, die);
 
 	MtmCreateSpillDirectory(nodeId);
@@ -534,16 +535,7 @@ pglogical_receiver_main(Datum main_arg)
 		mtm_log(MtmReceiverMode, "WalReceiver to %d starts in %s mode",
 				nodeId, MtmReplicationModeName[mode]);
 
-		// if (mode == REPLMODE_RECOVERY)
-		// 	synchronous_twophase = false;
-		// else
-		// 	synchronous_twophase = true;
-		// synchronous_twophase = true;
-
-		if (mode == REPLMODE_EXIT)
-		{
-			break;
-		}
+		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);
 		timeline = Mtm->nodes[nodeId-1].timeline;
 		count = Mtm->recoveryCount;
 
@@ -648,16 +640,17 @@ pglogical_receiver_main(Datum main_arg)
 			if (Mtm->status == MTM_DISABLED || (Mtm->status == MTM_RECOVERY && Mtm->recoverySlot != nodeId))
 			{
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was switched to %s mode", worker_proc, MtmNodeStatusMnem[Mtm->status])));
-				break;
+				goto OnError;
 			}
+
 			if (count != Mtm->recoveryCount) {
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
-				break;
+				goto OnError;
 			}
 
 			if (timeline != Mtm->nodes[nodeId-1].timeline) {
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node %d timeline is changed", worker_proc, nodeId)));
-				break;
+				goto OnError;
 			}
 
 			/*
@@ -911,14 +904,21 @@ pglogical_receiver_main(Datum main_arg)
 				goto OnError;
 			}
 		}
-		PQfinish(conn);
-		continue;
+		Assert(false);
 
-	  OnError:
+
+	OnError:
 		ByteBufferReset(&buf);
 		PQfinish(conn);
 		if (Mtm->recoverySlot == nodeId)
 			Mtm->recoverySlot = 0;
+
+		/*
+		 * Some of the workers may stuck on lock and survive until node will come
+		 * back and prepare stuck transaction when it was aborted long time ago.
+		 * Force all workers to cancel stmt to ensure this will not happen.
+		 */
+		BgwPoolCancel(&Mtm->nodes[nodeId - 1].pool);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
 	}
 	ByteBufferFree(&buf);

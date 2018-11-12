@@ -4,6 +4,7 @@
 #include "storage/s_lock.h"
 #include "storage/spin.h"
 #include "storage/pg_sema.h"
+#include "postmaster/bgworker.h"
 #include "bkb.h" // XXX
 
 #include "mm.h"
@@ -43,6 +44,8 @@ typedef struct
     char   dbname[MAX_DBNAME_LEN];
 	char   dbuser[MAX_DBUSER_LEN];
     char*  queue;
+
+	BackgroundWorkerHandle **bgwhandles;
 } BgwPool;
 
 typedef BgwPool*(*BgwPoolConstructor)(void);
@@ -58,4 +61,7 @@ extern size_t BgwPoolGetQueueSize(BgwPool* pool);
 extern timestamp_t BgwGetLastPeekTime(BgwPool* pool);
 
 extern void BgwPoolStop(BgwPool* pool);
+
+extern void BgwPoolCancel(BgwPool* pool);
+
 #endif

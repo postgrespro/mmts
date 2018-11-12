@@ -12,6 +12,7 @@
 #include "utils/portal.h"
 #include "tcop/pquery.h"
 #include "utils/guc.h"
+#include "tcop/tcopprot.h"
 
 #include "bgwpool.h"
 #include "mm.h"
@@ -25,11 +26,17 @@ static BgwPool* MtmPool;
 void BgwPoolStaticWorkerMainLoop(Datum arg);
 void BgwPoolDynamicWorkerMainLoop(Datum arg);
 
-static void BgwShutdownWorker(int sig)
+static void
+BgwShutdownHandler(int sig)
 {
-	if (MtmPool) { 
-		BgwPoolStop(MtmPool);
-	}
+	Assert(MtmPool != NULL);
+	BgwPoolStop(MtmPool);
+
+	/*
+	 * set ProcDiePending for cases when we are waiting on latch somewhere
+	 * deep inside our execute() function.
+	 */
+	die(sig);
 }
 
 static void BgwPoolMainLoop(BgwPool* pool)
@@ -44,10 +51,9 @@ static void BgwPoolMainLoop(BgwPool* pool)
 	MtmIsLogicalReceiver = true;
 	MtmPool = pool;
 
-	// XXX: fix that
-	pqsignal(SIGINT, BgwShutdownWorker);
-	pqsignal(SIGQUIT, BgwShutdownWorker);
-	pqsignal(SIGTERM, BgwShutdownWorker);
+	pqsignal(SIGINT, StatementCancelHandler);
+	pqsignal(SIGQUIT, BgwShutdownHandler);
+	pqsignal(SIGTERM, BgwShutdownHandler);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
     BackgroundWorkerUnblockSignals();
@@ -93,8 +99,13 @@ static void BgwPoolMainLoop(BgwPool* pool)
 			pool->lastPeakTime = 0;
         }
         SpinLockRelease(&pool->lock);
+
+		/* Ignore cancel that arrived before we started current command */
+		QueryCancelPending = false;
+
 		pool->executor(work, size, NULL);
-        pfree(work);
+		pfree(work);
+
         SpinLockAcquire(&pool->lock);
         pool->active -= 1;
 		pool->lastPeakTime = 0;
@@ -107,6 +118,8 @@ static void BgwPoolMainLoop(BgwPool* pool)
 void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  char const* dbuser, size_t queueSize, size_t nWorkers)
 {
 	MtmPool = pool;
+
+	pool->bgwhandles = (BackgroundWorkerHandle **) ShmemAlloc(MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
     pool->queue = (char*)ShmemAlloc(queueSize);
 	if (pool->queue == NULL) { 
 		elog(PANIC, "Failed to allocate memory for background workers pool: %lld bytes requested", (long64)queueSize);
@@ -148,7 +161,6 @@ void BgwPoolDynamicWorkerMainLoop(Datum arg)
 
 void BgwPoolStart(BgwPool* pool, char *poolName)
 {
-    int i;
 	BackgroundWorker worker;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
@@ -159,13 +171,6 @@ void BgwPoolStart(BgwPool* pool, char *poolName)
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 
 	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
-
-	for (i = 0; i < pool->nWorkers; i++)
-	{
-		snprintf(worker.bgw_name, BGW_MAXLEN, "%s_worker_%d", pool->poolName, i+1);
-		worker.bgw_main_arg = PointerGetDatum(pool);
-        RegisterBackgroundWorker(&worker);
-    }
 }
 
 size_t BgwPoolGetQueueSize(BgwPool* pool)
@@ -180,25 +185,29 @@ size_t BgwPoolGetQueueSize(BgwPool* pool)
 
 static void BgwStartExtraWorker(BgwPool* pool)
 {
-	if (pool->nWorkers < MtmMaxWorkers) { 
-		timestamp_t now = MtmGetSystemTime();
-		/*if (pool->lastDynamicWorkerStartTime + MULTIMASTER_BGW_RESTART_TIMEOUT*USECS_PER_SEC < now)*/
-		{ 
-			BackgroundWorker worker;
-			BackgroundWorkerHandle* handle;
-			MemSet(&worker, 0, sizeof(BackgroundWorker));
-			worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
-			worker.bgw_start_time = BgWorkerStart_ConsistentState;
-			sprintf(worker.bgw_library_name, "multimaster");
-			sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
-			worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
-			snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int)++pool->nWorkers);
-			worker.bgw_main_arg = PointerGetDatum(pool);
-			pool->lastDynamicWorkerStartTime = now;
-			if (!RegisterDynamicBackgroundWorker(&worker, &handle)) { 
-				elog(WARNING, "Failed to start dynamic background worker");
-			}
-		}
+	BackgroundWorker worker;
+	BackgroundWorkerHandle* handle;
+
+	if (pool->nWorkers >= MtmMaxWorkers)
+		return;
+
+	MemSet(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_main_arg = PointerGetDatum(pool);
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int) pool->nWorkers + 1);
+
+	pool->lastDynamicWorkerStartTime = MtmGetSystemTime();
+	if (RegisterDynamicBackgroundWorker(&worker, &handle))
+	{
+		pool->bgwhandles[pool->nWorkers++] = handle;
+	}
+	else
+	{
+		elog(WARNING, "Failed to start dynamic background worker");
 	}
 }
 
@@ -253,9 +262,29 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
 
 void BgwPoolStop(BgwPool* pool)
 {
-    // SpinLockAcquire(&pool->lock);
 	pool->shutdown = true;
-    // SpinLockRelease(&pool->lock);            
 	PGSemaphoreUnlock(pool->available);
 	PGSemaphoreUnlock(pool->overflow);
+}
+
+/*
+ * Tell our lads to cancel currently active transactions.
+ */
+void
+BgwPoolCancel(BgwPool* pool)
+{
+	int		i;
+
+	for (i = 0; i < pool->nWorkers; i++)
+	{
+		BgwHandleStatus		status;
+		pid_t				pid;
+
+		status = GetBackgroundWorkerPid(pool->bgwhandles[i], &pid);
+		if (status == BGWH_STARTED)
+		{
+			Assert(pid > 0);
+			kill(pid, SIGINT);
+		}
+	}
 }
