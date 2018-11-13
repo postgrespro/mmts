@@ -39,10 +39,13 @@ BgwShutdownHandler(int sig)
 	die(sig);
 }
 
-static void BgwPoolMainLoop(BgwPool* pool)
+static void
+BgwPoolMainLoop(BgwPool* pool)
 {
-    int size;
-    void* work;
+	int size;
+	void* work;
+	size_t payload = sizeof(MtmReceiverContext) + sizeof(size_t);
+	MtmReceiverContext ctx;
 	static PortalData fakePortal;
 
 	mtm_log(BgwPoolEvent, "Start background worker %d, shutdown=%d", MyProcPid, pool->shutdown);
@@ -56,13 +59,14 @@ static void BgwPoolMainLoop(BgwPool* pool)
 	pqsignal(SIGTERM, BgwShutdownHandler);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
-    BackgroundWorkerUnblockSignals();
+	BackgroundWorkerUnblockSignals();
 	BackgroundWorkerInitializeConnection(pool->dbname, pool->dbuser, 0);
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
 
-	while (true) {
+	while (true)
+	{
 		if (ConfigReloadPending)
 		{
 			ConfigReloadPending = false;
@@ -70,47 +74,57 @@ static void BgwPoolMainLoop(BgwPool* pool)
 		}
 
 		PGSemaphoreLock(pool->available);
-        SpinLockAcquire(&pool->lock);
-		if (pool->shutdown) { 	
+		SpinLockAcquire(&pool->lock);
+		if (pool->shutdown)
+		{
 			PGSemaphoreUnlock(pool->available);
 			break;
 		}
-        size = *(int*)&pool->queue[pool->head];
-        Assert(size < pool->size);
-        work = palloc(size);
-        pool->pending -= 1;
-        pool->active += 1;
-		if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0) {
+		size = * (int *) &pool->queue[pool->head];
+		ctx  = * (MtmReceiverContext *) &pool->queue[pool->head + sizeof(size_t)];
+
+		Assert(size < pool->size);
+		work = palloc(size);
+		pool->pending -= 1;
+		pool->active += 1;
+		if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
 			pool->lastPeakTime = MtmGetSystemTime();
+
+		if (pool->head + size + payload > pool->size)
+		{
+			memcpy(work, pool->queue, size);
+			pool->head = INTALIGN(size);
 		}
-        if (pool->head + size + 4 > pool->size) { 
-            memcpy(work, pool->queue, size);
-            pool->head = INTALIGN(size);
-        } else { 
-            memcpy(work, &pool->queue[pool->head+4], size);
-            pool->head += 4 + INTALIGN(size);
-        }
-        if (pool->size == pool->head) { 
-            pool->head = 0;
-        }
-        if (pool->producerBlocked) {
-            pool->producerBlocked = false;
+		else
+		{
+			memcpy(work, &pool->queue[pool->head + payload], size);
+			pool->head += payload + INTALIGN(size);
+		}
+
+		if (pool->size == pool->head)
+			pool->head = 0;
+
+		if (pool->producerBlocked)
+		{
+			pool->producerBlocked = false;
 			PGSemaphoreUnlock(pool->overflow);
 			pool->lastPeakTime = 0;
-        }
-        SpinLockRelease(&pool->lock);
+		}
+
+		SpinLockRelease(&pool->lock);
 
 		/* Ignore cancel that arrived before we started current command */
 		QueryCancelPending = false;
 
-		pool->executor(work, size, NULL);
+		pool->executor(work, size, &ctx);
 		pfree(work);
 
-        SpinLockAcquire(&pool->lock);
-        pool->active -= 1;
+		SpinLockAcquire(&pool->lock);
+		pool->active -= 1;
 		pool->lastPeakTime = 0;
-        SpinLockRelease(&pool->lock);
-    }
+		SpinLockRelease(&pool->lock);
+	}
+
 	SpinLockRelease(&pool->lock);
 	mtm_log(BgwPoolEvent, "Shutdown background worker %d", MyProcPid);
 }
@@ -211,9 +225,13 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	}
 }
 
-void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
+void
+BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
 {
-    if (size+4 > pool->size) {
+	size_t payload = sizeof(MtmReceiverContext) + sizeof(size_t);
+
+	if (size + payload > pool->size)
+	{
 		/* 
 		 * Size of work is larger than size of shared buffer: 
 		 * run it immediately
@@ -222,42 +240,52 @@ void BgwPoolExecute(BgwPool* pool, void* work, size_t size)
 		return;
 	}
  
-    SpinLockAcquire(&pool->lock);
-    while (!pool->shutdown) { 
-        if ((pool->head <= pool->tail && pool->size - pool->tail < size + 4 && pool->head < size) 
-            || (pool->head > pool->tail && pool->head - pool->tail < size + 4))
-        {
-            if (pool->lastPeakTime == 0) {
+	SpinLockAcquire(&pool->lock);
+	while (!pool->shutdown)
+	{
+		if ((pool->head <= pool->tail && pool->size - pool->tail < size + payload && pool->head < size)
+			|| (pool->head > pool->tail && pool->head - pool->tail < size + payload))
+		{
+			if (pool->lastPeakTime == 0)
 				pool->lastPeakTime = MtmGetSystemTime();
-			}
+
 			pool->producerBlocked = true;
-            SpinLockRelease(&pool->lock);
+			SpinLockRelease(&pool->lock);
 			PGSemaphoreLock(pool->overflow);
-            SpinLockAcquire(&pool->lock);
-        } else {
-            pool->pending += 1;
-			if (pool->active + pool->pending > pool->nWorkers) { 
-				BgwStartExtraWorker(pool);				
-			}
-			if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0) {
+			SpinLockAcquire(&pool->lock);
+		}
+		else
+		{
+			pool->pending += 1;
+
+			if (pool->active + pool->pending > pool->nWorkers)
+				BgwStartExtraWorker(pool);
+
+			if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
 				pool->lastPeakTime = MtmGetSystemTime();
+
+			*(int *)&pool->queue[pool->tail] = size;
+			*(MtmReceiverContext *)&pool->queue[pool->tail + sizeof(size_t)] = *ctx;
+
+			if (pool->size - pool->tail >= size + payload)
+			{
+				memcpy(&pool->queue[pool->tail + payload], work, size);
+				pool->tail += payload + INTALIGN(size);
 			}
-            *(int*)&pool->queue[pool->tail] = size;
-            if (pool->size - pool->tail >= size + 4) { 
-                memcpy(&pool->queue[pool->tail+4], work, size);
-                pool->tail += 4 + INTALIGN(size);
-            } else { 
-                memcpy(pool->queue, work, size);
-                pool->tail = INTALIGN(size);
-            }
-            if (pool->tail == pool->size) {
-                pool->tail = 0;
-            }
+			else
+			{
+				memcpy(pool->queue, work, size);
+				pool->tail = INTALIGN(size);
+			}
+
+			if (pool->tail == pool->size)
+				pool->tail = 0;
+
 			PGSemaphoreUnlock(pool->available);
-            break;
-        }
-    }
-    SpinLockRelease(&pool->lock);            
+			break;
+		}
+	}
+	SpinLockRelease(&pool->lock);
 }
 
 void BgwPoolStop(BgwPool* pool)

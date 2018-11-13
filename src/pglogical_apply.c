@@ -86,7 +86,7 @@ static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
 
 static bool process_remote_begin(StringInfo s, GlobalTransactionId *gtid);
 static bool process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx);
-static void process_remote_commit(StringInfo s, GlobalTransactionId *current_gtid);
+static void process_remote_commit(StringInfo s, GlobalTransactionId *current_gtid, MtmReceiverContext *receiver_ctx);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
@@ -535,13 +535,17 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 			sscanf(messageBody, "%d", &node_id);
 
 			Assert(node_id > 0);
-			Assert(receiver_ctx != NULL);
 			// XXX assert that it is receiver itself
 
 			if (!receiver_ctx->is_recovery && node_id == MtmNodeId)
 			{
 				Assert(!receiver_ctx->parallel_allowed);
+				Assert(receiver_ctx->node_id > 0);
+				Assert(receiver_ctx->node_id == MtmReplicationNodeId);
+				Assert(receiver_ctx->node_id != node_id);
+
 				receiver_ctx->parallel_allowed = true;
+				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
 			}
 			standalone = true;
 			break;
@@ -724,7 +728,7 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 }
 
 static void
-process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
+process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmReceiverContext *receiver_ctx)
 {
 	uint8 		event;
 	lsn_t       end_lsn;
@@ -767,7 +771,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			}
 			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
-			if (Mtm->status != MTM_RECOVERY)
+			if (receiver_ctx->parallel_allowed)
 			{
 				TransactionId origin_xid = MtmGidParseXid(gid);
 				mtm_send_reply(origin_xid, origin_node, MSG_PRECOMMITTED);
@@ -813,8 +817,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 
 			MtmDeadlockDetectorRemoveXact(xid);
 
-			/* XXX: we can move that to callbacks to keep apply clean */
-			if (Mtm->status != MTM_RECOVERY)
+			if (receiver_ctx->parallel_allowed)
 			{
 				TransactionId origin_xid = MtmGidParseXid(gid);
 				mtm_send_reply(origin_xid, origin_node, res ? MSG_PREPARED : MSG_ABORTED);
@@ -842,7 +845,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();
 
-			if (Mtm->status != MTM_RECOVERY)
+			if (receiver_ctx->parallel_allowed)
 			{
 				TransactionId origin_xid = MtmGidParseXid(gid);
 				mtm_send_reply(origin_xid, origin_node, MSG_COMMITTED);
@@ -868,7 +871,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid)
 			Assert(false);
 	}
 
-	if (Mtm->status == MTM_RECOVERY)
+	if (!receiver_ctx->parallel_allowed)
 	{
 		// XXX
 		elog(LOG, "Recover transaction %s event=%d", gid, event);
@@ -1295,7 +1298,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
                 /* COMMIT */
             case 'C':
   			    close_rel(rel);
-				process_remote_commit(&s, &current_gtid);
+				process_remote_commit(&s, &current_gtid, receiver_ctx);
 				inside_transaction = false;
                 break;
                 /* INSERT */
@@ -1379,7 +1382,6 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     }
     PG_CATCH();
     {
-		// XXX: change all this to re-throw
 
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		MtmHandleApplyError();
@@ -1397,7 +1399,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		if (TransactionIdIsValid(current_gtid.xid))
 		{
 			MtmDeadlockDetectorRemoveXact(GetCurrentTransactionIdIfAny());
-			if (Mtm->status != MTM_RECOVERY)
+			if (receiver_ctx->parallel_allowed)
 				mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
 		}
 

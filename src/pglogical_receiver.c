@@ -288,7 +288,7 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx)
 	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed)
 		MtmExecutor(work, size, receiver_ctx);
 	else
-		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size);
+		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size, receiver_ctx);
 }
 
 /*
@@ -379,7 +379,7 @@ MtmGetReplicationMode(int nodeId)
 		MtmLock(LW_EXCLUSIVE);
 	}
 
-	if (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
+	if (!Mtm->recovered)
 	{
 		/* Ok, then start recovery by luckiest walreceiver (if there is no donor node).
 		 * If this node was populated using basebackup, then donorNodeId is not zero and we should choose this node for recovery */
@@ -395,7 +395,7 @@ MtmGetReplicationMode(int nodeId)
 		}
 
 		/* And force less lucky walreceivers wait until recovery is completed */
-		while (BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId - 1))
+		while (!Mtm->recovered)
 		{
 			MtmUnlock();
 			MtmSleep(STATUS_POLL_DELAY);
@@ -403,6 +403,7 @@ MtmGetReplicationMode(int nodeId)
 		}
 	}
 
+	Assert(Mtm->recovered);
 	MtmUnlock();
 	return REPLMODE_RECOVERED;
 }
@@ -610,8 +611,6 @@ pglogical_receiver_main(Datum main_arg)
 		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
 		receiver_ctx.parallel_allowed = false;
 
-		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
-
 		for(;;)
 		{
 			int rc, hdr_len;
@@ -637,11 +636,6 @@ pglogical_receiver_main(Datum main_arg)
 				proc_exit(1);
 			}
 
-			if (Mtm->status == MTM_DISABLED || (Mtm->status == MTM_RECOVERY && Mtm->recoverySlot != nodeId))
-			{
-				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was switched to %s mode", worker_proc, MtmNodeStatusMnem[Mtm->status])));
-				goto OnError;
-			}
 
 			if (count != Mtm->recoveryCount) {
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));

@@ -89,6 +89,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 	 */
 	if (status == MTM_DISABLED)
 	{
+		Mtm->recovered = false;
 		Mtm->recoverySlot = 0;
 		Mtm->pglogicalReceiverMask = 0;
 		Mtm->pglogicalSenderMask = 0;
@@ -111,6 +112,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 			ResolveAllTransactions();
 			Mtm->refereeWinnerId = saved_winner_node_id;
 		}
+		MtmEnableNode(MtmNodeId);
 	}
 
 	if (status == MTM_RECOVERED)
@@ -194,7 +196,7 @@ MtmCheckState(void)
 			break;
 
 		case MTM_RECOVERY:
-			if (!BIT_CHECK(Mtm->disabledNodeMask, MtmNodeId-1))
+			if (Mtm->recovered)
 			{
 				MtmSetClusterStatus(MTM_RECOVERED, statusReason);
 
@@ -212,7 +214,7 @@ MtmCheckState(void)
 		 * in MTM_RECOVERED state.
 		 */
 		case MTM_RECOVERED:
-			if (nReceivers == nEnabled-1 && nSenders == nEnabled-1 && nEnabled == nConnected)
+			if (nReceivers == nEnabled && nSenders == nEnabled && nEnabled == nConnected-1)
 			{
 				MtmSetClusterStatus(MTM_ONLINE, statusReason);
 
@@ -259,6 +261,8 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 			MtmDisableNode(node_id);
 			break;
 
+		// XXX: now that means reception of parallel-safe message  through
+		// replication. Need to be renamed.
 		case MTM_NEIGHBOR_WAL_RECEIVER_START:
 			BIT_SET(Mtm->pglogicalReceiverMask, node_id - 1);
 			break;
@@ -326,8 +330,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 		case MTM_RECOVERY_FINISH1:
 		case MTM_RECOVERY_FINISH2:
 			{
-				MtmEnableNode(MtmNodeId);
-
+				Mtm->recovered = true;
 				Mtm->recoveryCount++; /* this will restart replication connection */
 				Mtm->recoverySlot = 0;
 			}

@@ -54,7 +54,7 @@ extern void BgwPoolStart(BgwPool* pool, char *poolName);
 
 extern void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname, char const* dbuser, size_t queueSize, size_t nWorkers);
 
-extern void BgwPoolExecute(BgwPool* pool, void* work, size_t size);
+extern void BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx);
 
 extern size_t BgwPoolGetQueueSize(BgwPool* pool);
 

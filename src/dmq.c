@@ -1072,8 +1072,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 			if (rc > 0)
 			{
-				last_message_at = dmq_now();
 				dmq_handle_message(&s, mq_handles, seg);
+				last_message_at = dmq_now();
 				reader_state = NeedByte;
 			}
 		}
