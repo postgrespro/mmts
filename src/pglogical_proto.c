@@ -813,13 +813,15 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		 */
 		if (!hooks_data->is_recovery)
 		{
+			XLogRecPtr msg_xptr;
 			char *dest_id = psprintf("%d", MtmReplicationNodeId);
 
 			LWLockAcquire(MtmCommitBarrier, LW_EXCLUSIVE);
 			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
+			msg_xptr = LogLogicalMessage("P", dest_id, strlen(dest_id) + 1, false);
 			LWLockRelease(MtmCommitBarrier);
 
-			XLogFlush(LogLogicalMessage("P", dest_id, strlen(dest_id) + 1, false));
+			XLogFlush(msg_xptr);
 		}
 	}
 
