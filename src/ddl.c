@@ -575,6 +575,14 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 				check_function_bodies = false;
 				break;
 
+			case T_CreateSeqStmt:
+			{
+				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
+				if (!MtmVolksWagenMode)
+					AdjustCreateSequence(stmt->options);
+				break;
+			}
+
 			default:
 				break;
 		}
