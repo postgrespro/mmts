@@ -45,7 +45,7 @@ typedef struct MtmDecoderPrivate
 {
 	int		magic; // XXX
 	bool	is_recovery;
-	int		node_id;
+	int64	session_id;
 } MtmDecoderPrivate;
 
 typedef struct PGLogicalOutputData

@@ -6,6 +6,7 @@
 # Execute this file in order to run 3-node mm cluster
 
 import time
+import os
 
 from testgres import PostgresNode, NodeStatus, NodeBackup
 from testgres import reserve_port, release_port
@@ -135,11 +136,10 @@ class Cluster(object):
                                             self.username))
 
     def install(self):
-        self.node_any().poll_query_until(dbname=self.dbname,
-                                         username=self.username,
-                                         query="create extension multimaster",
-                                         raise_programming_error=False,
-                                         expected=None)
+        for node in self.nodes:
+            node.safe_psql("create extension multimaster;",
+                         dbname=self.dbname,
+                         username=self.username)
 
         return self
 
@@ -262,9 +262,12 @@ class ClusterNode(PostgresNode):
                  use_logging=False,
                  master=None):
 
+        if base_dir is None:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+
         super(ClusterNode, self).__init__(name=name,
                                           port=pg_port,
-                                          base_dir=base_dir)
+                                          base_dir=base_dir + '/../tmp_check/' + name)
 
         self.mm_port = mm_port
 

@@ -35,6 +35,7 @@
 #include "access/relscan.h"
 #include "commands/vacuum.h"
 #include "utils/inval.h"
+#include "replication/origin.h"
 #include "miscadmin.h"
 
 #include "mm.h"
@@ -1048,9 +1049,14 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 
 void
-MtmApplyDDLMessage(const char *messageBody)
+MtmApplyDDLMessage(const char *messageBody, bool transactional)
 {
 	int rc;
+
+	/* Write DDL to our WAL in case smbd going to recover from us */
+	Assert(replorigin_session_origin != InvalidRepOriginId);
+	LogLogicalMessage(transactional ? "D" : "C",
+					  messageBody, strlen(messageBody) + 1, transactional);
 
 	mtm_log(DMLStmtIncoming, "%d: Executing utility statement %s",
 			MyProcPid, messageBody);
@@ -1082,6 +1088,8 @@ MtmApplyDDLMessage(const char *messageBody)
 	{
 		MemoryContextSwitchTo(MtmApplyContext);
 		PushActiveSnapshot(GetTransactionSnapshot());
+
+		// XXX: assert that was non-transactional ddl
 
 		switch (nodeTag(MtmCapturedDDL))
 		{

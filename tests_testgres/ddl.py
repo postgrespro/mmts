@@ -12,7 +12,7 @@ class TestDDL(unittest.TestCase):
     def setUpClass(cls):
         cls.cluster = Cluster(NUM_NODES)
         cls.cluster.print_conninfo()
-        cls.cluster.start().await_online((0,1,2))
+        cls.cluster.start().install().await_online((0,1,2))
         # cls.cluster.print_conninfo()
 
     @classmethod

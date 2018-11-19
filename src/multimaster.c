@@ -46,6 +46,15 @@ typedef enum
 	MTM_STATE_LOCK_ID
 } MtmLockIds;
 
+
+typedef struct
+{
+	TimestampTz	last_timestamp;
+	slock_t		mutex;
+} MtmTime;
+
+static MtmTime *mtm_time;
+
 #define Natts_mtm_nodes_state   17
 #define Natts_mtm_cluster_state 20
 typedef struct
@@ -201,6 +210,24 @@ void MtmUnlockNode(int nodeId)
  * -------------------------------------------
  */
 
+TimestampTz
+MtmGetIncreasingTimestamp()
+{
+	TimestampTz now = GetCurrentTimestamp();
+
+	/*
+	 * Don't let time move backward; if it hasn't advanced, use incremented
+	 * last value.
+	 */
+	SpinLockAcquire(&mtm_time->mutex);
+	if (now <= mtm_time->last_timestamp)
+		now = ++mtm_time->last_timestamp;
+	else
+		mtm_time->last_timestamp = now;
+	SpinLockRelease(&mtm_time->mutex);
+
+	return now;
+}
 
 timestamp_t MtmGetSystemTime(void)
 {
@@ -524,6 +551,14 @@ static void MtmInitialize()
 	int i;
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+
+	mtm_time = (MtmTime *) ShmemInitStruct("mtm_time", sizeof(MtmTime), &found);
+	if (!found)
+	{
+		mtm_time->last_timestamp = 0;
+		SpinLockInit(&mtm_time->mutex);
+	}
+
 	Mtm = (MtmState*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmState) + sizeof(MtmNodeInfo)*(MtmMaxNodes-1), &found);
 	if (!found)
 	{
@@ -1152,7 +1187,7 @@ _PG_init(void)
 	 * the postmaster process.)	 We'll allocate or attach to the shared
 	 * resources in mtm_shmem_startup().
 	 */
-	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize);
+	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 1);
 
 	MtmMonitorInitialize();

@@ -502,6 +502,8 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 	char const* messageBody = pq_getmsgbytes(s, messageSize);
 	bool standalone = false;
 
+	MtmBeginSession(MtmReplicationNodeId);
+
 	switch (action)
 	{
 		case 'C':
@@ -510,7 +512,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 			SetCurrentStatementStartTimestamp();
 			MtmResetTransaction();
 			StartTransactionCommand();
-			MtmApplyDDLMessage(messageBody);
+			MtmApplyDDLMessage(messageBody, false);
 			CommitTransactionCommand(); // XXX
 			standalone = true;
 			break;
@@ -518,7 +520,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		case 'D':
 		{
 			mtm_log(MtmApplyMessage, "Executing tx DDL message %s", messageBody);
-			MtmApplyDDLMessage(messageBody);
+			MtmApplyDDLMessage(messageBody, true);
 			break;
 		}
 		case 'L':
@@ -530,19 +532,19 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		}
 		case 'P':
 		{
-			int node_id = -1;
+			int64 session_id = 0;
 
-			sscanf(messageBody, "%d", &node_id);
+			sscanf(messageBody, INT64_FORMAT, &session_id);
 
-			Assert(node_id > 0);
+			Assert(session_id > 0);
 			// XXX assert that it is receiver itself
 
-			if (!receiver_ctx->is_recovery && node_id == MtmNodeId)
+			if (receiver_ctx->session_id == session_id)
 			{
+				Assert(!receiver_ctx->is_recovery);
 				Assert(!receiver_ctx->parallel_allowed);
 				Assert(receiver_ctx->node_id > 0);
 				Assert(receiver_ctx->node_id == MtmReplicationNodeId);
-				Assert(receiver_ctx->node_id != node_id);
 
 				receiver_ctx->parallel_allowed = true;
 				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
@@ -553,6 +555,9 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		default:
 			Assert(false);
  	}
+
+	MtmEndSession(MtmReplicationNodeId, false);
+
 	return standalone;
 }
 	

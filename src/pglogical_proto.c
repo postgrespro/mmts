@@ -707,7 +707,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
-	hooks_data->magic = 42042042;
+	hooks_data->session_id = 0;
 
 	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
 
@@ -726,10 +726,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				{
 					hooks_data->is_recovery = false;
 				}
-				else if (strcmp(strVal(elem->arg), "open_existed") != 0 &&
-						 strcmp(strVal(elem->arg), "create_new") != 0)
+				else
 				{
-					// XXX: don't need that anymore
 					mtm_log(ERROR, "Illegal recovery mode %s", strVal(elem->arg));
 				}
 			}
@@ -738,7 +736,27 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 				mtm_log(ERROR, "Replication mode is not specified");
 			}
 		}
+		else if (strcmp("mtm_session_id", elem->defname) == 0)
+		{
+			if (elem->arg != NULL && strVal(elem->arg) != NULL)
+			{
+				int64 session_id = 0;
+				sscanf(strVal(elem->arg), INT64_FORMAT, &session_id);
+
+				if (session_id == 0)
+					mtm_log(ERROR, "Illegal mtm_session_id");
+
+				hooks_data->session_id = session_id;
+			}
+			else
+			{
+				mtm_log(ERROR, "mtm_session_id is not specified");
+			}
+		}
 	}
+
+	if (hooks_data->session_id == 0)
+		mtm_log(ERROR, "mtm_session_id is not specified");
 
 	/*
 	 * Set proper originId mappings.
@@ -814,11 +832,11 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		if (!hooks_data->is_recovery)
 		{
 			XLogRecPtr msg_xptr;
-			char *dest_id = psprintf("%d", MtmReplicationNodeId);
+			char *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
 
 			LWLockAcquire(MtmCommitBarrier, LW_EXCLUSIVE);
 			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
-			msg_xptr = LogLogicalMessage("P", dest_id, strlen(dest_id) + 1, false);
+			msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
 			LWLockRelease(MtmCommitBarrier);
 
 			XLogFlush(msg_xptr);

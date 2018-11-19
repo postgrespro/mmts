@@ -50,6 +50,7 @@ typedef struct
 	int node_id;
 	bool is_recovery;
 	bool parallel_allowed;
+	TimestampTz session_id;
 } MtmReceiverContext;
 
 /* XXX: drop that */

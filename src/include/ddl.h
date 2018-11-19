@@ -23,7 +23,7 @@ extern void MtmDDLReplicationInit(void);
 extern void MtmDDLReplicationShmemStartup(void);
 extern bool MtmIsRelationLocal(Relation rel);
 extern void MtmDDLResetStatement(void);
-extern void MtmApplyDDLMessage(const char *messageBody);
+extern void MtmApplyDDLMessage(const char *messageBody, bool transactional);
 extern void MtmDDLResetApplyState(void);
 extern void MtmSetRemoteFunction(char const* list, void* extra);
 extern void MtmToggleDML(void);

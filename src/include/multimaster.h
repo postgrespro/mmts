@@ -193,4 +193,6 @@ extern void MtmUpdateControlFile(void);
 
 extern void MtmCheckSlots(void);
 
+extern TimestampTz MtmGetIncreasingTimestamp(void);
+
 #endif

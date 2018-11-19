@@ -446,7 +446,7 @@ pglogical_receiver_main(Datum main_arg)
 	PGconn *conn;
 	PGresult *res;
 	MtmReplicationMode mode;
-	MtmReceiverContext receiver_ctx = {nodeId, false, false};
+	MtmReceiverContext receiver_ctx = {nodeId, false, false, 0};
 
 	ByteBuffer buf;
 	/* Buffer for COPY data */
@@ -590,14 +590,24 @@ pglogical_receiver_main(Datum main_arg)
 			Mtm->nodes[nodeId-1].manualRecovery = false;
 		}
 
-		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x (\"startup_params_format\" '1', \"max_proto_version\" '%d',  \"min_proto_version\" '%d', \"forward_changesets\" '1', \"mtm_replication_mode\" '%s', \"mtm_restart_pos\" '%llx')",
+		receiver_ctx.session_id = MtmGetIncreasingTimestamp();
+		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
+		receiver_ctx.parallel_allowed = false;
+
+		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x ("
+									"\"startup_params_format\" '1',"
+									"\"max_proto_version\" '%d',"
+									"\"min_proto_version\" '%d',"
+									"\"forward_changesets\" '1',"
+									"\"mtm_replication_mode\" '%s',"
+									"\"mtm_session_id\" '"INT64_FORMAT"')",
 						  slotName,
 						  (uint32) (originStartPos >> 32),
 						  (uint32) originStartPos,
 						  MULTIMASTER_MAX_PROTO_VERSION,
 						  MULTIMASTER_MIN_PROTO_VERSION,
 						  MtmReplicationModeName[mode],
-						  originStartPos
+						  receiver_ctx.session_id
 			);
 		res = PQexec(conn, query->data);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
@@ -607,9 +617,6 @@ pglogical_receiver_main(Datum main_arg)
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);
-
-		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
-		receiver_ctx.parallel_allowed = false;
 
 		for(;;)
 		{
