@@ -43,8 +43,8 @@ typedef struct HookFuncName
 
 typedef struct MtmDecoderPrivate
 {
-	int		magic; // XXX
 	bool	is_recovery;
+	bool	recovery_done;
 	int64	session_id;
 } MtmDecoderPrivate;
 

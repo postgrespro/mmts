@@ -470,16 +470,31 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 	 */
 	if (data->api && hooks_data->is_recovery)
 	{
-		MtmOutputPluginPrepareWrite(ctx, true, true);
-		data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
-		MtmOutputPluginWrite(ctx, true, true);
 
 		/*
-		 * This hook can be called mupltiple times when there is concurrent
-		 * load, so exit right after we wrote recovery message first time during
-		 * current recovery session.
+		 * Create safe point in our WAL so that recovered node will not lose
+		 * any transactions during switch to normal mode.
 		 */
-		proc_exit(0);
+		if (!hooks_data->recovery_done)
+		{
+			LWLockAcquire(MtmReceiverBarrier, LW_EXCLUSIVE);
+			hooks_data->recovery_done = true;
+		}
+		else if (MtmAllApplyWorkersFinished())
+		{
+			MtmOutputPluginPrepareWrite(ctx, true, true);
+			data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
+			MtmOutputPluginWrite(ctx, true, true);
+
+			LWLockRelease(MtmReceiverBarrier);
+
+			/*
+			* This hook can be called mupltiple times when there is concurrent
+			* load, so exit right after we wrote recovery message first time during
+			* current recovery session.
+			*/
+			proc_exit(0);
+		}
 	}
 }
 

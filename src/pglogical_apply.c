@@ -502,7 +502,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 	char const* messageBody = pq_getmsgbytes(s, messageSize);
 	bool standalone = false;
 
-	MtmBeginSession(MtmReplicationNodeId);
+	MtmBeginSession(receiver_ctx->node_id);
 
 	switch (action)
 	{

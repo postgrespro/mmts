@@ -180,6 +180,16 @@ class MtmClient(object):
         print("n_prepared = %d" % (n_prepared))
         return (n_prepared)
 
+    def list_prepared(self, node_id):
+        con = psycopg2.connect(self.dsns[node_id] + " application_name=mtm_admin")
+        cur = con.cursor()
+        cur.execute('select * from pg_prepared_xacts order by prepared;')
+        for pxact in cur.fetchall():
+            for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
+                print(pxact[i], end="\t")
+            print("\n")
+        print("----\n")
+
     def insert_counts(self):
         counts = []
 
@@ -308,13 +318,12 @@ class MtmClient(object):
             print(datetime.datetime.utcnow(), 'Isolation error, total ', self.total, ' -> ', total[0], ', node ', conn_i+1)
             self.total = total[0]
             print(self.oops)
-            # yield from cur.execute('select * from mtm.get_nodes_state()')
-            # nodes_state = yield from cur.fetchall()
-            # for i, col in enumerate(self.nodes_state_fields):
-            #     print("%17s" % col, end="\t")
-            #     for j in range(3):
-            #          print("%19s" % nodes_state[j][i], end="\t")
-            #     print("\n")
+            yield from cur.execute('select * from pg_prepared_xacts order by prepared;')
+            pxacts = yield from cur.fetchall()
+            for pxact in pxacts:
+                for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
+                    print(pxact[i], end="\t")
+                print("\n")
 
     def run(self):
         # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())

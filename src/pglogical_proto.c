@@ -708,6 +708,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
 	hooks_data->session_id = 0;
+	hooks_data->recovery_done = false;
+	hooks_data->is_recovery = false;
 
 	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
 

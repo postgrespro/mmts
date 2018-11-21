@@ -252,7 +252,8 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 	lsn_t local_flush = GetFlushRecPtr();
 	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
 
-	if (end_lsn != INVALID_LSN) {
+	if (end_lsn != INVALID_LSN)
+	{
 		/* Track commit lsn */
 		flushpos = (MtmFlushPosition *) palloc(sizeof(MtmFlushPosition));
 		flushpos->node_id = node_id;
@@ -260,15 +261,15 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 		flushpos->remote_end = end_lsn;
 		dlist_push_tail(&MtmLsnMapping, &flushpos->node);
 	}
+
 	MtmLock(LW_EXCLUSIVE);
 	dlist_foreach_modify(iter, &MtmLsnMapping)
 	{
 		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
 		if (flushpos->local_end <= local_flush)
 		{
-			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end) {
+			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end)
 				Mtm->nodes[node_id-1].flushPos = flushpos->remote_end;
-			}
 			dlist_delete(iter.cur);
 			pfree(flushpos);
 		} else {
@@ -280,15 +281,23 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 }
 
 static void
-MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx)
+MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool cddl)
 {
 	/* parallel_allowed should never be set during recovery */
 	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
 
-	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed)
+	// end_lsn
+
+	LWLockAcquire(MtmReceiverBarrier, LW_SHARED);
+
+	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || cddl)
 		MtmExecutor(work, size, receiver_ctx);
 	else
 		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size, receiver_ctx);
+
+	/* Our error handler can release lock */
+	if (LWLockHeldByMe(MtmReceiverBarrier))
+		LWLockRelease(MtmReceiverBarrier);
 }
 
 /*
@@ -766,10 +775,15 @@ pglogical_receiver_main(Datum main_arg)
 						ByteBufferReset(&buf);
 					}
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C'))) {
-						if (stmt[0] == 'M' && stmt[1] == 'C') { /* concurrent DDL should be executed by parallel workers */
-							MtmExecute(stmt, msg_len, &receiver_ctx);
-						} else {
-							MtmExecutor(stmt, msg_len, &receiver_ctx); /* all other messages can be processed by receiver itself */
+						if (stmt[0] == 'M' && stmt[1] == 'C')
+						{
+							/* concurrent DDL should be executed by parallel workers */
+							MtmExecute(stmt, msg_len, &receiver_ctx, true);
+						}
+						else
+						{
+							/* all other messages should be processed by receiver itself */
+							MtmExecute(stmt, msg_len, &receiver_ctx, false);
 						}
 					} else {
 						ByteBufferAppend(&buf, stmt, msg_len);
@@ -783,23 +797,13 @@ pglogical_receiver_main(Datum main_arg)
 									pq_sendint(&spill_info, buf.used, 4);
 									MtmSpillToFile(spill_file, buf.data, buf.used);
 									MtmCloseSpillFile(spill_file);
-									MtmExecute(spill_info.data, spill_info.len, &receiver_ctx);
+									MtmExecute(spill_info.data, spill_info.len, &receiver_ctx, false);
 									spill_file = -1;
 									resetStringInfo(&spill_info);
-								} else {
-									if (MtmPreserveCommitOrder && buf.used == msg_len) {
-										/* Perform commit-prepared and rollback-prepared requested directly in receiver */
-										// timestamp_t stop, start = MtmGetSystemTime();
-										MtmExecutor(buf.data, buf.used, &receiver_ctx);
-										// stop = MtmGetSystemTime();
-										// if (stop - start > USECS_PER_SEC) {
-										// 	elog(WARNING, "Commit of prepared transaction takes %lld usec, flags=%x", stop - start, stmt[1]);
-										// }
-									} else {
-										/* all other commits should be applied in place */
-										// Assert(stmt[1] == PGLOGICAL_PREPARE || stmt[1] == PGLOGICAL_COMMIT || stmt[1] == PGLOGICAL_PRECOMMIT_PREPARED);
-										MtmExecute(buf.data, buf.used, &receiver_ctx);
-									}
+								}
+								else
+								{
+									MtmExecute(buf.data, buf.used, &receiver_ctx, false);
 								}
 							} else if (spill_file >= 0) {
 								MtmCloseSpillFile(spill_file);

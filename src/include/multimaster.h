@@ -162,6 +162,7 @@ extern bool MtmBackgroundWorker;
 extern char* MtmRefereeConnStr;
 
 extern LWLock *MtmCommitBarrier;
+extern LWLock *MtmReceiverBarrier;
 
 extern void MtmXactCallback2(XactEvent event, void *arg);
 extern bool MtmIsUserTransaction(void);
@@ -194,5 +195,6 @@ extern void MtmUpdateControlFile(void);
 extern void MtmCheckSlots(void);
 
 extern TimestampTz MtmGetIncreasingTimestamp(void);
+extern bool MtmAllApplyWorkersFinished(void);
 
 #endif

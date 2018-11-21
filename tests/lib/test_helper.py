@@ -44,6 +44,7 @@ class TestHelper(object):
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
                 break
+            self.client.list_prepared(node_id)
             time.sleep(5)
             total_sleep += 5
 

@@ -124,6 +124,7 @@ static TransactionManager MtmTM =
 };
 
 LWLock *MtmCommitBarrier;
+LWLock *MtmReceiverBarrier;
 
 bool  MtmDoReplication;
 char* MtmDatabaseName;
@@ -601,6 +602,7 @@ static void MtmInitialize()
 	RegisterXactCallback(MtmXactCallback2, NULL);
 
 	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+1].lock);
+	MtmReceiverBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+2].lock);
 
 	MtmDoReplication = true;
 	TM = &MtmTM;
@@ -1188,7 +1190,7 @@ _PG_init(void)
 	 * resources in mtm_shmem_startup().
 	 */
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
-	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 1);
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 2);
 
 	MtmMonitorInitialize();
 
@@ -1837,3 +1839,28 @@ MtmWaitForExtensionCreation(void)
 		MtmSleep(USECS_PER_SEC);
 	}
 }
+
+bool
+MtmAllApplyWorkersFinished()
+{
+	int i;
+
+	for (i = 0; i < Mtm->nAllNodes; i++)
+	{
+		volatile int ntasks;
+
+		if (i == MtmNodeId - 1)
+			continue;
+
+		SpinLockAcquire(&Mtm->nodes[i].pool.lock);
+		ntasks = Mtm->nodes[i].pool.active + Mtm->nodes[i].pool.pending;
+		SpinLockRelease(&Mtm->nodes[i].pool.lock);
+
+		if (ntasks != 0)
+			false;
+	}
+
+	return true;
+}
+
+
