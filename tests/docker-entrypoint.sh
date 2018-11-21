@@ -59,6 +59,8 @@ if [ "$1" = 'postgres' ]; then
 			shared_preload_libraries = 'multimaster'
 			log_line_prefix = '%m [%p]: '
 			wal_writer_delay = 500ms
+			archive_mode = on
+			archive_command = '/bin/false'
 			# log_statement = all
 
 			multimaster.max_nodes = 3

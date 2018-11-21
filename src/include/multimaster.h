@@ -126,6 +126,7 @@ typedef struct
 typedef struct
 {
 	bool extension_created;
+	bool stop_new_commits;
 	bool recovered;
 	MtmNodeStatus status;              /* Status of this node */
 	char *statusReason;                /* A human-readable description of why the current status was set */

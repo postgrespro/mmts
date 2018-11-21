@@ -836,10 +836,12 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 			XLogRecPtr msg_xptr;
 			char *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
 
+			Mtm->stop_new_commits = true;
 			LWLockAcquire(MtmCommitBarrier, LW_EXCLUSIVE);
 			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
 			msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
 			LWLockRelease(MtmCommitBarrier);
+			Mtm->stop_new_commits = false;
 
 			XLogFlush(msg_xptr);
 		}

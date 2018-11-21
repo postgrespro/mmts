@@ -565,6 +565,7 @@ static void MtmInitialize()
 	{
 		MemSet(Mtm, 0, sizeof(MtmState) + sizeof(MtmNodeInfo)*(MtmMaxNodes-1));
 		Mtm->extension_created = false;
+		Mtm->stop_new_commits = false;
 		Mtm->recovered = false;
 		Mtm->status = MTM_DISABLED; //MTM_INITIALIZATION;
 		Mtm->recoverySlot = 0;

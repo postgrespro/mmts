@@ -163,6 +163,9 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	 *
 	 * See also comments at the end of MtmReplicationStartupHook().
 	 */
+	while (Mtm->stop_new_commits)
+		MtmSleep(USECS_PER_SEC);
+
 	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
 
 	MtmLock(LW_SHARED);
