@@ -150,6 +150,7 @@ class MtmClient(object):
 
     def is_data_identic(self):
         hashes = set()
+        hashes2 = set()
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
@@ -160,11 +161,17 @@ class MtmClient(object):
                 from
                     (select * from bank_test order by uid) t;""")
             hashes.add(cur.fetchone()[0])
+
+            cur.execute("""
+                select md5(string_agg(id, ','))
+                from (select id from insert_test order by id) t;""")
+            hashes2.add(cur.fetchone()[0])
             cur.close()
             con.close()
 
         print(hashes)
-        return (len(hashes) == 1)
+        print(hashes2)
+        return (len(hashes) == 1 and len(hashes2) == 1)
 
     def no_prepared_tx(self):
         n_prepared = 0
