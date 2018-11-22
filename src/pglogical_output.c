@@ -479,9 +479,11 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		{
 			LWLockAcquire(MtmReceiverBarrier, LW_EXCLUSIVE);
 			hooks_data->recovery_done = true;
+			mtm_log(ProtoTraceState, "Start building safe point to finish recovery");
 		}
 		else if (MtmAllApplyWorkersFinished())
 		{
+			mtm_log(ProtoTraceState, "Recovery finish safe point done");
 			MtmOutputPluginPrepareWrite(ctx, true, true);
 			data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
 			MtmOutputPluginWrite(ctx, true, true);

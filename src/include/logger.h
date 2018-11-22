@@ -57,6 +57,7 @@ typedef enum MtmLogTag
 	ProtoTraceTx			= DEBUG1,
 	ProtoTraceMode			= LOG,
 	ProtoTraceMessage		= LOG,
+	ProtoTraceState			= LOG,
 
 	/* receiver */
 	MtmReceiverMode			= LOG,
@@ -64,6 +65,7 @@ typedef enum MtmLogTag
 	MtmApplyMessage			= LOG,
 	MtmApplyTrace			= DEBUG2,
 	MtmApplyError			= LOG,
+	MtmApplyBgwFinish		= LOG,
 
 	/* state */
 	MtmStateSwitch			= LOG,

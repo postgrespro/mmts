@@ -138,7 +138,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
         for _ in range(10):
             aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
-                node_wait_for_commit=2, stop_load=True)
+                node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
             self.assertCommits(aggs_failure[:2])
             self.assertNoCommits(aggs_failure[2:])
@@ -148,7 +148,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.assertIsolation(aggs)
 
             aggs_failure, aggs = self.performFailure(CrashRecoverNode('node1'),
-                node_wait_for_commit=0, stop_load=True)
+                node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15432", stop_load=True)
 
             self.assertNoCommits(aggs_failure[0:1])  # [1]
             self.assertCommits(aggs_failure[1:]) # [2, 3]

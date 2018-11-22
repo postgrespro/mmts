@@ -1857,6 +1857,8 @@ MtmAllApplyWorkersFinished()
 		ntasks = Mtm->nodes[i].pool.active + Mtm->nodes[i].pool.pending;
 		SpinLockRelease(&Mtm->nodes[i].pool.lock);
 
+		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
+
 		if (ntasks != 0)
 			false;
 	}

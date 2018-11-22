@@ -2,6 +2,7 @@
 
 if [ "$1" = 'postgres' ]; then
 	mkdir -p "$PGDATA"
+	mkdir -p /pg/archive/
 	mkdir -p /pg/src/src/test/regress/testtablespace
 
 	# look specifically for PG_VERSION, as it is expected in the DB dir
@@ -48,31 +49,24 @@ if [ "$1" = 'postgres' ]; then
 
 
 		cat <<-EOF >> $PGDATA/postgresql.conf
-			listen_addresses='*' 
+			listen_addresses='*'
+			log_line_prefix = '%m [%p]: '
+			archive_mode = on
+			archive_command = 'cp %p /pg/archive/%f'
+
+			fsync = on
+
 			max_prepared_transactions = 100
-			synchronous_commit = on
-			fsync = off
 			wal_level = logical
 			max_worker_processes = 50
 			max_replication_slots = 10
 			max_wal_senders = 10
-			shared_preload_libraries = 'multimaster'
-			log_line_prefix = '%m [%p]: '
-			wal_writer_delay = 500ms
-			archive_mode = on
-			archive_command = '/bin/false'
-			# log_statement = all
 
+			shared_preload_libraries = 'multimaster'
 			multimaster.max_nodes = 3
 			multimaster.heartbeat_recv_timeout = 1100
 			multimaster.heartbeat_send_timeout = 250
-			multimaster.max_recovery_lag = 1GB
-			multimaster.min_recovery_lag = 10kB
-			multimaster.preserve_commit_order = on
-
 			multimaster.volkswagen_mode = on
-			multimaster.ignore_tables_without_pk = on
-			# partition_backend = 'internal'
 		EOF
 
 		if [ -n "$NODE_ID" ]; then

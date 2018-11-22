@@ -39,7 +39,7 @@ class TestHelper(object):
         total_sleep = 0
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
-            aggs = self.client.get_aggregates(clean=False, _print=False)
+            aggs = self.client.get_aggregates(clean=False, _print=True)
             print('=== ',aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
