@@ -49,7 +49,7 @@
 #include "spill.h"
 #include "state.h"
 #include "bgwpool.h"
-#include "compat.h"
+#include "common/pg_socket.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
