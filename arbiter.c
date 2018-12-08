@@ -66,7 +66,7 @@
 #include "common/ip.h"
 #include "pgstat.h"
 
-#include "compat.h"
+#include "common/pg_socket.h"
 
 #ifndef USE_EPOLL
 #ifdef __linux__

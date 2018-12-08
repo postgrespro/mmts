@@ -83,7 +83,7 @@
 #include "ddd.h"
 #include "state.h"
 
-#include "compat.h"
+#include "common/pg_socket.h"
 
 typedef struct {
 	TransactionId xid;	  /* local transaction ID	*/
