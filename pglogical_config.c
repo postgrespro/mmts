@@ -157,7 +157,6 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 		/* Check each param, whether or not we recognise it */
 		switch(get_param_key(elem->defname))
 		{
-			val = get_param_value(elem, false, OUTPUT_PARAM_TYPE_UINT32);
 
 			case PARAM_BINARY_BIGENDIAN:
 				val = get_param_value(elem, false, OUTPUT_PARAM_TYPE_BOOL);

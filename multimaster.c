@@ -3370,7 +3370,7 @@ void MtmFinishPreparedTransaction(MtmTransState* ts, bool commit)
 	if (!insideTransaction) {
 		CommitTransactionCommand();
 		Assert(!MtmTx.isActive);
-		Assert(ts->status == commit ? TRANSACTION_STATUS_COMMITTED : TRANSACTION_STATUS_ABORTED);
+		Assert(ts->status == ( commit ? TRANSACTION_STATUS_COMMITTED : TRANSACTION_STATUS_ABORTED));
 	}
 
 	MtmLock(LW_EXCLUSIVE);
