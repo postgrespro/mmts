@@ -4662,7 +4662,7 @@ static bool MtmTwoPhaseCommit(MtmCurrentTrans* x)
 		MtmGenerateGid(x->gid);
 
 		if (!x->isTransactionBlock) {
-			BeginTransactionBlock();
+			BeginTransactionBlock(false);
 			x->isTransactionBlock = true;
 			CommitTransactionCommand();
 			StartTransactionCommand();

@@ -1,7 +1,8 @@
 
 #ifndef MTMCOMPAT_H
 #define MTMCOMPAT_H
-
+#include "pg_config.h"
+#ifndef WITH_RSOCKET
 /* Allow use of rdma functions on non-rdma enabled postgres */
 #define pg_socket(a, b, c, d) socket(a, b, c)
 #define pg_setsockopt(a, b, c, d, e, f) setsockopt(a, b, c, d, e)
@@ -18,5 +19,8 @@
 
 #define PQselect(a, b, c, d, e, f) select(a, b, c, d, e)
 #define PQisRsocket(a) false
+#else
+#include "common/pg_socket.h"
+#endif
 
 #endif							/* MTMCOMPAT_H */

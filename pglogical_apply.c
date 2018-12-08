@@ -824,7 +824,7 @@ process_remote_commit(StringInfo in)
 				AbortCurrentTransaction();
 			} else { 				
 				/* prepare TBLOCK_INPROGRESS state for PrepareTransactionBlock() */
-				BeginTransactionBlock();
+				BeginTransactionBlock(false);
 				CommitTransactionCommand();
 				StartTransactionCommand();
 				
