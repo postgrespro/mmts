@@ -38,6 +38,7 @@
 #include "utils/memutils.h"
 #include "executor/spi.h"
 #include "replication/origin.h"
+#include "replication/slot.h"
 #include "utils/portal.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
@@ -54,10 +55,13 @@
 #include "resolver.h"
 #include "logger.h"
 #include "compat.h"
+#include "syncpoint.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
 #define STATUS_POLL_DELAY USECS_PER_SEC
+
+bool MtmIsReceiver;
 
 typedef enum
 {
@@ -281,16 +285,14 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 }
 
 static void
-MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool cddl)
+MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 {
 	/* parallel_allowed should never be set during recovery */
 	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
 
-	// end_lsn
-
 	LWLockAcquire(MtmReceiverBarrier, LW_SHARED);
 
-	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || cddl)
+	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || no_pool)
 		MtmExecutor(work, size, receiver_ctx);
 	else
 		BgwPoolExecute(&Mtm->nodes[MtmReplicationNodeId-1].pool, work, size, receiver_ctx);
@@ -309,18 +311,17 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool cddl)
  * that replica do not receive deteriorated data.
  */
 static bool
-MtmFilterTransaction(char *record, int size)
+MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_map)
 {
 	StringInfoData s;
 	uint8		event;
-	lsn_t		origin_lsn;
-	lsn_t		end_lsn;
-	lsn_t		tx_lsn;
+	XLogRecPtr		origin_lsn;
+	XLogRecPtr		end_lsn;
+	XLogRecPtr		tx_lsn;
 	int			replication_node;
 	int			origin_node;
 	char const* gid = "";
 	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
-	bool		duplicate = false;
 
 	s.data = record;
 	s.len = size;
@@ -339,6 +340,10 @@ MtmFilterTransaction(char *record, int size)
 	origin_node = pq_getmsgbyte(&s);
 	origin_lsn = pq_getmsgint64(&s);
 
+	/* Skip all transactions from our node */
+	if (origin_node == MtmNodeId)
+		return true;
+
 	switch (event)
 	{
 		case PGLOGICAL_PREPARE:
@@ -351,22 +356,37 @@ MtmFilterTransaction(char *record, int size)
 			gid = pq_getmsgstring(&s);
 			break;
 		default:
+			// XXX: notreached?
 			break;
 	}
 
 	Assert(replication_node == MtmReplicationNodeId);
 	tx_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
 
-	if (Mtm->nodes[origin_node-1].restartLSN >= tx_lsn)
+	if (tx_lsn <= spvector[origin_node-1].origin_lsn)
 	{
-		duplicate = true;
 		mtm_log(MtmReceiverFilter,
-				"Filter transaction %s from node %d event=%x (restrt=%llx, tx=%lld)",
+				"Filter transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%"INT64_MODIFIER"x)",
 				gid, replication_node, event,
-				Mtm->nodes[origin_node-1].restartLSN, tx_lsn);
+				spvector[origin_node-1].origin_lsn, tx_lsn);
+		return true;
 	}
+	else
+	{
+		FilterEntry	entry = {origin_node, tx_lsn};
+		bool		found;
 
-	return duplicate;
+		hash_search(filter_map, &entry, HASH_FIND, &found);
+
+		{
+			mtm_log(MtmReceiverFilter,
+				"Filter (map) transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%d/%"INT64_MODIFIER"x) -> %d",
+				gid, replication_node, event,
+				spvector[origin_node-1].origin_lsn, origin_node, tx_lsn, found);
+		}
+
+		return found;
+	}
 }
 
 /*
@@ -428,6 +448,8 @@ MtmBeginSession(int nodeId)
 	Assert(replorigin_session_origin == InvalidRepOriginId);
 	replorigin_session_origin = Mtm->nodes[nodeId-1].originId;
 	Assert(replorigin_session_origin != InvalidRepOriginId);
+
+	// XXX: that is expensive! better to switch only in recovery
 	replorigin_session_setup(replorigin_session_origin);
 }
 
@@ -467,20 +489,20 @@ pglogical_receiver_main(Datum main_arg)
 	static PortalData fakePortal;
 	int i;
 
+	MtmIsReceiver = true;
+
+	// XXX: get rid of that
 	MtmBackgroundWorker = true;
+	MtmIsLogicalReceiver = true;
 
 	ByteBufferAlloc(&buf);
 
 	slotName = psprintf(MULTIMASTER_SLOT_PATTERN, MtmNodeId);
 
-	MtmIsLogicalReceiver = true;
-
 	initStringInfo(&spill_info);
 
 	/* Register functions for SIGTERM/SIGHUP management */
 	pqsignal(SIGHUP, receiver_raw_sighup);
-	// pqsignal(SIGTERM, receiver_raw_sigterm);
-	// XXX: also need to unlock overflow semaphore (or rewrite it on latches)
 	pqsignal(SIGTERM, die);
 
 	MtmCreateSpillDirectory(nodeId);
@@ -504,7 +526,7 @@ pglogical_receiver_main(Datum main_arg)
 	BgwPoolStart(&Mtm->nodes[nodeId-1].pool, worker_proc);
 
 	/*
-	 * Set proper restartLsn for all origins
+	 * Create/load origin_ids.
 	 */
 	MtmLock(LW_EXCLUSIVE);
 	for (i = 0; i < Mtm->nAllNodes; i++)
@@ -515,15 +537,33 @@ pglogical_receiver_main(Datum main_arg)
 		StartTransactionCommand();
 		originName = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
 		originId = replorigin_by_name(originName, true);
-		if (originId == InvalidRepOriginId) {
+
+		if (originId == InvalidRepOriginId)
+		{
+			char	   *slot_name = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, i + 1);
+
+			/* Create recovery slot to hold WAL files that we may need during recovery */
+
+			// XXX: reporigin isn't really necessary here, now it just signals about
+			// created recovery slot
 			originId = replorigin_create(originName);
+			ReplicationSlotCreate(slot_name, false, RS_PERSISTENT);
+			ReplicationSlotReserveWal();
+
+			/* Write this slot to disk */
+			ReplicationSlotMarkDirty();
+			ReplicationSlotSave();
+			ReplicationSlotRelease();
 		}
 		CommitTransactionCommand();
-		if (Mtm->nodes[i].restartLSN == INVALID_LSN)
-			Mtm->nodes[i].restartLSN = replorigin_get_progress(originId, true);
 		Mtm->nodes[i].originId = originId;
 	}
 	MtmUnlock();
+
+	/* Acquire recovery rep slot, so we can advance it without search */
+	ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
+									nodeId),
+							true);
 
 	/* This is main loop of logical replication.
 	 * In case of errors we will try to reestablish connection.
@@ -533,8 +573,10 @@ pglogical_receiver_main(Datum main_arg)
 	{
 		int	 count;
 		ConnStatusType status;
-		lsn_t originStartPos;
 		int timeline;
+		XLogRecPtr		remote_start = InvalidXLogRecPtr;
+		Syncpoint	   *spvector = NULL;
+		HTAB		   *filter_map = NULL;
 
 		/*
 		 * Determine when and how we should open replication slot.
@@ -542,23 +584,13 @@ pglogical_receiver_main(Datum main_arg)
 		 * Slots at other nodes should be removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
-		mtm_log(MtmReceiverMode, "WalReceiver to %d starts in %s mode",
-				nodeId, MtmReplicationModeName[mode]);
 
+		// XXX: delete unnecessary modes
 		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);
+
+		// XXX: avoid that
 		timeline = Mtm->nodes[nodeId-1].timeline;
 		count = Mtm->recoveryCount;
-
-
-		/* Set proper restartLSN for filtering */
-		for (i = 0; i < Mtm->nAllNodes; i++)
-		{
-			if (i == MtmNodeId - 1)
-				continue;
-			Mtm->nodes[i].restartLSN = replorigin_get_progress(Mtm->nodes[i].originId, false);
-			mtm_log(MtmReceiverMode, "Node %d restartLSN = %llx",
-					i + 1, Mtm->nodes[i].restartLSN);
-		}
 
 		/* Establish connection to remote server */
 		conn = PQconnectdb_safe(connString, 0);
@@ -570,17 +602,11 @@ pglogical_receiver_main(Datum main_arg)
 			goto OnError;
 		}
 
+		/* Create new slot if needed */
 		query = createPQExpBuffer();
-
-		/* Start logical replication at specified position */
-		originStartPos = Mtm->nodes[nodeId-1].restartLSN;
-		if (originStartPos == INVALID_LSN || Mtm->nodes[nodeId-1].manualRecovery) {
-			/*
-			 * We are just creating new replication slot.
-			 * It is assumed that state of local and remote nodes is the same at this moment.
-			 * They are either empty, either new node is synchronized using base_backup.
-			 * So we assume that LSNs are the same for local and remote node
-			 */
+		if (replorigin_get_progress(Mtm->nodes[nodeId -1].originId, false) == INVALID_LSN ||
+			Mtm->nodes[nodeId-1].manualRecovery)
+		{
 			appendPQExpBuffer(query, "CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\"", slotName, MULTIMASTER_NAME);
 			res = PQexec(conn, query->data);
 			if (PQresultStatus(res) != PGRES_TUPLES_OK)
@@ -603,6 +629,44 @@ pglogical_receiver_main(Datum main_arg)
 		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
 		receiver_ctx.parallel_allowed = false;
 
+		if (receiver_ctx.is_recovery)
+		{
+			spvector = SyncpointGetAllLatest();
+			filter_map = RecoveryFilterLoad(-1, spvector);
+			remote_start = QueryRecoveryHorizon(conn, receiver_ctx.node_id, spvector);
+		}
+		else
+		{
+			spvector = palloc0(MtmMaxNodes * sizeof(Syncpoint));
+			spvector[receiver_ctx.node_id - 1] = SyncpointGetLatest(receiver_ctx.node_id);
+			filter_map = RecoveryFilterLoad(receiver_ctx.node_id, spvector);
+			remote_start = spvector[receiver_ctx.node_id - 1].origin_lsn;
+		}
+
+		/* log our intentions */
+		{
+			int		i;
+			StringInfo message = makeStringInfo();
+
+			appendStringInfoString(message, "%s starting receiver:\n");
+			appendStringInfo(message, "\t replication_node = %d\n", receiver_ctx.node_id);
+			appendStringInfo(message, "\t mode = %s\n", MtmReplicationModeName[mode]);
+			appendStringInfo(message, "\t remote_start = %"INT64_MODIFIER"x\n", remote_start);
+
+			appendStringInfo(message, "\t syncpoint_vector (origin/local) = {");
+			for (i = 0; i < Mtm->nAllNodes - 1; i++)
+			{
+				appendStringInfo(message, "%"INT64_MODIFIER"x/%"INT64_MODIFIER"x, ",
+								 spvector[i].origin_lsn, spvector[i].local_lsn);
+			}
+			appendStringInfo(message, "%"INT64_MODIFIER"x/%"INT64_MODIFIER"x}",
+							 spvector[i].origin_lsn, spvector[i].local_lsn);
+
+			elog(MtmReceiverStart, message->data, MTM_TAG);
+		}
+
+		Assert(filter_map && spvector);
+
 		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x ("
 									"\"startup_params_format\" '1',"
 									"\"max_proto_version\" '%d',"
@@ -611,8 +675,8 @@ pglogical_receiver_main(Datum main_arg)
 									"\"mtm_replication_mode\" '%s',"
 									"\"mtm_session_id\" '"INT64_FORMAT"')",
 						  slotName,
-						  (uint32) (originStartPos >> 32),
-						  (uint32) originStartPos,
+						  (uint32) (remote_start >> 32),
+						  (uint32) remote_start,
 						  MULTIMASTER_MAX_PROTO_VERSION,
 						  MULTIMASTER_MIN_PROTO_VERSION,
 						  MtmReplicationModeName[mode],
@@ -729,7 +793,7 @@ pglogical_receiver_main(Datum main_arg)
 					{
 						int64 now = feGetCurrentTimestamp();
 
-						MtmUpdateLsnMapping(nodeId, walEnd);
+						// MtmUpdateLsnMapping(nodeId, walEnd);
 						/* Leave if feedback is not sent properly */
 						if (!sendFeedback(conn, now, nodeId)) {
 							goto OnError;
@@ -774,22 +838,22 @@ pglogical_receiver_main(Datum main_arg)
 						MtmSpillToFile(spill_file, buf.data, buf.used);
 						ByteBufferReset(&buf);
 					}
-					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C'))) {
+					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S' ))) {
 						if (stmt[0] == 'M' && stmt[1] == 'C')
 						{
 							/* concurrent DDL should be executed by parallel workers */
-							MtmExecute(stmt, msg_len, &receiver_ctx, true);
+							MtmExecute(stmt, msg_len, &receiver_ctx, false);
 						}
 						else
 						{
 							/* all other messages should be processed by receiver itself */
-							MtmExecute(stmt, msg_len, &receiver_ctx, false);
+							MtmExecute(stmt, msg_len, &receiver_ctx, true);
 						}
 					} else {
 						ByteBufferAppend(&buf, stmt, msg_len);
 						if (stmt[0] == 'C') /* commit */
 						{
-							if (!MtmFilterTransaction(stmt, msg_len))
+							if (!MtmFilterTransaction(stmt, msg_len, spvector, filter_map))
 							{
 								if (spill_file >= 0) {
 									ByteBufferAppend(&buf, ")", 1);
@@ -911,8 +975,11 @@ pglogical_receiver_main(Datum main_arg)
 		}
 		Assert(false);
 
-
+	// XXX: catch and re-throw here. Then we just will restart
 	OnError:
+		if (spvector)
+			pfree(spvector);
+		hash_destroy(filter_map);
 		ByteBufferReset(&buf);
 		PQfinish(conn);
 		if (Mtm->recoverySlot == nodeId)

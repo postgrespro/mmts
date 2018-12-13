@@ -22,6 +22,7 @@ typedef void (*pglogical_write_rel_fn)(StringInfo out, struct PGLogicalOutputDat
 typedef void (*pglogical_write_begin_fn)(StringInfo out, struct PGLogicalOutputData *data,
 							 ReorderBufferTXN *txn);
 typedef void (*pglogical_write_message_fn)(StringInfo out, LogicalDecodingContext *ctx,
+					XLogRecPtr end_lsn,
 					const char *prefix, Size sz, const char *message);
 typedef void (*pglogical_write_commit_fn)(StringInfo out, struct PGLogicalOutputData *data,
 							 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);

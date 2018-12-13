@@ -642,7 +642,7 @@ pg_decode_message(LogicalDecodingContext *ctx,
 	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
 
 	MtmOutputPluginPrepareWrite(ctx, true, !transactional);
-	data->api->write_message(ctx->out, ctx, prefix, sz, message);
+	data->api->write_message(ctx->out, ctx, lsn, prefix, sz, message);
 	MtmOutputPluginWrite(ctx, true, !transactional);
 }
 

@@ -205,6 +205,7 @@ static void pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ct
 
 static void
 pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
+						XLogRecPtr end_lsn,
 						const char *prefix, Size sz, const char *message)
 {
 	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
@@ -261,6 +262,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 
 	pq_sendbyte(out, 'M');
 	pq_sendbyte(out, *prefix);
+	pq_sendint64(out, end_lsn);
 	pq_sendint(out, sz, 4);
 	pq_sendbytes(out, message, sz);
 }
@@ -379,6 +381,7 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn)
 		{
 			mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
 			i = MtmNodeId - 1;
+			Assert(false);
 		}
 		else
 		{
@@ -814,7 +817,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	else
 	{
 		mtm_log(ProtoTraceMode,
-				"Walsender starts in recovered mode to node %d",
+				"Walsender starting in recovered mode to node %d",
 				MtmReplicationNodeId);
 
 		/*
@@ -845,6 +848,10 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 			XLogFlush(msg_xptr);
 		}
+
+		mtm_log(ProtoTraceMode,
+				"Walsender started in recovered mode to node %d",
+				MtmReplicationNodeId);
 	}
 
 

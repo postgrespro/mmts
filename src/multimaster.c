@@ -125,6 +125,7 @@ static TransactionManager MtmTM =
 
 LWLock *MtmCommitBarrier;
 LWLock *MtmReceiverBarrier;
+LWLock *MtmSyncpointLock;
 
 bool  MtmDoReplication;
 char* MtmDatabaseName;
@@ -581,6 +582,7 @@ static void MtmInitialize()
 		Mtm->pglogicalSenderMask = 0;
 		Mtm->recoveryCount = 0;
 		Mtm->localTablesHashLoaded = false;
+		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
 		for (i = 0; i < MtmMaxNodes; i++)
 		{
@@ -595,6 +597,9 @@ static void MtmInitialize()
 		}
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
+
+
+		// XXX: not used anymore
 		Mtm->nodes[MtmNodeId-1].restartLSN = (lsn_t)PG_UINT64_MAX;
 
 		MtmTx.xid = InvalidTransactionId;
@@ -604,6 +609,7 @@ static void MtmInitialize()
 
 	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+1].lock);
 	MtmReceiverBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+2].lock);
+	MtmSyncpointLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+3].lock);
 
 	MtmDoReplication = true;
 	TM = &MtmTM;
@@ -1191,7 +1197,7 @@ _PG_init(void)
 	 * resources in mtm_shmem_startup().
 	 */
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
-	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 2);
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 3);
 
 	MtmMonitorInitialize();
 

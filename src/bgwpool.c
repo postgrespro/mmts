@@ -18,6 +18,8 @@
 #include "mm.h"
 #include "logger.h"
 
+bool MtmIsPoolWorker;
+
 bool MtmIsLogicalReceiver;
 int  MtmMaxWorkers;
 
@@ -50,6 +52,9 @@ BgwPoolMainLoop(BgwPool* pool)
 
 	mtm_log(BgwPoolEvent, "Start background worker %d, shutdown=%d", MyProcPid, pool->shutdown);
 
+	MtmIsPoolWorker = true;
+
+	// XXX: get rid of that
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
 	MtmPool = pool;
@@ -74,6 +79,8 @@ BgwPoolMainLoop(BgwPool* pool)
 		}
 
 		PGSemaphoreLock(pool->available);
+
+		// XXX: change to LWLock
 		SpinLockAcquire(&pool->lock);
 		if (pool->shutdown)
 		{
@@ -123,6 +130,8 @@ BgwPoolMainLoop(BgwPool* pool)
 		pool->active -= 1;
 		pool->lastPeakTime = 0;
 		SpinLockRelease(&pool->lock);
+
+		ConditionVariableBroadcast(&pool->syncpoint_cv);
 	}
 
 	SpinLockRelease(&pool->lock);
@@ -144,6 +153,7 @@ void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  c
 	PGSemaphoreReset(pool->available);
 	PGSemaphoreReset(pool->overflow);
     SpinLockInit(&pool->lock);
+	ConditionVariableInit(&pool->syncpoint_cv);
 	pool->shutdown = false;
     pool->producerBlocked = false;
     pool->head = 0;

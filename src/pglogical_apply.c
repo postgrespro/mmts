@@ -31,6 +31,7 @@
 
 #include "parser/parse_type.h"
 
+#include "replication/message.h"
 #include "replication/logical.h"
 #include "replication/origin.h"
 
@@ -64,6 +65,7 @@
 #include "logger.h"
 #include "ddl.h"
 #include "receiver.h"
+#include "syncpoint.h"
 
 typedef struct TupleData
 {
@@ -494,14 +496,102 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	return true;
 }
 
+static void
+process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received_end_lsn)
+{
+	int			rc;
+	int			origin_node;
+	XLogRecPtr	origin_lsn,
+				local_lsn,
+				trim_lsn;
+
+	Assert(MtmIsReceiver && !MtmIsPoolWorker);
+
+	mtm_log(SyncpointApply, "Syncpoint: await for parallel workers to finish");
+
+	/*
+	 * Await for our pool workers to finish what they are currently doing.
+	 *
+	 * XXX: that is quite performance-sensitive. Much better solution
+	 * would be a barried before processing prepare/commit which will
+	 * delay all transaction with bigger lsn that this syncpoint but will
+	 * allow previous transactions to proceed. This way we will not delay
+	 * application of transaction bodies, just prepare record itself.
+	 */
+	for(;;)
+	{
+		int ntasks;
+
+		SpinLockAcquire(&Mtm->nodes[rctx->node_id-1].pool.lock);
+		ntasks = Mtm->nodes[rctx->node_id-1].pool.active +
+				 Mtm->nodes[rctx->node_id-1].pool.pending;
+		SpinLockRelease(&Mtm->nodes[rctx->node_id-1].pool.lock);
+
+		Assert(ntasks >= 0);
+		if (ntasks == 0)
+			break;
+
+		ConditionVariableSleep(&Mtm->nodes[rctx->node_id-1].pool.syncpoint_cv,
+			PG_WAIT_EXTENSION);
+	}
+	ConditionVariableCancelSleep();
+
+	/*
+	 * Postgres decoding API doesn't disclose origin info about logical messages,
+	 * so we have to work around it. Any receiver of original message writes it
+	 * in slighly different format (prefixed with 'F' and origin info) so the readers
+	 * of forwarded messages can distinguish them from original messages and set
+	 * proper node_id and origin_lsn.
+	 */
+	if (msg[0] == 'F')
+	{
+		/* forwarded, parse and save as is */
+		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
+					&origin_lsn, &trim_lsn);
+		Assert(rc == 3);
+
+		/* skip our own syncpoints */
+		if (origin_node == MtmNodeId)
+			return;
+
+		local_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+	}
+	else
+	{
+		char	   *new_msg;
+
+		/* direct, save with it lsn and 'F' prefix */
+		origin_lsn = received_end_lsn;
+		origin_node = rctx->node_id;
+		rc = sscanf(msg, UINT64_FORMAT, &trim_lsn);
+		Assert(rc == 1);
+		Assert(origin_node != MtmNodeId);
+
+		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
+						   origin_node, origin_lsn, trim_lsn);
+		local_lsn = LogLogicalMessage("S", new_msg, strlen(new_msg) + 1, false);
+		pfree(new_msg);
+	}
+
+	Assert(rctx->is_recovery || rctx->node_id == origin_node);
+
+	SyncpointRegister(origin_node, origin_lsn, local_lsn, trim_lsn);
+
+	MtmUpdateLsnMapping(origin_node, origin_lsn);
+}
+
+// XXX: process messages that should run in receiver itself in separate
+// function in receiver
 static bool
 process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 {
 	char action = pq_getmsgbyte(s);
+	XLogRecPtr record_lsn = pq_getmsgint64(s);
 	int messageSize = pq_getmsgint(s, 4);
 	char const* messageBody = pq_getmsgbytes(s, messageSize);
 	bool standalone = false;
 
+	// XXX: during recovery this is wrong, as we receive forwarded txes
 	MtmBeginSession(receiver_ctx->node_id);
 
 	switch (action)
@@ -525,6 +615,11 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		}
 		case 'L':
 		{
+			// XXX: new syncpoints machinery can block receiver, so that we
+			// won't be able to process deadlock messages. If all nodes are doing
+			// syncpoint simultaneously and deadlock happens exactly in this time
+			// we will not be able to resolve it. Proper solution is to move DDD
+			// messages to dmq.
 			mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
 			MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
 			standalone = true;
@@ -534,10 +629,13 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		{
 			int64 session_id = 0;
 
+			mtm_log(MtmApplyMessage, "Executing parallel-safe message from %d: %s",
+					receiver_ctx->node_id, messageBody);
+
 			sscanf(messageBody, INT64_FORMAT, &session_id);
 
 			Assert(session_id > 0);
-			// XXX assert that it is receiver itself
+			Assert(MtmIsReceiver && !MtmIsPoolWorker);
 
 			if (receiver_ctx->session_id == session_id)
 			{
@@ -549,6 +647,19 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 				receiver_ctx->parallel_allowed = true;
 				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
 			}
+			standalone = true;
+			break;
+		}
+		/* create syncpoint */
+		case 'S':
+		{
+			mtm_log(MtmApplyMessage, "Executing syncpoint message from %d: %s",
+					receiver_ctx->node_id, messageBody);
+
+			// XXX: during recovery end_lsn is wrong, as we receive forwarded txes
+			process_syncpoint(receiver_ctx, messageBody, record_lsn);
+
+			// XXX: clear filter_map
 			standalone = true;
 			break;
 		}
@@ -818,9 +929,18 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			/* PREPARE itself */
 			res = PrepareTransactionBlock(gid);
 			mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
-			CommitTransactionCommand();
 
+			/*
+			 * Clean this before CommitTransactionCommand(). Otherwise we'll
+			 * have a time window where exception handler will try to call
+			 * MtmDeadlockDetectorRemoveXact() with InvalidTransactionId,
+			 * because there is already no active transaction.
+			 */
+			current_gtid->node = 0;
+			current_gtid->xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
+
+			CommitTransactionCommand();
 
 			if (receiver_ctx->parallel_allowed)
 			{
@@ -830,10 +950,10 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			MtmEndSession(origin_node, true);
 
-			mtm_log(MtmApplyTrace, "PGLOGICAL_PREPARE %s", gid);
+			mtm_log(MtmApplyTrace,
+				"Prepare transaction %s event=%d origin=(%d, %llx)", gid, event,
+				origin_node, origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn);
 
-			current_gtid->node = 0;
-			current_gtid->xid = InvalidTransactionId;
 			break;
 		}
 		case PGLOGICAL_COMMIT_PREPARED:
@@ -876,13 +996,11 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			Assert(false);
 	}
 
-	if (!receiver_ctx->parallel_allowed)
+	if (!receiver_ctx->is_recovery)
 	{
-		// XXX
-		elog(LOG, "Recover transaction %s event=%d", gid, event);
+		Assert(replorigin_session_origin == InvalidRepOriginId);
+		MaybeLogSyncpoint();
 	}
-
-	MtmUpdateLsnMapping(MtmReplicationNodeId, end_lsn);
 }
 
 static int

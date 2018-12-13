@@ -22,6 +22,7 @@
 #include "logger.h"
 #include "ddl.h"
 #include "state.h"
+#include "syncpoint.h"
 
 static Oid		MtmDatabaseId;
 static bool		DmqSubscribed;
@@ -209,6 +210,8 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	dmq_stream_unsubscribe(stream);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
+
+	MaybeLogSyncpoint();
 
 	return true;
 }

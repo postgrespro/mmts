@@ -4,7 +4,7 @@ OBJS = src/multimaster.o src/dmq.o src/commit.o src/bytebuf.o src/bgwpool.o \
 src/pglogical_output.o src/pglogical_proto.o src/pglogical_receiver.o \
 src/pglogical_apply.o src/pglogical_hooks.o src/pglogical_config.o \
 src/pglogical_relid_map.o src/ddd.o src/bkb.o src/spill.o src/state.o \
-src/resolver.o src/ddl.o
+src/resolver.o src/ddl.o src/syncpoint.o
 MODULE_big = multimaster
 
 ifdef USE_PGXS

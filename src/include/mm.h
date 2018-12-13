@@ -51,6 +51,8 @@ typedef struct
 	bool is_recovery;
 	bool parallel_allowed;
 	TimestampTz session_id;
+	// XXX
+	XLogRecPtr end_lsn;
 } MtmReceiverContext;
 
 /* XXX: drop that */
@@ -66,6 +68,9 @@ typedef ulong64 nodemask_t;
 #define ALL_BITS ((nodemask_t)~0)
 
 extern bool				MtmIsLogicalReceiver;
+extern bool				MtmIsReceiver;
+extern bool				MtmIsPoolWorker;
+
 extern bool				MtmBackgroundWorker;
 extern int				MtmMaxNodes;
 extern int				MtmNodeId;

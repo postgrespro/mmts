@@ -15,6 +15,7 @@
 
 #define MULTIMASTER_NAME                 "multimaster"
 #define MULTIMASTER_SLOT_PATTERN         "mtm_slot_%d"
+#define MULTIMASTER_RECOVERY_SLOT_PATTERN "mtm_recovery_slot_%d"
 #define MULTIMASTER_MIN_PROTO_VERSION    1
 #define MULTIMASTER_MAX_PROTO_VERSION    1
 #define MULTIMASTER_MAX_GID_SIZE         42
@@ -27,6 +28,7 @@
 #define MULTIMASTER_ADMIN                "mtm_admin"
 #define MULTIMASTER_PRECOMMITTED         "precommitted"
 #define MULTIMASTER_PREABORTED           "preaborted"
+#define MULTIMASTER_SYNCPOINT_INTERVAL    10*1024*1024
 
 #define MULTIMASTER_DEFAULT_ARBITER_PORT 5433
 
@@ -128,6 +130,7 @@ typedef struct
 	bool extension_created;
 	bool stop_new_commits;
 	bool recovered;
+	XLogRecPtr latestSyncpoint;
 	MtmNodeStatus status;              /* Status of this node */
 	char *statusReason;                /* A human-readable description of why the current status was set */
 	int recoverySlot;                  /* NodeId of recovery slot or 0 if none */
@@ -164,6 +167,7 @@ extern char* MtmRefereeConnStr;
 
 extern LWLock *MtmCommitBarrier;
 extern LWLock *MtmReceiverBarrier;
+extern LWLock *MtmSyncpointLock;
 
 extern void MtmXactCallback2(XactEvent event, void *arg);
 extern bool MtmIsUserTransaction(void);

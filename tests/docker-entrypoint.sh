@@ -61,6 +61,7 @@ if [ "$1" = 'postgres' ]; then
 			max_worker_processes = 50
 			max_replication_slots = 10
 			max_wal_senders = 10
+			# log_statement = all
 
 			shared_preload_libraries = 'multimaster'
 			multimaster.max_nodes = 3

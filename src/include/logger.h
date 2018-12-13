@@ -60,8 +60,8 @@ typedef enum MtmLogTag
 	ProtoTraceState			= LOG,
 
 	/* receiver */
-	MtmReceiverMode			= LOG,
-	MtmReceiverFilter		= LOG,
+	MtmReceiverStart		= LOG,
+	MtmReceiverFilter		= DEBUG2,
 	MtmApplyMessage			= LOG,
 	MtmApplyTrace			= DEBUG2,
 	MtmApplyError			= LOG,
@@ -69,7 +69,11 @@ typedef enum MtmLogTag
 
 	/* state */
 	MtmStateSwitch			= LOG,
-	MtmStateMessage			= LOG
+	MtmStateMessage			= LOG,
+
+	/* syncpoints */
+	SyncpointCreated		= LOG,
+	SyncpointApply			= LOG,
 } MtmLogTag;
 
 // XXX: also meaningful process name would be cool

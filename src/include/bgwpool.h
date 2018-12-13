@@ -5,6 +5,7 @@
 #include "storage/spin.h"
 #include "storage/pg_sema.h"
 #include "postmaster/bgworker.h"
+#include "storage/condition_variable.h"
 #include "bkb.h" // XXX
 
 #include "mm.h"
@@ -30,6 +31,7 @@ typedef struct
     volatile slock_t lock;
 	PGSemaphore available;
 	PGSemaphore overflow;
+	ConditionVariable syncpoint_cv;
     size_t head;
     size_t tail;
     size_t size;
