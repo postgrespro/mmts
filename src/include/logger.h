@@ -27,6 +27,7 @@ typedef enum MtmLogTag
 	DmqTraceOutgoing		= DEBUG2,
 	DmqTraceIncoming		= DEBUG2,
 	DmqTraceShmMq			= DEBUG1,
+	DmqPqTiming				= LOG,
 
 	/* resolver */
 	ResolverTasks			= LOG,

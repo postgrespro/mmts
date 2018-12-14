@@ -519,10 +519,14 @@ dmq_sender_main(Datum main_arg)
 				/* Idle --> Connecting */
 				if (conns[conn_id].active && conns[conn_id].state == Idle)
 				{
+					double		pqtime;
+
 					if (conns[conn_id].pgconn)
 						PQfinish(conns[conn_id].pgconn);
 
+					pqtime = dmq_now();
 					conns[conn_id].pgconn = PQconnectStart(conns[conn_id].connstr);
+					mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqs = %f ms", dmq_now() - pqtime);
 
 					if (PQstatus(conns[conn_id].pgconn) == CONNECTION_BAD)
 					{
@@ -582,7 +586,12 @@ dmq_sender_main(Datum main_arg)
 				/* Await for connection establishment and call dmq_receiver_loop() */
 				case Connecting:
 				{
-					PostgresPollingStatusType status = PQconnectPoll(conns[conn_id].pgconn);
+					double		pqtime;
+					PostgresPollingStatusType status;
+
+					pqtime = dmq_now();
+					status = PQconnectPoll(conns[conn_id].pgconn);
+					mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqp = %f ms", dmq_now() - pqtime);
 
 					mtm_log(DmqStateIntermediate,
 							"[DMQ] Connecting: PostgresPollingStatusType = %d on %s",
