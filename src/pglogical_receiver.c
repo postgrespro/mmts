@@ -256,6 +256,8 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 	lsn_t local_flush = GetFlushRecPtr();
 	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
 
+	Assert(MtmIsReceiver && !MtmIsPoolWorker);
+
 	if (end_lsn != INVALID_LSN)
 	{
 		/* Track commit lsn */
@@ -266,13 +268,16 @@ MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
 		dlist_push_tail(&MtmLsnMapping, &flushpos->node);
 	}
 
+	// XXX: now we use this only in receiver, but in case of recovery
+	// one receiver can set flushPos for several nodes
 	MtmLock(LW_EXCLUSIVE);
 	dlist_foreach_modify(iter, &MtmLsnMapping)
 	{
 		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
 		if (flushpos->local_end <= local_flush)
 		{
-			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end)
+			// XXX: clean on restart?
+			if (Mtm->nodes[node_id-1].flushPos < flushpos->remote_end && node_id == flushpos->node_id)
 				Mtm->nodes[node_id-1].flushPos = flushpos->remote_end;
 			dlist_delete(iter.cur);
 			pfree(flushpos);
