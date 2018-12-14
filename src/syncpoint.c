@@ -39,6 +39,7 @@
 #include "lib/stringinfo.h"
 #include "replication/slot.h"
 #include "replication/message.h"
+#include "access/xlog_internal.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 
@@ -455,6 +456,20 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 					errmsg("out of memory"),
 					errdetail("Failed while allocating a WAL reading processor.")));
+
+	/*
+	 * The given start_lsn pointer points to the end of the syncpoint record,
+	 * which is not necessarily the beginning of the next record, if the
+	 * previous record happens to end at a page boundary. Skip over the page
+	 * header in that case to find the next record.
+	 */
+	if (start_lsn % XLOG_BLCKSZ == 0)
+	{
+		if (XLogSegmentOffset(start_lsn, wal_segment_size) == 0)
+			start_lsn += SizeOfXLogLongPHD;
+		else
+			start_lsn += SizeOfXLogShortPHD;
+	}
 
 	/* fill our filter */
 	do
