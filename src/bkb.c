@@ -1,9 +1,12 @@
 #include <stdint.h>
 #include "bkb.h"
 
+#define BIT_CHECK(mask, bit) (((mask) & ((nodemask_t)1 << (bit))) != 0)
+#define BIT_SET(mask, bit)   (mask |= ((nodemask_t)1 << (bit)))
+
 /*
  * Bron–Kerbosch algorithm to find maximum clique in graph
- */  
+ */
 
 typedef struct {
 	int size;

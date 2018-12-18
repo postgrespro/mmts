@@ -15,7 +15,7 @@
 #include "tcop/tcopprot.h"
 
 #include "bgwpool.h"
-#include "mm.h"
+#include "multimaster.h"
 #include "logger.h"
 
 bool MtmIsPoolWorker;
@@ -145,7 +145,7 @@ void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  c
 	pool->bgwhandles = (BackgroundWorkerHandle **) ShmemAlloc(MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
     pool->queue = (char*)ShmemAlloc(queueSize);
 	if (pool->queue == NULL) { 
-		elog(PANIC, "Failed to allocate memory for background workers pool: %lld bytes requested", (long64)queueSize);
+		elog(PANIC, "Failed to allocate memory for background workers pool: %zd bytes requested", queueSize);
 	}
     pool->executor = executor;
 	pool->available = PGSemaphoreCreate();

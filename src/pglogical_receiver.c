@@ -48,6 +48,7 @@
 #endif
 
 #include "multimaster.h"
+#include "bytebuf.h"
 #include "spill.h"
 #include "state.h"
 #include "bgwpool.h"
@@ -76,8 +77,8 @@ typedef struct MtmFlushPosition
 {
 	dlist_node node;
 	int        node_id;
-	lsn_t      local_end;
-	lsn_t      remote_end;
+	XLogRecPtr	local_end;
+	XLogRecPtr	remote_end;
 } MtmFlushPosition;
 
 static char const* const MtmReplicationModeName[] =
@@ -102,14 +103,14 @@ static bool receiver_sync_mode = true; /* We need sync mode to have up-to-date v
 static char worker_proc[BGW_MAXLEN];
 
 /* Lastly written positions */
-static lsn_t output_written_lsn = INVALID_LSN;
+static XLogRecPtr output_written_lsn = InvalidXLogRecPtr;
 
 /* Stream functions */
 static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
 void pglogical_receiver_main(Datum main_arg);
-static lsn_t MtmGetFlushPosition(int nodeId);
+static XLogRecPtr MtmGetFlushPosition(int nodeId);
 
 static void
 receiver_raw_sighup(SIGNAL_ARGS)
@@ -129,8 +130,8 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 {
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int		 len = 0;
-	lsn_t output_applied_lsn = output_written_lsn;
-	lsn_t output_flushed_lsn = MtmGetFlushPosition(node_id);
+	XLogRecPtr output_applied_lsn = output_written_lsn;
+	XLogRecPtr output_flushed_lsn = MtmGetFlushPosition(node_id);
 
 	replybuf[len] = 'r';
 	len += 1;
@@ -232,7 +233,7 @@ feTimestampDifference(int64 start_time, int64 stop_time,
 	}
 }
 
-static lsn_t
+static XLogRecPtr
 MtmGetFlushPosition(int nodeId)
 {
 	return Mtm->nodes[nodeId-1].flushPos;
@@ -249,16 +250,16 @@ MtmGetFlushPosition(int nodeId)
  * and mapping ing mtm->nodes[].flushPos is updated for this node.
  */
 void
-MtmUpdateLsnMapping(int node_id, lsn_t end_lsn)
+MtmUpdateLsnMapping(int node_id, XLogRecPtr end_lsn)
 {
 	dlist_mutable_iter iter;
 	MtmFlushPosition* flushpos;
-	lsn_t local_flush = GetFlushRecPtr();
+	XLogRecPtr local_flush = GetFlushRecPtr();
 	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
 
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
 
-	if (end_lsn != INVALID_LSN)
+	if (end_lsn != InvalidXLogRecPtr)
 	{
 		/* Track commit lsn */
 		flushpos = (MtmFlushPosition *) palloc(sizeof(MtmFlushPosition));
@@ -467,7 +468,7 @@ MtmEndSession(int nodeId, bool unlock)
 	if (replorigin_session_origin != InvalidRepOriginId)
 	{
 		replorigin_session_origin = InvalidRepOriginId;
-		replorigin_session_origin_lsn = INVALID_LSN;
+		replorigin_session_origin_lsn = InvalidXLogRecPtr;
 		replorigin_session_origin_timestamp = 0;
 		replorigin_session_reset();
 	}
@@ -609,7 +610,7 @@ pglogical_receiver_main(Datum main_arg)
 
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
-		if (replorigin_get_progress(Mtm->nodes[nodeId -1].originId, false) == INVALID_LSN ||
+		if (replorigin_get_progress(Mtm->nodes[nodeId -1].originId, false) == InvalidXLogRecPtr ||
 			Mtm->nodes[nodeId-1].manualRecovery)
 		{
 			appendPQExpBuffer(query, "CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\"", slotName, MULTIMASTER_NAME);
@@ -674,16 +675,14 @@ pglogical_receiver_main(Datum main_arg)
 
 		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x ("
 									"\"startup_params_format\" '1',"
-									"\"max_proto_version\" '%d',"
-									"\"min_proto_version\" '%d',"
+									"\"max_proto_version\" '1',"
+									"\"min_proto_version\" '1',"
 									"\"forward_changesets\" '1',"
 									"\"mtm_replication_mode\" '%s',"
 									"\"mtm_session_id\" '"INT64_FORMAT"')",
 						  slotName,
 						  (uint32) (remote_start >> 32),
 						  (uint32) remote_start,
-						  MULTIMASTER_MAX_PROTO_VERSION,
-						  MULTIMASTER_MIN_PROTO_VERSION,
 						  MtmReplicationModeName[mode],
 						  receiver_ctx.session_id
 			);
@@ -737,7 +736,7 @@ pglogical_receiver_main(Datum main_arg)
 			 */
 			while (true)
 			{
-				lsn_t walEnd;
+				XLogRecPtr walEnd;
 				char* stmt;
 
 				/* Some cleanup */
@@ -932,7 +931,7 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int64 now = feGetCurrentTimestamp();
 
-					MtmUpdateLsnMapping(nodeId, INVALID_LSN);
+					MtmUpdateLsnMapping(nodeId, InvalidXLogRecPtr);
 					sendFeedback(conn, now, nodeId);
 				}
 				else if (r < 0 && errno == EINTR)

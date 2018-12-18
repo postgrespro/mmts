@@ -14,6 +14,7 @@
 
 #include "utils/relcache.h"
 
+/* GUCs */
 extern bool		MtmMonotonicSequences;
 extern char	   *MtmRemoteFunctionsList;
 extern bool		MtmVolksWagenMode;

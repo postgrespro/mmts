@@ -847,9 +847,9 @@ static void
 process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmReceiverContext *receiver_ctx)
 {
 	uint8 		event;
-	lsn_t       end_lsn;
-	lsn_t       origin_lsn;
-	lsn_t       commit_lsn;
+	XLogRecPtr	end_lsn;
+	XLogRecPtr	origin_lsn;
+	XLogRecPtr	commit_lsn;
 	int         origin_node;
 	char        gid[GIDSIZE];
 
@@ -907,7 +907,8 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 				CommitTransactionCommand();
 				MtmEndSession(origin_node, true);
 			}
-			mtm_log(LOG, "PGLOGICAL_COMMIT (%llx,%llx,%llx)", commit_lsn, end_lsn, origin_lsn);
+			mtm_log(LOG, "PGLOGICAL_COMMIT ("LSN_FMT","LSN_FMT","LSN_FMT")",
+					commit_lsn, end_lsn, origin_lsn);
 			break;
 		}
 		case PGLOGICAL_PREPARE:
@@ -951,7 +952,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			MtmEndSession(origin_node, true);
 
 			mtm_log(MtmApplyTrace,
-				"Prepare transaction %s event=%d origin=(%d, %llx)", gid, event,
+				"Prepare transaction %s event=%d origin=(%d, " LSN_FMT ")", gid, event,
 				origin_node, origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn);
 
 			break;

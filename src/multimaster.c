@@ -133,7 +133,11 @@ char* MtmDatabaseUser;
 Oid	  MtmDatabaseId;
 bool  MtmBackgroundWorker;
 
+
 int	  MtmNodes;
+static bool	 MtmInsideTransaction;
+
+
 int	  MtmNodeId;
 int	  MtmReplicationNodeId;
 int	  MtmTransSpillThreshold;
@@ -149,10 +153,11 @@ static char* MtmClusterName;
 static int	 MtmQueueSize;
 static int	 MtmMinRecoveryLag;
 static int	 MtmMaxRecoveryLag;
-
 static bool	 MtmBreakConnection;
 static bool  MtmBypass;
-static bool	 MtmInsideTransaction;
+
+
+
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
@@ -441,12 +446,12 @@ MtmCheckSlots()
 			if (slot->in_use
 				&& sscanf(slot->data.name.data, MULTIMASTER_SLOT_PATTERN, &nodeId) == 1
 				&& BIT_CHECK(Mtm->disabledNodeMask, nodeId-1)
-				&& slot->data.confirmed_flush + (long64) MtmMaxRecoveryLag * 1024 < GetXLogInsertRecPtr()
+				&& slot->data.confirmed_flush + MtmMaxRecoveryLag * 1024L < GetXLogInsertRecPtr()
 				&& slot->data.confirmed_flush != 0)
 			{
-				mtm_log(WARNING, "Drop slot for node %d which lag %lld B is larger than threshold %d kB",
+				mtm_log(WARNING, "Drop slot for node %d which lag "LSN_FMT" B is larger than threshold %d kB",
 					 nodeId,
-					 (long64)(GetXLogInsertRecPtr() - slot->data.restart_lsn),
+					 GetXLogInsertRecPtr() - slot->data.restart_lsn,
 					 MtmMaxRecoveryLag);
 				MtmDropSlot(nodeId);
 			}
@@ -589,7 +594,6 @@ static void MtmInitialize()
 			Mtm->nodes[i].connectivityMask = (((nodemask_t)1 << MtmNodes) - 1) & ~((nodemask_t)1 << (MtmNodeId-1));
 			Mtm->nodes[i].con = MtmConnections[i];
 			Mtm->nodes[i].flushPos = 0;
-			Mtm->nodes[i].restartLSN = INVALID_LSN;
 			Mtm->nodes[i].originId = InvalidRepOriginId;
 			Mtm->nodes[i].timeline = 0;
 			Mtm->nodes[i].manualRecovery = false;
@@ -597,10 +601,6 @@ static void MtmInitialize()
 		}
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
-
-
-		// XXX: not used anymore
-		Mtm->nodes[MtmNodeId-1].restartLSN = (lsn_t)PG_UINT64_MAX;
 
 		MtmTx.xid = InvalidTransactionId;
 	}
@@ -667,16 +667,6 @@ void MtmUpdateNodeConnectionInfo(MtmConnectionInfo* conn, char const* connStr)
 	memcpy(conn->hostName, host, hostLen);
 	conn->hostName[hostLen] = '\0';
 
-	port = strstr(connStr, "arbiter_port=");
-	if (port != NULL) {
-		if (sscanf(port+13, "%d", &conn->arbiterPort) != 1) {
-			mtm_log(ERROR, "Invalid arbiter port: %s", port+13);
-		}
-	} else {
-		conn->arbiterPort = MULTIMASTER_DEFAULT_ARBITER_PORT;
-	}
-	mtm_log(INFO, "Using arbiter port: %d", conn->arbiterPort);
-
 	port = strstr(connStr, " port=");
 	if (port == NULL && strncmp(connStr, "port=", 5) == 0) {
 		port = connStr-1;
@@ -718,8 +708,8 @@ static void MtmSplitConnStrs(void)
 		}
 	}
 
-	if (i > MAX_NODES) {
-		mtm_log(ERROR, "Multimaster with more than %d nodes is not currently supported", MAX_NODES);
+	if (i > MTM_MAX_NODES) {
+		mtm_log(ERROR, "Multimaster with more than %d nodes is not currently supported", MTM_MAX_NODES);
 	}
 	if (i < 2) {
 		mtm_log(ERROR, "Multimaster should have at least two nodes");
@@ -938,7 +928,7 @@ _PG_init(void)
 		&MtmMaxNodes,
 		0,
 		0,
-		MAX_NODES,
+		MTM_MAX_NODES,
 		PGC_POSTMASTER,
 		0,
 		NULL,

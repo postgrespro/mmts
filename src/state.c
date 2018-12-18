@@ -9,6 +9,7 @@
 #include "miscadmin.h" /* PostmasterPid */
 
 #include "multimaster.h"
+#include "bkb.h"
 #include "state.h"
 #include "logger.h"
 
@@ -458,7 +459,7 @@ void
 MtmRefreshClusterStatus()
 {
 	nodemask_t newClique, oldClique;
-	nodemask_t matrix[MAX_NODES];
+	nodemask_t matrix[MTM_MAX_NODES];
 	nodemask_t trivialClique = ~SELF_CONNECTIVITY_MASK & (((nodemask_t)1 << Mtm->nAllNodes)-1);
 	int cliqueSize;
 	int i;
@@ -562,7 +563,7 @@ MtmRefreshClusterStatus()
 		 * Double timeout to consider the worst case when heartbeat receive interval is added
 		 * with refresh cluster status interval.
 		 */
-		MtmSleep(MSEC_TO_USEC(MtmHeartbeatRecvTimeout)*2);
+		MtmSleep(1000L*(MtmHeartbeatRecvTimeout)*2);
 		MtmBuildConnectivityMatrix(matrix);
 		newClique = MtmFindMaxClique(matrix, Mtm->nAllNodes, &cliqueSize);
 	} while (newClique != oldClique);

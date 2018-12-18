@@ -6,9 +6,8 @@
 #include "storage/pg_sema.h"
 #include "postmaster/bgworker.h"
 #include "storage/condition_variable.h"
-#include "bkb.h" // XXX
 
-#include "mm.h"
+#include "receiver.h"
 
 typedef void(*BgwPoolExecutor)(void* work, size_t size, MtmReceiverContext *ctx);
 
@@ -22,8 +21,6 @@ typedef long timestamp_t;
 
 extern timestamp_t MtmGetSystemTime(void);   /* non-adjusted current system time */
 extern timestamp_t MtmGetCurrentTime(void);  /* adjusted current system time */
-
-extern int  MtmMaxWorkers;
 
 typedef struct
 {

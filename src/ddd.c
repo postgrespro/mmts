@@ -402,8 +402,8 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	}
 	MtmGetGtid(xid, &gtid);
 	hasDeadlock = MtmGraphFindLoop(&graph, &gtid);
-	mtm_log(DeadlockCheck, "Distributed deadlock check by backend %d for %u:%llu = %d",
-		MyProcPid, gtid.node, (long64)gtid.xid, hasDeadlock);
+	mtm_log(DeadlockCheck, "Distributed deadlock check by backend %d for %u:" XID_FMT " = %d",
+		MyProcPid, gtid.node, gtid.xid, hasDeadlock);
 	// if (!hasDeadlock) {
 	// 	/* There is no deadlock loop in graph, but deadlock can be caused by lack of apply workers: if all of them are busy, then some transactions
 	// 	 * can not be appied just because there are no vacant workers and it cause additional dependency between transactions which is not
@@ -423,8 +423,8 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	if (!hasDeadlock)
 	{
 		// TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
-		mtm_log(DeadlockCheck, "Enable deadlock timeout in backend %d for transaction %llu",
-				MyProcPid, (long64)xid);
+		mtm_log(DeadlockCheck, "Enable deadlock timeout in backend %d for transaction " XID_FMT,
+				MyProcPid, xid);
 		enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
 		// set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
 	}
@@ -437,7 +437,7 @@ MtmDetectGlobalDeadLock(PGPROC* proc)
 {
 	PGXACT* pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
 
-	mtm_log(DeadlockCheck, "Detect global deadlock for %llu by backend %d", (long64)pgxact->xid, MyProcPid);
+	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);
 
 	if (Mtm->status != MTM_ONLINE || !TransactionIdIsValid(pgxact->xid))
 		return false;
@@ -468,10 +468,10 @@ mtm_dump_lock_graph(PG_FUNCTION_ARGS)
 			appendStringInfo(s, "node-%d lock graph: ", i+1);
 			while (gtid != last) {
 				GlobalTransactionId *src = gtid++;
-				appendStringInfo(s, "%d:%llu -> ", src->node, (long64)src->xid);
+				appendStringInfo(s, "%d:"XID_FMT" -> ", src->node, src->xid);
 				while (gtid->node != 0) {
 					GlobalTransactionId *dst = gtid++;
-					appendStringInfo(s, "%d:%llu, ", dst->node, (long64)dst->xid);
+					appendStringInfo(s, "%d:"XID_FMT", ", dst->node, dst->xid);
 				}
 				gtid += 1;
 			}
