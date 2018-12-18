@@ -477,14 +477,19 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 	do
 	{
 		XLogRecord	   *record;
-		char		   *errormsg;
+		char		   *errormsg = NULL;
 		RepOriginId		origin_id;
 		int				node_id;
 
 		record = XLogReadRecord(xlogreader, start_lsn, &errormsg);
 		if (record == NULL)
 		{
-			mtm_log(MtmReceiverFilter, "load_filter_map: got NULL from XLogReadRecord, breaking");
+			if (errormsg)
+				mtm_log(ERROR,
+						"load_filter_map: got error: %s", errormsg);
+			else
+				mtm_log(MtmReceiverFilter,
+						"load_filter_map: got NULL from XLogReadRecord, breaking");
 			break;
 		}
 
