@@ -444,7 +444,9 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 	filter_map = hash_create("filter", estimate_size, &hash_ctl,
 							 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
-	mtm_log(MtmReceiverFilter, "load_filter_map from %"INT64_MODIFIER"x node_id=%d", start_lsn, filter_node_id);
+	mtm_log(MtmReceiverStart,
+			"load_filter_map from %"INT64_MODIFIER"x node_id=%d current_last_lsn=%"INT64_MODIFIER"x",
+			start_lsn, filter_node_id, current_last_lsn);
 
 	Assert(start_lsn != InvalidXLogRecPtr);
 	if (start_lsn == UINT64_MAX)
@@ -481,7 +483,10 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 
 		record = XLogReadRecord(xlogreader, start_lsn, &errormsg);
 		if (record == NULL)
+		{
+			mtm_log(MtmReceiverFilter, "load_filter_map: got NULL from XLogReadRecord, breaking");
 			break;
+		}
 
 		/* continue reading on next iteration */
 		start_lsn = InvalidXLogRecPtr;
