@@ -246,7 +246,7 @@ BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
 		 * Size of work is larger than size of shared buffer: 
 		 * run it immediately
 		 */
-		pool->executor(work, size, NULL);
+		pool->executor(work, size, ctx);
 		return;
 	}
  
