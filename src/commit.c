@@ -17,6 +17,7 @@
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
 #include "tcop/tcopprot.h"
+#include "postmaster/autovacuum.h"
 
 #include "multimaster.h"
 #include "logger.h"
@@ -30,54 +31,72 @@ static int		sender_to_node[MTM_MAX_NODES];
 
 MtmCurrentTrans MtmTx;
 
-static void MtmBeginTransaction(MtmCurrentTrans* x);
-static void MtmPrePrepareTransaction(MtmCurrentTrans* x);
-
-static bool GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask,
+static bool GatherPrepares(TransactionId xid, nodemask_t participantsMask,
 						   int *failed_at);
-static void GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask, MtmMessageCode code);
+static void GatherPrecommits(TransactionId xid, nodemask_t participantsMask,
+						     MtmMessageCode code);
 
 
 void
 MtmXactCallback2(XactEvent event, void *arg)
 {
-	if (!MtmIsLogicalReceiver)
+	/*
+	 * Do not perform distributed commit for transactions in non-ordinary
+	 * backends.
+	 *
+	 * XXX: avoid Mtm->extension_created 
+	 */
+	if (IsAnyAutoVacuumProcess() || !IsNormalProcessingMode() ||
+		am_walsender || IsBackgroundWorker)
 	{
-		switch (event)
-		{
-			case XACT_EVENT_START:
-				MtmBeginTransaction(&MtmTx);
-				break;
-			case XACT_EVENT_PRE_PREPARE:
-				MtmPrePrepareTransaction(&MtmTx);
-				break;
-			case XACT_EVENT_COMMIT_COMMAND:
-				if (IsTransactionOrTransactionBlock()
-						&& !IsTransactionBlock()
-						&& !IsSubTransaction())
-				{
-					MtmTwoPhaseCommit(&MtmTx);
-				}
-				break;
-			default:
-				break;
-		}
+		return;
 	}
+
+	switch (event)
+	{
+		case XACT_EVENT_START:
+			MtmBeginTransaction();
+			break;
+
+		case XACT_EVENT_COMMIT_COMMAND:
+			if (IsTransactionOrTransactionBlock()
+					&& !IsTransactionBlock()
+					&& !IsSubTransaction())
+			{
+				MtmTwoPhaseCommit();
+			}
+			break;
+
+		default:
+			break;
+	}
+
 }
 
-static void
-MtmBeginTransaction(MtmCurrentTrans* x)
+void
+MtmBeginTransaction()
 {
-	// XXX: move it down the callbacks?
-	x->isDistributed = MtmIsUserTransaction();
-	x->containsDML = false; // will be set by executor hook
+	/* Reset MtmTx */
+	MtmTx.explicit_twophase = false;
+	MtmTx.contains_ddl = false; // will be set by executor hook
+	MtmTx.contains_dml = false;
+	MtmTx.gid[0] = '\0';
 
 	MtmDDLResetStatement();
+
+	if (!MtmDatabaseId)
+		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
+
+	// XXX: maybe allow commit, but don't use mm?
+	if (MtmDatabaseId != MyDatabaseId)
+		mtm_log(ERROR,
+			"Refusing to work. Multimaster configured to work with database '%s'",
+			MtmDatabaseName);
 
 	/* XXX: ugly hack with debug_query_string */
 
 	/* Application name can be changed using PGAPPNAME environment variable */
-	if (x->isDistributed && Mtm->status != MTM_ONLINE
+	if (Mtm->status != MTM_ONLINE
 		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
 		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0
 		&& debug_query_string && pg_strcasecmp(debug_query_string, "create extension multimaster;") != 0)
@@ -91,25 +110,8 @@ MtmBeginTransaction(MtmCurrentTrans* x)
 	}
 }
 
-static void
-MtmPrePrepareTransaction(MtmCurrentTrans* x)
-{
-	if (!x->isDistributed)
-		return;
-
-	if (!MtmDatabaseId)
-		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
-
-	if (MtmDatabaseId != MyDatabaseId)
-		mtm_log(ERROR,
-			"Refusing to work. Multimaster configured to work with database '%s'",
-			MtmDatabaseName);
-
-	Assert(TransactionIdIsValid(GetCurrentTransactionId()));
-}
-
 bool // XXX: do we need that bool?
-MtmTwoPhaseCommit(MtmCurrentTrans* x)
+MtmTwoPhaseCommit()
 {
 	nodemask_t participantsMask;
 	bool	ret;
@@ -118,9 +120,16 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
 
-	/* XXX: avoid Mtm->extension_created */
-	if (!x->isDistributed || !x->containsDML || !Mtm->extension_created)
+	if ( (!MtmTx.contains_ddl && !MtmTx.contains_dml) || !Mtm->extension_created)
 		return false;
+
+	if (MtmTx.accessed_temp)
+	{
+		if (MtmVolksWagenMode)
+			return false;
+		else
+			mtm_log(ERROR, "Transaction accessed both temporary and replicated table, can't prepare");
+	}
 
 	if (!DmqSubscribed)
 	{
@@ -148,8 +157,6 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	sprintf(stream, "xid" XID_FMT, xid);
 	dmq_stream_subscribe(stream);
 	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
-
-	x->xid = xid;
 
 	/*
 	 * This lock is taken for a quite a long period of time but normally
@@ -187,7 +194,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 	CommitTransactionCommand();
 
-	ret = GatherPrepares(x, participantsMask, &failed_at);
+	ret = GatherPrepares(xid, participantsMask, &failed_at);
 	if (!ret)
 	{
 		dmq_stream_unsubscribe(stream);
@@ -199,12 +206,12 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 
 	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 	mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-	GatherPrecommits(x, participantsMask, MSG_PRECOMMITTED);
+	GatherPrecommits(xid, participantsMask, MSG_PRECOMMITTED);
 
 	StartTransactionCommand();
 	FinishPreparedTransaction(gid, true, false);
 	mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-	GatherPrecommits(x, participantsMask, MSG_COMMITTED);
+	GatherPrecommits(xid, participantsMask, MSG_COMMITTED);
 
 	LWLockRelease(MtmCommitBarrier);
 
@@ -217,7 +224,7 @@ MtmTwoPhaseCommit(MtmCurrentTrans* x)
 }
 
 static bool
-GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
+GatherPrepares(TransactionId xid, nodemask_t participantsMask, int *failed_at)
 {
 	bool prepared = true;
 
@@ -238,13 +245,13 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 
 			Assert(msg->node == sender_to_node[sender_id]);
 			Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
-			Assert(msg->dxid == x->xid);
+			Assert(msg->dxid == xid);
 			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
 
 			mtm_log(MtmTxTrace,
 				"GatherPrepares: got '%s' for tx" XID_FMT " from node%d",
 				msg->code == MSG_PREPARED ? "ok" : "failed",
-				x->xid, sender_to_node[sender_id]);
+				xid, sender_to_node[sender_id]);
 
 			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 
@@ -273,7 +280,7 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 					mtm_log(MtmTxTrace,
 						"GatherPrepares: dropping node%d from participants of tx" XID_FMT,
-						sender_to_node[sender_id], x->xid);
+						sender_to_node[sender_id], xid);
 					prepared = false;
 					*failed_at = sender_to_node[sender_id];
 				}
@@ -288,7 +295,7 @@ GatherPrepares(MtmCurrentTrans* x, nodemask_t participantsMask, int *failed_at)
 }
 
 static void
-GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask, MtmMessageCode code)
+GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode code)
 {
 	Assert(participantsMask != 0);
 
@@ -307,12 +314,12 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask, MtmMessageCode
 
 			Assert(msg->node == sender_to_node[sender_id]);
 			Assert(msg->code == code);
-			Assert(msg->dxid == x->xid);
+			Assert(msg->dxid == xid);
 			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
 
 			mtm_log(MtmTxTrace,
 				"GatherPrecommits: got 'ok' for tx" XID_FMT " from node%d",
-				x->xid, sender_to_node[sender_id]);
+				xid, sender_to_node[sender_id]);
 
 			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 		}
@@ -335,7 +342,7 @@ GatherPrecommits(MtmCurrentTrans* x, nodemask_t participantsMask, MtmMessageCode
 					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
 					mtm_log(MtmTxTrace,
 						"GatherPrecommit: dropping node%d from participants of tx" XID_FMT,
-						sender_to_node[sender_id], x->xid);
+						sender_to_node[sender_id], xid);
 				}
 			}
 			MtmUnlock();

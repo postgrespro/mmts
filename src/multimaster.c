@@ -82,7 +82,6 @@ PG_FUNCTION_INFO_V1(mtm_get_cluster_state);
 PG_FUNCTION_INFO_V1(mtm_collect_cluster_info);
 
 static void MtmInitialize(void);
-static void MtmBeginTransaction(MtmCurrentTrans* x);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -130,12 +129,10 @@ LWLock *MtmSyncpointLock;
 bool  MtmDoReplication;
 char* MtmDatabaseName;
 char* MtmDatabaseUser;
-Oid	  MtmDatabaseId;
 bool  MtmBackgroundWorker;
 
 
 int	  MtmNodes;
-static bool	 MtmInsideTransaction;
 
 
 int	  MtmNodeId;
@@ -308,12 +305,11 @@ MtmInitializeSequence(int64* start, int64* step)
 
 static void* MtmCreateSavepointContext(void)
 {
-	return (void*)(size_t)MtmTx.containsDML;
+	return NULL;
 }
 
 static void	 MtmRestoreSavepointContext(void* ctx)
 {
-	MtmTx.containsDML = ctx != NULL;
 }
 
 static void	 MtmReleaseSavepointContext(void* ctx)
@@ -324,54 +320,14 @@ static void* MtmSuspendTransaction(void)
 {
 	MtmCurrentTrans* ctx = malloc(sizeof(MtmCurrentTrans));
 	*ctx = MtmTx;
-	MtmResetTransaction();
-	MtmBeginTransaction(&MtmTx);
+	MtmBeginTransaction();
 	return ctx;
 }
 
 static void MtmResumeTransaction(void* ctx)
 {
 	MtmTx = *(MtmCurrentTrans*)ctx;
-	MtmInsideTransaction = true;
 	free(ctx);
-}
-
-/*
- * Check if this is "normal" user transaction which should be distributed to other nodes
- */
-bool
-MtmIsUserTransaction()
-{
-	return !IsAutoVacuumLauncherProcess() &&
-		IsNormalProcessingMode() &&
-		MtmDoReplication &&
-		!am_walsender &&
-		!MtmBackgroundWorker &&
-		!IsAutoVacuumWorkerProcess();
-}
-
-void
-MtmResetTransaction()
-{
-	MtmCurrentTrans* x = &MtmTx;
-	x->xid = InvalidTransactionId;
-	x->isDistributed = false;
-	x->isTwoPhase = false;
-	x->gid[0] = '\0';
-
-}
-
-static void
-MtmBeginTransaction(MtmCurrentTrans* x)
-{
-	x->xid = GetCurrentTransactionIdIfAny();
-
-	x->isDistributed = MtmIsUserTransaction();
-	x->isTwoPhase = false;
-	x->containsDML = false;
-	x->gid[0] = '\0';
-
-	MtmInsideTransaction = true;
 }
 
 
@@ -402,23 +358,6 @@ static void MtmDropSlot(int nodeId)
 	BIT_SET(Mtm->stalledNodeMask, nodeId-1);
 	BIT_SET(Mtm->stoppedNodeMask, nodeId-1); /* stalled node can not be automatically recovered */
 	MtmUnlock();
-}
-
-
-void  MtmSetCurrentTransactionGID(char const* gid, int node_id)
-{
-	strncpy(MtmTx.gid, gid, GIDSIZE);
-	MtmTx.isDistributed = true;
-}
-
-TransactionId MtmGetCurrentTransactionId(void)
-{
-	return MtmTx.xid;
-}
-
-void  MtmSetCurrentTransactionCSN()
-{
-	MtmTx.isDistributed = true;
 }
 
 
@@ -601,8 +540,6 @@ static void MtmInitialize()
 		}
 		Mtm->nodes[MtmNodeId-1].originId = DoNotReplicateId;
 		/* All transaction originated from the current node should be ignored during recovery */
-
-		MtmTx.xid = InvalidTransactionId;
 	}
 
 	RegisterXactCallback(MtmXactCallback2, NULL);

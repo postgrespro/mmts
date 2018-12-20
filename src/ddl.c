@@ -402,7 +402,7 @@ MtmProcessDDLCommand(char const* queryString, bool transactional)
 		/* Transactional DDL */
 		mtm_log(DMLStmtOutgoing, "Sending DDL: %s", queryString);
 		LogLogicalMessage("D", queryString, strlen(queryString) + 1, true);
-		MtmTx.containsDML = true;
+		MtmTx.contains_ddl = true;
 	}
 	else
 	{
@@ -642,15 +642,13 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			switch (stmt->kind)
 			{
 				case TRANS_STMT_COMMIT:
-					if (MtmTwoPhaseCommit(&MtmTx))
+					if (MtmTwoPhaseCommit())
 						return;
 					break;
 				case TRANS_STMT_PREPARE:
-					MtmTx.isTwoPhase = true;
-					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
-					break;
 				case TRANS_STMT_COMMIT_PREPARED:
 				case TRANS_STMT_ROLLBACK_PREPARED:
+					MtmTx.explicit_twophase = true;
 					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
 					break;
 				default:
@@ -707,7 +705,6 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			if (context == PROCESS_UTILITY_TOPLEVEL)
 			{
 				MtmProcessDDLCommand(stmt_string, false);
-				MtmTx.isDistributed = false;
 			}
 			break;
 		}
@@ -818,7 +815,6 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			if (indexStmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 			{
 				MtmProcessDDLCommand(stmt_string, false);
-				MtmTx.isDistributed = false;
 				skipCommand = true;
 				pg_usleep(USECS_PER_SEC); /* XXX */
 			}
@@ -832,7 +828,6 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			{
 				if (context == PROCESS_UTILITY_TOPLEVEL) {
 					MtmProcessDDLCommand(stmt_string, false);
-					MtmTx.isDistributed = false;
 					skipCommand = true;
 				}
 			}
@@ -855,7 +850,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 					{
 						Relation rel = heap_open(relid, ShareLock);
 						if (RelationNeedsWAL(rel)) {
-							MtmTx.containsDML = true;
+							MtmTx.contains_dml = true;
 						}
 						heap_close(rel, ShareLock);
 					}
@@ -918,7 +913,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		mtm_log(DMLProcessingTrace,
 				"Xact accessed temp table, stopping replication of statement '%s'",
 				stmt_string);
-		MtmTx.isDistributed = false; /* Skip */
+		MtmTx.accessed_temp = true; /* Skip */
 	}
 
 	if (executed)
@@ -1017,7 +1012,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 						continue;
 					}
 				}
-				MtmTx.containsDML = true;
+				MtmTx.contains_dml = true;
 				break;
 			}
 		}
@@ -1204,7 +1199,7 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 		heap_freetuple(tup);
 		heap_close(rel, RowExclusiveLock);
 
-		MtmTx.containsDML = true;
+		MtmTx.contains_dml = true;
 	}
 	return false;
 }
@@ -1412,5 +1407,5 @@ MtmDDLResetStatement()
 void
 MtmToggleDML(void)
 {
-	MtmTx.containsDML = true;
+	MtmTx.contains_dml = true;
 }

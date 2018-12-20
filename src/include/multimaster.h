@@ -59,12 +59,12 @@ typedef struct
 
 typedef struct
 {
-	TransactionId xid;			/* local transaction ID	*/
-	bool		isTwoPhase;		/* user level 2PC */
-	bool		isDistributed;	/* transaction performed INSERT/UPDATE/DELETE
-								 * and has to be replicated to other nodes */
-	bool		containsDML;	/* transaction contains DML statements */
-	pgid_t		gid;			/* global transaction identifier (used by 2pc) */
+	bool		contains_ddl;
+	bool		contains_dml;	/* transaction contains DML statements */
+	bool		accessed_temp;
+	bool		explicit_twophase;	/* user level 2PC */
+	pgid_t		gid;			/* global transaction identifier (only in case
+								 * of explicit_twophase) */
 } MtmCurrentTrans;
 
 typedef struct MtmSeqPosition
@@ -224,7 +224,9 @@ extern int	MtmNodeId;
 #define EFFECTIVE_CONNECTIVITY_MASK  ( SELF_CONNECTIVITY_MASK | Mtm->stoppedNodeMask | ~Mtm->clique )
 
 
-extern bool MtmTwoPhaseCommit(MtmCurrentTrans *x);
+extern bool MtmTwoPhaseCommit(void);
+extern void MtmBeginTransaction(void);
+
 extern void MtmXactCallback2(XactEvent event, void *arg);
 extern void MtmGenerateGid(char *gid, TransactionId xid);
 extern int	MtmGidParseNodeId(const char *gid);
@@ -238,7 +240,6 @@ extern bool MtmAllApplyWorkersFinished(void);
 
 
 /* XXX: to delete */
-extern bool MtmIsUserTransaction(void);
 extern void erase_option_from_connstr(const char *option, char *connstr);
 
 extern void MtmLock(LWLockMode mode);
@@ -246,11 +247,6 @@ extern void MtmUnlock(void);
 extern void MtmLockNode(int nodeId, LWLockMode mode);
 extern bool MtmTryLockNode(int nodeId, LWLockMode mode);
 extern void MtmUnlockNode(int nodeId);
-
-extern void MtmSetCurrentTransactionGID(char const *gid, int node_id);
-extern void MtmSetCurrentTransactionCSN(void);
-extern TransactionId MtmGetCurrentTransactionId(void);
-extern void MtmResetTransaction(void);
 
 extern PGconn *PQconnectdb_safe(const char *conninfo, int timeout);
 

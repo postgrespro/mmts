@@ -484,7 +484,6 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	pq_getmsgint64(s); // XXX: participantsMask
 	Assert(gtid->node > 0);
 
-	MtmResetTransaction();
 	SetCurrentStatementStartTimestamp();
 
 	StartTransactionCommand();
@@ -600,7 +599,6 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		{
 			mtm_log(MtmApplyMessage, "Executing non-tx DDL message %s", messageBody);
 			SetCurrentStatementStartTimestamp();
-			MtmResetTransaction();
 			StartTransactionCommand();
 			MtmApplyDDLMessage(messageBody, false);
 			CommitTransactionCommand(); // XXX
@@ -878,7 +876,6 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			MtmBeginSession(origin_node);
 
 			if (!IsTransactionState()) {
-				MtmResetTransaction();
 				StartTransactionCommand();
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 				CommitTransactionCommand();
@@ -959,14 +956,10 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		}
 		case PGLOGICAL_COMMIT_PREPARED:
 		{
-			Assert(!TransactionIdIsValid(MtmGetCurrentTransactionId()));
 			pq_getmsgint64(in); /* csn */
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
-			MtmResetTransaction();
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
-			MtmSetCurrentTransactionCSN();
-			MtmSetCurrentTransactionGID(gid, origin_node);
 			FinishPreparedTransaction(gid, true, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();

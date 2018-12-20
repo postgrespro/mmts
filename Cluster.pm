@@ -318,7 +318,7 @@ sub pgbench_async()
 		@args,
 		-h => $self->{nodes}->[$node]->host(),
 		-p => $self->{nodes}->[$node]->port(),
-		$node->{dbname},
+		$self->{nodes}->[$node]->{dbname},
 	);
 	note("running pgbench: " . join(" ", @pgbench_command));
 	my $handle = IPC::Run::start(\@pgbench_command, $in, $out);
