@@ -419,13 +419,15 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 HTAB *
 RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 {
-	XLogReaderState	   *xlogreader;
-	HASHCTL				hash_ctl;
-	HTAB			   *filter_map;
-	int					estimate_size;
-	XLogRecPtr			start_lsn = UINT64_MAX;
-	XLogRecPtr			current_last_lsn = GetLastImportantRecPtr();
-	int					i;
+	XLogReaderState *xlogreader;
+	HASHCTL		hash_ctl;
+	HTAB	   *filter_map;
+	int			estimate_size;
+	XLogRecPtr	start_lsn = UINT64_MAX;
+	XLogRecPtr	current_last_lsn = GetFlushRecPtr();
+	int			i;
+
+	Assert(current_last_lsn != InvalidXLogRecPtr);
 
 	/* start from minimal among all of syncpoints */
 	for (i = 0; i < MtmMaxNodes; i++)
@@ -445,7 +447,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 							 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 	mtm_log(MtmReceiverStart,
-			"load_filter_map from %"INT64_MODIFIER"x node_id=%d current_last_lsn=%"INT64_MODIFIER"x",
+			"load_filter_map from " LSN_FMT " node_id=%d current_last_lsn=" LSN_FMT,
 			start_lsn, filter_node_id, current_last_lsn);
 
 	Assert(start_lsn != InvalidXLogRecPtr);
@@ -567,7 +569,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 			Assert(!found);
 		}
 
-	} while (xlogreader->ReadRecPtr < current_last_lsn);
+	} while (xlogreader->EndRecPtr < current_last_lsn);
 
 	XLogReaderFree(xlogreader);
 	return filter_map;
