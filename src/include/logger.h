@@ -55,7 +55,7 @@ typedef enum MtmLogTag
 
 	/* walsender's proto */
 	ProtoTraceFilter		= DEBUG1,
-	ProtoTraceTx			= DEBUG1,
+	ProtoTraceSender		= DEBUG2,
 	ProtoTraceMode			= LOG,
 	ProtoTraceMessage		= LOG,
 	ProtoTraceState			= LOG,

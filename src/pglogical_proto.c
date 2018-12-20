@@ -164,8 +164,8 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 
 	MtmTransactionRecords = 0;
 
-	mtm_log(ProtoTraceTx, "pglogical_write_begin xid=" XID_FMT " sent",
-			txn->xid);
+	mtm_log(ProtoTraceSender, "pglogical_write_begin xid=" XID_FMT " gid=%s",
+			txn->xid, txn->gid);
 }
 
 static void pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition* pos)
@@ -288,6 +288,10 @@ static void
 pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
 						Relation rel, HeapTuple newtuple)
 {
+
+	elog(ProtoTraceSender, "pglogical_write_insert %d %d",
+		 MtmIsFilteredTxn, DDLInProgress);
+
 	if (MtmIsFilteredTxn)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_insert filtered");
@@ -405,6 +409,9 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 {
 	uint8 event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
 
+	/* Ensure that we reset DDLInProgress */
+	Assert(!DDLInProgress);
+
 	/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
 	if (MtmIsFilteredTxn && event == PGLOGICAL_PREPARE)
 		return;
@@ -423,6 +430,8 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 
 	pq_sendstring(out, txn->gid);
+
+	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare %s", txn->gid);
 }
 
 /*

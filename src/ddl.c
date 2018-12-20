@@ -1146,6 +1146,10 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 	if (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
+	/* Log "E" message to reset DDLInProgress in decoder */
+	if (transactional)
+		MtmFinishDDLCommand();
+
 	debug_query_string = NULL;
 }
 
