@@ -84,15 +84,6 @@ MtmBeginTransaction()
 
 	MtmDDLResetStatement();
 
-	if (!MtmDatabaseId)
-		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
-
-	// XXX: maybe allow commit, but don't use mm?
-	if (MtmDatabaseId != MyDatabaseId)
-		mtm_log(ERROR,
-			"Refusing to work. Multimaster configured to work with database '%s'",
-			MtmDatabaseName);
-
 	/* XXX: ugly hack with debug_query_string */
 
 	/* Application name can be changed using PGAPPNAME environment variable */
@@ -110,7 +101,7 @@ MtmBeginTransaction()
 	}
 }
 
-bool // XXX: do we need that bool?
+bool
 MtmTwoPhaseCommit()
 {
 	nodemask_t participantsMask;
@@ -119,6 +110,15 @@ MtmTwoPhaseCommit()
 	TransactionId xid;
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
+
+	if (!MtmDatabaseId)
+		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
+
+	if (MtmDatabaseId != MyDatabaseId)
+		return false;
+		// mtm_log(ERROR,
+		// 	"Refusing to work. Multimaster configured to work with database '%s'",
+		// 	MtmDatabaseName);
 
 	if ( (!MtmTx.contains_ddl && !MtmTx.contains_dml) || !Mtm->extension_created)
 		return false;
