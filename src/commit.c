@@ -81,6 +81,7 @@ MtmBeginTransaction()
 	MtmTx.contains_ddl = false; // will be set by executor hook
 	MtmTx.contains_dml = false;
 	MtmTx.gid[0] = '\0';
+	MtmTx.accessed_temp = false;
 
 	MtmDDLResetStatement();
 
