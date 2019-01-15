@@ -302,7 +302,7 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 	{
 		// XXX: investigate how this assert happens
 		// Assert(TransactionIdIsInProgress(xid));
-		gtid->node = MtmNodeId;
+		gtid->node = Mtm->my_node_id;
 		gtid->xid = xid;
 	}
 	LWLockRelease(LOCK_BY_INDEX(0));
@@ -383,7 +383,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	MtmGraphAdd(&graph, (GlobalTransactionId*)buf.data, buf.used/sizeof(GlobalTransactionId));
 	ByteBufferFree(&buf);
 	for (i = 0; i < ddd_shared->n_nodes; i++) {
-		if (i+1 != MtmNodeId && !BIT_CHECK(Mtm->disabledNodeMask, i)) {
+		if (i+1 != Mtm->my_node_id && !BIT_CHECK(Mtm->disabledNodeMask, i)) {
 			size_t lockGraphSize;
 			void* lockGraphData;
 

@@ -24,6 +24,8 @@
 
 #include "pglogical_proto.h"
 
+#include "multimaster.h"
+
 #define PG_LOGICAL_PROTO_VERSION_NUM 1
 #define PG_LOGICAL_PROTO_MIN_VERSION_NUM 1
 
@@ -46,6 +48,7 @@ typedef struct MtmDecoderPrivate
 	bool	is_recovery;
 	bool	recovery_done;
 	int64	session_id;
+	MtmConfig *cfg;
 } MtmDecoderPrivate;
 
 typedef struct PGLogicalOutputData

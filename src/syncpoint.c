@@ -54,13 +54,13 @@
 
 /* XXX: change to some receiver-local structures */
 static int
-origin_id_to_node_id(RepOriginId origin_id)
+origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
 {
 	int		i;
 
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
-		if (Mtm->nodes[i].originId == origin_id)
+		if (mtm_cfg->nodes[i].origin_id == origin_id)
 			return i+1;
 	}
 
@@ -417,7 +417,7 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
  * Load filter
  */
 HTAB *
-RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
+RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 {
 	XLogReaderState *xlogreader;
 	HASHCTL		hash_ctl;
@@ -508,11 +508,11 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector)
 		{
 			mtm_log(MtmReceiverFilter,
 					"load_filter_map: process local=%"INT64_MODIFIER"x, origin=%d, node=%d",
-					xlogreader->EndRecPtr, origin_id, origin_id_to_node_id(origin_id));
+					xlogreader->EndRecPtr, origin_id, origin_id_to_node_id(origin_id, mtm_cfg));
 		}
 
 		/* skip records from non-mm origins */
-		node_id = origin_id_to_node_id(origin_id);
+		node_id = origin_id_to_node_id(origin_id, mtm_cfg);
 		if (node_id < 0)
 			continue;
 

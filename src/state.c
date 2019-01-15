@@ -75,6 +75,13 @@ countZeroBits(nodemask_t mask, int nNodes)
 }
 
 static void
+MtmStateFill(MtmConfig *cfg)
+{
+	Mtm->nAllNodes = cfg->n_nodes;
+	Mtm->my_node_id = cfg->my_node_id;
+}
+
+static void
 MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 {
 	if (Mtm->status == status)
@@ -113,16 +120,7 @@ MtmSetClusterStatus(MtmNodeStatus status, char *statusReason)
 			ResolveAllTransactions();
 			Mtm->refereeWinnerId = saved_winner_node_id;
 		}
-		MtmEnableNode(MtmNodeId);
-	}
-
-	if (status == MTM_RECOVERED)
-	{
-        /*
-		 * Update control file and donor node id after completion of recovery of new node from donor node 
-		 * to enable further recovery from any cluster node
-		 */
-		MtmUpdateControlFile();
+		MtmEnableNode(Mtm->my_node_id);
 	}
 
 	Mtm->status = status;
@@ -144,14 +142,14 @@ MtmCheckState(void)
 	old_status = Mtm->status;
 
 	mtm_log(MtmStateMessage,
-		"[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, major=%d, stopped=%s)",
+		"[STATE]   Status = (disabled=%s, unaccessible=%s, clique=%s, receivers=%s, senders=%s, total=%i, referee_grant=%d, stopped=%s)",
 		maskToString(Mtm->disabledNodeMask, Mtm->nAllNodes),
 		maskToString(SELF_CONNECTIVITY_MASK, Mtm->nAllNodes),
 		maskToString(Mtm->clique, Mtm->nAllNodes),
 		maskToString(Mtm->pglogicalReceiverMask, Mtm->nAllNodes),
 		maskToString(Mtm->pglogicalSenderMask, Mtm->nAllNodes),
 		Mtm->nAllNodes,
-		(MtmMajorNode || Mtm->refereeGrant),
+		(Mtm->refereeGrant),
 		maskToString(Mtm->stoppedNodeMask, Mtm->nAllNodes));
 
 #define ENABLE_IF(cond, reason) if ((cond) && !isEnabledState) { \
@@ -162,13 +160,11 @@ MtmCheckState(void)
 	isEnabledState = false;
 	ENABLE_IF(nConnected >= Mtm->nAllNodes/2+1,
 			  "node belongs to the majority group");
-	ENABLE_IF(nConnected == Mtm->nAllNodes/2 && MtmMajorNode,
-			  "node is a major node");
 	ENABLE_IF(nConnected == Mtm->nAllNodes/2 && Mtm->refereeGrant,
 			  "node has a referee grant");
-	DISABLE_IF(!BIT_CHECK(Mtm->clique, MtmNodeId-1) && !Mtm->refereeGrant,
+	DISABLE_IF(!BIT_CHECK(Mtm->clique, Mtm->my_node_id-1) && !Mtm->refereeGrant,
 			   "node is not in clique and has no referee grant");
-	DISABLE_IF(BIT_CHECK(Mtm->stoppedNodeMask, MtmNodeId-1),
+	DISABLE_IF(BIT_CHECK(Mtm->stoppedNodeMask, Mtm->my_node_id-1),
 			   "node is stopped manually");
 
 #undef ENABLE_IF
@@ -179,7 +175,7 @@ MtmCheckState(void)
 	{
 		// BIT_SET(Mtm->disabledNodeMask, MtmNodeId-1);
 		MtmSetClusterStatus(MTM_DISABLED, statusReason);
-		MtmDisableNode(MtmNodeId);
+		MtmDisableNode(Mtm->my_node_id);
 		return;
 	}
 
@@ -235,7 +231,7 @@ MtmCheckState(void)
 				{
 					mtm_log(MtmStateMessage, "[STATE] disable myself, nEnabled less then majority");
 					MtmSetClusterStatus(MTM_DISABLED, statusReason);
-					MtmDisableNode(MtmNodeId);
+					MtmDisableNode(Mtm->my_node_id);
 					/* do not recur */
 					return;
 				}
@@ -251,7 +247,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked) // X
 {
 	mtm_log(MtmStateMessage, "[STATE] Node %i: %s", node_id, MtmNeighborEventMnem[ev]);
 
-	Assert(node_id != MtmNodeId);
+	Assert(node_id != Mtm->my_node_id);
 
 	if (!locked)
 		MtmLock(LW_EXCLUSIVE);
@@ -312,7 +308,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 	switch (ev)
 	{
 		case MTM_CLIQUE_DISABLE:
-			BIT_SET(Mtm->disabledNodeMask, MtmNodeId-1);
+			BIT_SET(Mtm->disabledNodeMask, Mtm->my_node_id-1);
 			Mtm->recoveryCount++; /* this will restart replication connection */
 			break;
 
@@ -362,7 +358,7 @@ void MtmDisableNode(int nodeId)
 	mtm_log(MtmStateMessage, "[STATE] Node %i: disabled", nodeId);
 
 	BIT_SET(Mtm->disabledNodeMask, nodeId-1);
-	Mtm->nodes[nodeId-1].timeline += 1;
+	// Mtm->nodes[nodeId-1].timeline += 1;
 
 	if (Mtm->status == MTM_ONLINE) {
 		/* Make decision about prepared transaction status only in quorum */
@@ -436,8 +432,8 @@ MtmBuildConnectivityMatrix(nodemask_t* matrix)
 {
 	int i, j, n = Mtm->nAllNodes;
 
-	for (i = 0; i < n; i++)
-		matrix[i] = Mtm->nodes[i].connectivityMask;
+	// for (i = 0; i < n; i++)
+	// 	matrix[i] = Mtm->nodes[i].connectivityMask;
 
 	/* make matrix symmetric: required for Bron–Kerbosch algorithm */
 	for (i = 0; i < n; i++) {
@@ -511,7 +507,7 @@ MtmRefreshClusterStatus()
 						// MtmPollStatusOfPreparedTransactions(true);
 						ResolveAllTransactions();
 					}
-					MtmEnableNode(MtmNodeId);
+					MtmEnableNode(Mtm->my_node_id);
 					MtmCheckState();
 				}
 				MtmUnlock();
@@ -602,7 +598,7 @@ MtmRefreshClusterStatus()
 
 		if (new_status && new_status != old_status)
 		{
-			if ( i+1 == MtmNodeId )
+			if ( i+1 == Mtm->my_node_id )
 				MtmStateProcessEvent(MTM_CLIQUE_DISABLE, true);
 			else
 				MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
@@ -704,7 +700,7 @@ MtmRefereeGetWinner(void)
 	int  old_winner = -1;
 	int  rc;
 
-	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
+	conn = PQconnectdb(MtmRefereeConnStr);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		mtm_log(WARNING, "Could not connect to referee");
@@ -712,7 +708,7 @@ MtmRefereeGetWinner(void)
 		return -1;
 	}
 
-	sprintf(sql, "select referee.get_winner(%d)", MtmNodeId);
+	sprintf(sql, "select referee.get_winner(%d)", Mtm->my_node_id);
 	res = PQexec(conn, sql);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
 		PQntuples(res) != 1 ||
@@ -819,7 +815,7 @@ MtmRefereeClearWinner(void)
 	}
 
 
-	conn = PQconnectdb_safe(MtmRefereeConnStr, 5);
+	conn = PQconnectdb(MtmRefereeConnStr);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		mtm_log(WARNING, "Could not connect to referee");
@@ -896,29 +892,33 @@ MtmGetDisabledNodeMask()
 
 void MtmMonitor(Datum arg);
 
-static BackgroundWorker MtmMonitorWorker = {
-	"mtm-monitor",
-	"mtm-monitor",
-	BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION, 
-	BgWorkerStart_ConsistentState,
-	MULTIMASTER_BGW_RESTART_TIMEOUT,
-	"multimaster",
-	"MtmMonitor",
-	(Datum) 0,
-	"",
-	0
-};
-
 static int		sender_to_node[MTM_MAX_NODES];
 
 void
-MtmMonitorInitialize(void)
+MtmMonitorStart(Oid db_id, Oid user_id)
 {
-	RegisterBackgroundWorker(&MtmMonitorWorker);
+	BackgroundWorker worker;
+	BackgroundWorkerHandle *handle;
+
+	MemSet(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_main_arg = Int32GetDatum(0);
+
+	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
+	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
+
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "MtmMonitor");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-monitor");
+
+	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
+		elog(ERROR, "Failed to start monitor worker");
 }
 
 static void
-check_status_requests(void)
+check_status_requests(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
 	StringInfoData buffer;
@@ -963,9 +963,9 @@ check_status_requests(void)
 		pfree(state_3pc);
 
 		msg->code = MSG_POLL_STATUS;
-		msg->node = MtmNodeId;
+		msg->node = Mtm->my_node_id;
 
-		dest_id = Mtm->nodes[sender_node_id - 1].destination_id;
+		dest_id = mtm_cfg->nodes[sender_node_id - 1].destination_id;
 
 		// XXX: and define channels as strings too
 		dmq_push_buffer(dest_id, "txresp", msg,
@@ -979,7 +979,11 @@ check_status_requests(void)
 void
 MtmMonitor(Datum arg)
 {
-	int i, sender_id = 0;
+	int			i,
+				sender_id = 0;
+	Oid			db_id,
+				user_id;
+	MtmConfig  *mtm_cfg;
 
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
@@ -990,42 +994,54 @@ MtmMonitor(Datum arg)
 	BackgroundWorkerUnblockSignals();
 
 	/* Connect to a database */
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
+	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
+	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
+	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
-	/* Check extension creation */
-	MtmWaitForExtensionCreation();
+	mtm_cfg = MtmLoadConfig();
 
-	/* Start dmq senders */
-	for (i = 0; i < MtmNodes; i++)
+	/* Set proper values in Mtm structure */
+	MtmStateFill(mtm_cfg);
+
+	/* Now start all other necessary workers */
+
+	/* Launch resolver */
+	ResolverStart(db_id, user_id);
+
+	/* Order dmq-sender to connect with publishers */
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
 		char   *connstr_with_appname;
 		int		destination_id;
 
-		if (i + 1 == MtmNodeId)
+		if (i + 1 == Mtm->my_node_id)
 			continue;
 
 		connstr_with_appname = psprintf("%s application_name=%s",
-										Mtm->nodes[i].con.connStr,
+										mtm_cfg->nodes[i].conninfo,
 										MULTIMASTER_BROADCAST_SERVICE);
 
-		/* XXX: temp backward compatibility */
-		erase_option_from_connstr("arbiter_port", connstr_with_appname);
-
 		destination_id = dmq_destination_add(connstr_with_appname,
-											 psprintf("node%d", MtmNodeId),
+											 psprintf("node%d", mtm_cfg->my_node_id),
 											 psprintf("node%d", i + 1),
 											 MtmHeartbeatSendTimeout);
-
-		Mtm->nodes[i].destination_id = destination_id;
 
 		pfree(connstr_with_appname);
 	}
 
+	/* Launch receivers */
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
+	{
+		if (i == mtm_cfg->my_node_id - 1)
+			continue;
+		MtmStartReceiver(i + 1, db_id, user_id);
+	}
+
 	// XXX: turn this into a function
 	/* subscribe to status-requests channels from other nodes */
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
-		if (i + 1 != MtmNodeId)
+		if (i + 1 != mtm_cfg->my_node_id)
 		{
 			dmq_attach_receiver(psprintf("node%d", i + 1), i);
 			sender_to_node[sender_id++] = i + 1;
@@ -1048,7 +1064,7 @@ MtmMonitor(Datum arg)
 
 		MtmRefreshClusterStatus();
 
-		check_status_requests();
+		check_status_requests(mtm_cfg);
 
 		// MtmCheckSlots(); // XXX: add locking
 

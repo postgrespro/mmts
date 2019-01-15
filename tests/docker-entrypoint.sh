@@ -12,6 +12,37 @@ if [ "$1" = 'postgres' ]; then
 		{ echo; echo "host all all 0.0.0.0/0 trust"; } >> "$PGDATA/pg_hba.conf"
 		{ echo; echo "host replication all 0.0.0.0/0 trust"; } >> "$PGDATA/pg_hba.conf"
 
+		cat <<-EOF >> $PGDATA/postgresql.conf
+			listen_addresses='*'
+			log_line_prefix = '%m [%p]: '
+			archive_mode = on
+			archive_command = 'cp %p /pg/archive/%f'
+
+			fsync = on
+
+			max_prepared_transactions = 100
+			wal_level = logical
+			max_worker_processes = 50
+			max_replication_slots = 10
+			max_wal_senders = 10
+			# log_statement = all
+
+			shared_preload_libraries = 'multimaster'
+			multimaster.volkswagen_mode = on
+		EOF
+
+		if [ -n "$MAJOR" ]; then
+			echo 'multimaster.major_node = on' >> $PGDATA/postgresql.conf
+		fi
+
+		if [ -n "$REFEREE" ]; then
+			echo 'multimaster.referee = on' >> $PGDATA/postgresql.conf
+		fi
+
+		if [ -n "$REFEREE_CONNSTR" ]; then
+			echo "multimaster.referee_connstring = '$REFEREE_CONNSTR'" >> $PGDATA/postgresql.conf
+		fi
+
 		# internal start of server in order to allow set-up using psql-client
 		# does not listen on TCP/IP and waits until start finishes
 		pg_ctl -D "$PGDATA" \
@@ -40,57 +71,8 @@ if [ "$1" = 'postgres' ]; then
 		EOSQL
 		echo
 
-		############################################################################
-
-		# CONNSTRS="\
-		# 	dbname=$POSTGRES_DB user=$POSTGRES_USER host=node1, \
-		# 	dbname=$POSTGRES_DB user=$POSTGRES_USER host=node2, \
-		# 	dbname=$POSTGRES_DB user=$POSTGRES_USER host=node3"
-
-
-		cat <<-EOF >> $PGDATA/postgresql.conf
-			listen_addresses='*'
-			log_line_prefix = '%m [%p]: '
-			archive_mode = on
-			archive_command = 'cp %p /pg/archive/%f'
-
-			fsync = on
-
-			max_prepared_transactions = 100
-			wal_level = logical
-			max_worker_processes = 50
-			max_replication_slots = 10
-			max_wal_senders = 10
-			# log_statement = all
-
-			shared_preload_libraries = 'multimaster'
-			multimaster.max_nodes = 3
-			multimaster.heartbeat_recv_timeout = 1100
-			multimaster.heartbeat_send_timeout = 250
-			multimaster.volkswagen_mode = on
-		EOF
-
-		if [ -n "$NODE_ID" ]; then
-			echo "multimaster.node_id = $NODE_ID" >> $PGDATA/postgresql.conf
-		fi
-
-		if [ -n "$CONNSTRS" ]; then
-			echo "multimaster.conn_strings = '$CONNSTRS'" >> $PGDATA/postgresql.conf
-		fi
-
-		if [ -n "$MAJOR" ]; then
-			echo 'multimaster.major_node = on' >> $PGDATA/postgresql.conf
-		fi
-
-		if [ -n "$REFEREE" ]; then
-			echo 'multimaster.referee = on' >> $PGDATA/postgresql.conf
-		fi
-
-		if [ -n "$REFEREE_CONNSTR" ]; then
-			echo "multimaster.referee_connstring = '$REFEREE_CONNSTR'" >> $PGDATA/postgresql.conf
-		fi
-
-		cat $PGDATA/postgresql.conf
+		psql -U `whoami` $POSTGRES_DB -c 'CREATE EXTENSION multimaster;';
+		psql -U `whoami` $POSTGRES_DB -c "select mtm.init_node($NODE_ID, '{$CONNSTRS}');"
 
 		pg_ctl -D "$PGDATA" -m fast -w stop
 	fi

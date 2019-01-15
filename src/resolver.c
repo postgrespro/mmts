@@ -103,8 +103,6 @@ resolver_shmem_startup_hook()
 void
 ResolverInit(void)
 {
-	BackgroundWorker worker;
-
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
@@ -113,23 +111,33 @@ ResolverInit(void)
 
 	RequestNamedLWLockTranche("resolver", 1);
 
-	/* Set up common data for all our workers */
-	memset(&worker, 0, sizeof(worker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
-	worker.bgw_notify_pid = 0;
-	worker.bgw_main_arg = 0;
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "ResolverMain");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-resolver");
-	snprintf(worker.bgw_type, BGW_MAXLEN, "mtm-resolver");
-	RegisterBackgroundWorker(&worker);
-
 	/* Register shmem hooks */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = resolver_shmem_startup_hook;
 }
+
+void
+ResolverStart(Oid db_id, Oid user_id)
+{
+	BackgroundWorker worker;
+	BackgroundWorkerHandle *handle;
+
+	MemSet(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+
+	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
+	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
+
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "ResolverMain");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-resolver");
+
+	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
+		elog(ERROR, "Failed to start resolver worker");
+}
+
 
 /*****************************************************************************
  *
@@ -172,9 +180,9 @@ load_tasks(int node_id)
 				tx->state[j] = MtmTxUnknown;
 
 			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
-				tx->state[MtmNodeId - 1] = MtmTxPreCommited;
+				tx->state[Mtm->my_node_id - 1] = MtmTxPreCommited;
 			else
-				tx->state[MtmNodeId - 1] = MtmTxPrepared;
+				tx->state[Mtm->my_node_id - 1] = MtmTxPrepared;
 		}
 	}
 
@@ -294,14 +302,14 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	if (!found)
 		return;
 
-	Assert(tx->state[MtmNodeId-1] == MtmTxPrepared ||
-		   tx->state[MtmNodeId-1] == MtmTxPreCommited ||
-		   tx->state[MtmNodeId-1] == MtmTxPreAborted);
-	Assert(node_id != MtmNodeId);
+	Assert(tx->state[Mtm->my_node_id-1] == MtmTxPrepared ||
+		   tx->state[Mtm->my_node_id-1] == MtmTxPreCommited ||
+		   tx->state[Mtm->my_node_id-1] == MtmTxPreAborted);
+	Assert(node_id != Mtm->my_node_id);
 
 	mtm_log(ResolverTraceTxMsg,
 			"[RESOLVER] tx %s (%s) got state %s from node %d",
-			gid, MtmTxStateMnem(tx->state[MtmNodeId-1]), MtmTxStateMnem(state),
+			gid, MtmTxStateMnem(tx->state[Mtm->my_node_id-1]), MtmTxStateMnem(state),
 			node_id);
 
 	tx->state[node_id-1] = state;
@@ -363,7 +371,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 
 
 static void
-scatter_status_requests(void)
+scatter_status_requests(MtmConfig *mtm_cfg)
 {
 	HASH_SEQ_STATUS		hash_seq;
 	resolver_tx		   *tx;
@@ -375,9 +383,9 @@ scatter_status_requests(void)
 	{
 		int i;
 
-		for (i = 0; i < Mtm->nAllNodes; i++)
+		for (i = 0; i < mtm_cfg->n_nodes; i++)
 		{
-			if (i + 1 != MtmNodeId && !BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
+			if (i + 1 != mtm_cfg->my_node_id && !BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
 			{
 				MtmArbiterMessage msg;
 				DmqDestinationId dest_id;
@@ -386,7 +394,7 @@ scatter_status_requests(void)
 				MtmInitMessage(&msg, MSG_POLL_REQUEST);
 				strncpy(msg.gid, tx->gid, GIDSIZE);
 
-				dest_id = Mtm->nodes[i].destination_id;
+				dest_id = mtm_cfg->nodes[i].destination_id;
 
 				mtm_log(ResolverTraceTxMsg,
 						"[RESOLVER] sending request for %s to node%d",
@@ -426,10 +434,14 @@ handle_responses(void)
 }
 
 void
-ResolverMain(void)
+ResolverMain(Datum main_arg)
 {
-	int			i, sender_id = 0;
+	int			i,
+				sender_id = 0;
 	bool		send_requests = true;
+	Oid			db_id,
+				user_id;
+	MtmConfig  *mtm_cfg;
 
 	/* init this worker */
 	pqsignal(SIGHUP, PostgresSigHupHandler);
@@ -438,14 +450,18 @@ ResolverMain(void)
 
 	MtmBackgroundWorker = true;
 
-	BackgroundWorkerInitializeConnection(MtmDatabaseName, NULL, 0);
+	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
+	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
 
-	MtmWaitForExtensionCreation();
+	/* Connect to a database */
+	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
+
+	mtm_cfg = MtmLoadConfig();
 
 	/* subscribe to status-responses channels from other nodes */
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
-		if (i + 1 != MtmNodeId)
+		if (i + 1 != mtm_cfg->my_node_id)
 		{
 			dmq_attach_receiver(psprintf("node%d", i + 1), i);
 			sender_to_node[sender_id++] = i + 1;
@@ -467,7 +483,7 @@ ResolverMain(void)
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)
 		{
-			scatter_status_requests();
+			scatter_status_requests(mtm_cfg);
 			send_requests = false;
 		}
 

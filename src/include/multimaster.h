@@ -63,6 +63,7 @@ typedef struct
 	bool		contains_dml;	/* transaction contains DML statements */
 	bool		accessed_temp;
 	bool		explicit_twophase;	/* user level 2PC */
+	bool		distributed;
 	pgid_t		gid;			/* global transaction identifier (only in case
 								 * of explicit_twophase) */
 } MtmCurrentTrans;
@@ -122,35 +123,27 @@ typedef struct
 
 typedef struct
 {
-	char		hostName[MULTIMASTER_MAX_HOST_NAME_SIZE];
-	char		connStr[MULTIMASTER_MAX_CONN_STR_SIZE];
-	int			postmasterPort;
-} MtmConnectionInfo;
-
-typedef struct
-{
 	Oid			sourceTable;
 	nodemask_t	targetNodes;
 } MtmCopyRequest;
 
 typedef struct
 {
-	MtmConnectionInfo con;
-	/* Pool of background workers for applying logical replication */
-	BgwPool		pool;
-	nodemask_t	connectivityMask;	/* Connectivity mask at this node */
-	int			senderPid;
-	int			receiverPid;
-	XLogRecPtr	flushPos;
-	RepOriginId originId;
-	int			timeline;
-	bool		manualRecovery;
-	DmqDestinationId destination_id;
-} MtmNodeInfo;
+	int		n_nodes;
+	int		my_node_id;
+	struct
+	{
+		char	   *conninfo;
+		RepOriginId	origin_id;
+		DmqDestinationId destination_id;
+	} nodes[MTM_MAX_NODES];
+} MtmConfig;
+
+extern MtmConfig *receiver_mtm_cfg;
 
 typedef struct
 {
-	bool		extension_created;
+	int			my_node_id;
 	bool		stop_new_commits;
 	bool		recovered;
 	XLogRecPtr	latestSyncpoint;
@@ -159,6 +152,7 @@ typedef struct
 								 * current status was set */
 	int			recoverySlot;	/* NodeId of recovery slot or 0 if none */
 	LWLockPadded *locks;		/* multimaster lock tranche */
+	nodemask_t	selfConnectivityMask;
 	nodemask_t	disabledNodeMask;	/* Bitmask of disabled nodes */
 	nodemask_t	clique;			/* Bitmask of nodes that are connected and we
 								 * allowed to connect/send wal/receive wal
@@ -182,19 +176,15 @@ typedef struct
 	int			recoveryCount;	/* Number of completed recoveries */
 	int			donorNodeId;	/* Cluster node from which this node was
 								 * populated */
-	MtmNodeInfo nodes[1];		/* [Mtm->nAllNodes]: per-node data */
+	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
 } MtmState;
 
 extern MtmState *Mtm;
 
 /* XXX: to delete */
 extern int	MtmReplicationNodeId;
-extern int	MtmNodes;
-extern char *MtmDatabaseName;
-extern MtmConnectionInfo *MtmConnections;
 extern MtmCurrentTrans MtmTx;
 extern MemoryContext MtmApplyContext;
-extern char *MtmDatabaseUser;
 
 /* Locks */
 extern LWLock *MtmCommitBarrier;
@@ -211,36 +201,25 @@ extern bool MtmIsPoolWorker;
 extern int	MtmTransSpillThreshold;
 extern int	MtmHeartbeatSendTimeout;
 extern int	MtmHeartbeatRecvTimeout;
-extern bool MtmPreserveCommitOrder;
-extern bool MtmMajorNode;
 extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
 extern int	MtmMaxNodes;
-extern int	MtmNodeId;
-
 
 /*  XXX! need rename: that's actually a disconnectivity mask */
-#define SELF_CONNECTIVITY_MASK  (Mtm->nodes[MtmNodeId-1].connectivityMask)
+#define SELF_CONNECTIVITY_MASK  (Mtm->selfConnectivityMask)
 #define EFFECTIVE_CONNECTIVITY_MASK  ( SELF_CONNECTIVITY_MASK | Mtm->stoppedNodeMask | ~Mtm->clique )
-
 
 extern bool MtmTwoPhaseCommit(void);
 extern void MtmBeginTransaction(void);
 
 extern void MtmXactCallback2(XactEvent event, void *arg);
-extern void MtmGenerateGid(char *gid, TransactionId xid);
+extern void MtmGenerateGid(char *gid, TransactionId xid, int node_id);
 extern int	MtmGidParseNodeId(const char *gid);
 extern TransactionId MtmGidParseXid(const char *gid);
-extern void MtmWaitForExtensionCreation(void);
 extern void MtmSleep(timestamp_t interval);
-extern void MtmUpdateControlFile(void);
-extern void MtmCheckSlots(void);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);
-
-
-/* XXX: to delete */
-extern void erase_option_from_connstr(const char *option, char *connstr);
+extern MtmConfig *MtmLoadConfig(void);
 
 extern void MtmLock(LWLockMode mode);
 extern void MtmUnlock(void);
@@ -248,10 +227,8 @@ extern void MtmLockNode(int nodeId, LWLockMode mode);
 extern bool MtmTryLockNode(int nodeId, LWLockMode mode);
 extern void MtmUnlockNode(int nodeId);
 
-extern PGconn *PQconnectdb_safe(const char *conninfo, int timeout);
-
 extern void MtmInitMessage(MtmArbiterMessage *msg, MtmMessageCode code);
 
-
+extern bool MtmIsEnabled(void);
 
 #endif							/* MULTIMASTER_H */

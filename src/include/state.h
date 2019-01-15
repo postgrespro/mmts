@@ -23,7 +23,9 @@ typedef enum
 
 extern char const* const MtmNodeStatusMnem[];
 
-extern void MtmMonitorInitialize(void);
+extern void MtmStateLoad(MtmConfig *cfg);
+
+extern void MtmMonitorStart(Oid db_id, Oid user_id);
 
 extern void MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked);
 extern void MtmStateProcessEvent(MtmEvent ev, bool locked);

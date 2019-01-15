@@ -16,6 +16,7 @@
 #include "utils/guc.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
+#include "catalog/pg_subscription.h"
 #include "tcop/tcopprot.h"
 #include "postmaster/autovacuum.h"
 
@@ -25,9 +26,9 @@
 #include "state.h"
 #include "syncpoint.h"
 
-static Oid		MtmDatabaseId;
-static bool		DmqSubscribed;
-static int		sender_to_node[MTM_MAX_NODES];
+static bool	backend_init_done;
+static int	sender_to_node[MTM_MAX_NODES];
+static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
 
@@ -36,15 +37,31 @@ static bool GatherPrepares(TransactionId xid, nodemask_t participantsMask,
 static void GatherPrecommits(TransactionId xid, nodemask_t participantsMask,
 						     MtmMessageCode code);
 
+static void
+backend_init()
+{
+	int		i,
+			sender_id = 0;
+
+	/* load mm config */
+	mtm_cfg = MtmLoadConfig();
+
+	/* attach ourself to receiver queues and fill out sender_to_node[] */
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
+	{
+		if (i + 1 == mtm_cfg->my_node_id)
+			continue;
+		dmq_attach_receiver(psprintf("node%d", i + 1), i);
+		sender_to_node[sender_id++] = i + 1;
+	}
+}
 
 void
 MtmXactCallback2(XactEvent event, void *arg)
 {
 	/*
-	 * Do not perform distributed commit for transactions in non-ordinary
-	 * backends.
-	 *
-	 * XXX: avoid Mtm->extension_created 
+	 * Perform distributed commit only for transactions in ordinary
+	 * backends with multimaster enabled.
 	 */
 	if (IsAnyAutoVacuumProcess() || !IsNormalProcessingMode() ||
 		am_walsender || IsBackgroundWorker)
@@ -59,6 +76,7 @@ MtmXactCallback2(XactEvent event, void *arg)
 			break;
 
 		case XACT_EVENT_COMMIT_COMMAND:
+			/* Here we catching commit of single-statement transaction */
 			if (IsTransactionOrTransactionBlock()
 					&& !IsTransactionBlock()
 					&& !IsSubTransaction())
@@ -76,22 +94,37 @@ MtmXactCallback2(XactEvent event, void *arg)
 void
 MtmBeginTransaction()
 {
+	// XXX: clean MtmTx on commit and check on begin that it is clean.
+	// That should unveil probable issues with subxacts.
+
+	if (!MtmIsEnabled())
+	{
+		MtmTx.distributed = false;
+		return;
+	}
+
+	// XXX: reload on new node. (origin inval callback?)
+	if (!backend_init_done)
+	{
+		backend_init();
+		backend_init_done = true;
+	}
+
 	/* Reset MtmTx */
 	MtmTx.explicit_twophase = false;
 	MtmTx.contains_ddl = false; // will be set by executor hook
 	MtmTx.contains_dml = false;
 	MtmTx.gid[0] = '\0';
 	MtmTx.accessed_temp = false;
+	MtmTx.distributed = true;
 
 	MtmDDLResetStatement();
 
-	/* XXX: ugly hack with debug_query_string */
 
 	/* Application name can be changed using PGAPPNAME environment variable */
 	if (Mtm->status != MTM_ONLINE
 		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
-		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0
-		&& debug_query_string && pg_strcasecmp(debug_query_string, "create extension multimaster;") != 0)
+		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0)
 	{
 		/* Reject all user's transactions at offline cluster.
 		 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
@@ -112,16 +145,10 @@ MtmTwoPhaseCommit()
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
 
-	if (!MtmDatabaseId)
-		MtmDatabaseId = get_database_oid(MtmDatabaseName, false);
-
-	if (MtmDatabaseId != MyDatabaseId)
+	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
-		// mtm_log(ERROR,
-		// 	"Refusing to work. Multimaster configured to work with database '%s'",
-		// 	MtmDatabaseName);
 
-	if ( (!MtmTx.contains_ddl && !MtmTx.contains_dml) || !Mtm->extension_created)
+	if (!MtmTx.distributed)
 		return false;
 
 	if (MtmTx.accessed_temp)
@@ -132,20 +159,6 @@ MtmTwoPhaseCommit()
 			mtm_log(ERROR, "Transaction accessed both temporary and replicated table, can't prepare");
 	}
 
-	if (!DmqSubscribed)
-	{
-		int i, sender_id = 0;
-		for (i = 0; i < Mtm->nAllNodes; i++)
-		{
-			if (i + 1 != MtmNodeId)
-			{
-				dmq_attach_receiver(psprintf("node%d", i + 1), i);
-				sender_to_node[sender_id++] = i + 1;
-			}
-		}
-		DmqSubscribed = true;
-	}
-
 	if (!IsTransactionBlock())
 	{
 		BeginTransactionBlock(false);
@@ -154,7 +167,7 @@ MtmTwoPhaseCommit()
 	}
 
 	xid = GetTopTransactionId();
-	MtmGenerateGid(gid, xid);
+	MtmGenerateGid(gid, xid, mtm_cfg->my_node_id);
 	sprintf(stream, "xid" XID_FMT, xid);
 	dmq_stream_subscribe(stream);
 	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
@@ -178,9 +191,9 @@ MtmTwoPhaseCommit()
 	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
 
 	MtmLock(LW_SHARED);
-	participantsMask = (((nodemask_t)1 << Mtm->nAllNodes) - 1) &
+	participantsMask = (((nodemask_t)1 << mtm_cfg->n_nodes) - 1) &
 								  ~Mtm->disabledNodeMask &
-								  ~((nodemask_t)1 << (MtmNodeId-1));
+								  ~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
 	if (Mtm->status != MTM_ONLINE)
 		mtm_log(ERROR, "This node became offline during current transaction");
 	MtmUnlock();

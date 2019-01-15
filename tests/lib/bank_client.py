@@ -79,7 +79,7 @@ class MtmClient(object):
         self.n_accounts = n_accounts
         self.dsns = dsns
 
-        self.create_extension()
+        # self.create_extension()
 
         self.total = 0
         self.aggregates = [{} for e in dsns]
@@ -318,7 +318,7 @@ class MtmClient(object):
 
     @asyncio.coroutine
     def total_tx(self, conn, cur, agg, conn_i):
-        yield from cur.execute("select sum(amount), count(*), count(uid), current_setting('multimaster.node_id') from bank_test")
+        yield from cur.execute("select sum(amount), count(*), count(uid) from bank_test")
         total = yield from cur.fetchone()
         if total[0] != self.total:
             agg.isolation += 1

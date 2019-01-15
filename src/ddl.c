@@ -24,6 +24,7 @@
 #include "utils/snapmgr.h"
 #include "nodes/makefuncs.h"
 #include "catalog/pg_constraint.h"
+#include "catalog/pg_namespace.h"
 #include "executor/spi.h"
 #include "utils/lsyscache.h"
 #include "catalog/indexing.h"
@@ -207,7 +208,7 @@ MtmGucInit(void)
 	 */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 	current_role = GetConfigOptionByName("session_authorization", NULL, false);
-	if (current_role && *current_role && strcmp(MtmDatabaseUser, current_role) != 0)
+	// XXX if (current_role && *current_role && strcmp(MtmDatabaseUser, current_role) != 0)
 		MtmGucUpdate("session_authorization", current_role);
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -675,12 +676,9 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_CheckPointStmt:
 		case T_ReindexStmt:
 		case T_AlterSystemStmt:
-			skipCommand = true;
-			break;
-
 		case T_CreatedbStmt:
 		case T_DropdbStmt:
-			elog(ERROR, "Multimaster doesn't support creating and dropping databases");
+			skipCommand = true;
 			break;
 
 		case T_CreateSeqStmt:
@@ -941,7 +939,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 static void
 MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 {
-	if (!MtmIsLogicalReceiver && !MtmDDLStatement)
+	if (!MtmIsLogicalReceiver && !MtmDDLStatement && MtmIsEnabled())
 	{
 		ListCell   *tlist;
 
@@ -998,37 +996,36 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 	CmdType operation = queryDesc->operation;
 	EState *estate = queryDesc->estate;
-	if (estate->es_processed != 0 && (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)) {
-		int i;
-		for (i = 0; i < estate->es_num_result_relations; i++) {
-			Relation rel = estate->es_result_relations[i].ri_RelationDesc;
-			if (RelationNeedsWAL(rel)) {
-				if (MtmIgnoreTablesWithoutPk) {
-					if (!rel->rd_indexvalid) {
-						RelationGetIndexList(rel);
+
+	if (MtmIsEnabled())
+	{
+		if (estate->es_processed != 0 && (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)) {
+			int i;
+			for (i = 0; i < estate->es_num_result_relations; i++) {
+				Relation rel = estate->es_result_relations[i].ri_RelationDesc;
+				if (RelationNeedsWAL(rel)) {
+					if (MtmIgnoreTablesWithoutPk) {
+						if (!rel->rd_indexvalid) {
+							RelationGetIndexList(rel);
+						}
+						if (rel->rd_replidindex == InvalidOid) {
+							MtmMakeRelationLocal(RelationGetRelid(rel));
+							continue;
+						}
 					}
-					if (rel->rd_replidindex == InvalidOid) {
-						MtmMakeRelationLocal(RelationGetRelid(rel));
-						continue;
-					}
+					MtmTx.contains_dml = true;
+					break;
 				}
-				MtmTx.contains_dml = true;
-				break;
 			}
 		}
 	}
 
-
 	if (PreviousExecutorFinishHook != NULL)
-	{
 		PreviousExecutorFinishHook(queryDesc);
-	}
 	else
-	{
 		standard_ExecutorFinish(queryDesc);
-	}
 
-	if (MtmDDLStatement == queryDesc)
+	if (MtmDDLStatement == queryDesc && MtmIsEnabled())
 	{
 		MtmFinishDDLCommand();
 		MtmDDLStatement = NULL;
@@ -1296,6 +1293,20 @@ MtmInitializeRemoteFunctionsMap()
 	FuncCandidateList clist;
 	Oid			save_userid;
 	int			save_sec_context;
+	Oid			mtm_nsp_oid,
+				mtm_owner_oid;
+	HeapTuple	nsp_tuple;
+	Form_pg_namespace mtm_namespace_tuple;
+
+
+	/* get mtm namespace owner */
+	mtm_nsp_oid = get_namespace_oid(MULTIMASTER_SCHEMA_NAME, false);
+	nsp_tuple = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(mtm_nsp_oid));
+	if (!HeapTupleIsValid(nsp_tuple))
+		elog(ERROR, "cache lookup failed for namespace %s", MULTIMASTER_SCHEMA_NAME);
+	mtm_namespace_tuple = (Form_pg_namespace) GETSTRUCT(nsp_tuple);
+	mtm_owner_oid = mtm_namespace_tuple->nspowner;
+	ReleaseSysCache(nsp_tuple);
 
 	for (p = MtmRemoteFunctionsList; (q = strchr(p, ',')) != NULL; p = q + 1, n_funcs++);
 
@@ -1312,7 +1323,7 @@ MtmInitializeRemoteFunctionsMap()
 	 * mtm schema.
 	 */
 	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	SetUserIdAndSecContext(get_role_oid(MtmDatabaseUser, false),
+	SetUserIdAndSecContext(mtm_owner_oid,
 						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
 	p = pstrdup(MtmRemoteFunctionsList);
@@ -1350,7 +1361,7 @@ MtmInitializeRemoteFunctionsMap()
 static void
 MtmSeqNextvalHook(Oid seqid, int64 next)
 {
-	if (MtmMonotonicSequences)
+	if (MtmMonotonicSequences && MtmIsEnabled())
 	{
 		MtmSeqPosition pos;
 		pos.seqid = seqid;
@@ -1364,6 +1375,9 @@ AdjustCreateSequence(List *options)
 {
 	bool has_increment = false, has_start = false;
 	ListCell   *option;
+
+	if (!MtmIsEnabled())
+		return;
 
 	foreach(option, options)
 	{
@@ -1382,7 +1396,7 @@ AdjustCreateSequence(List *options)
 
 	if (!has_start)
 	{
-		DefElem *defel = makeDefElem("start", (Node *) makeInteger(MtmNodeId), -1);
+		DefElem *defel = makeDefElem("start", (Node *) makeInteger(Mtm->my_node_id), -1);
 		options = lappend(options, defel);
 	}
 }

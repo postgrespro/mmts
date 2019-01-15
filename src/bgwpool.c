@@ -25,7 +25,6 @@ int  MtmMaxWorkers;
 
 static BgwPool* MtmPool;
 
-void BgwPoolStaticWorkerMainLoop(Datum arg);
 void BgwPoolDynamicWorkerMainLoop(Datum arg);
 
 static void
@@ -65,10 +64,12 @@ BgwPoolMainLoop(BgwPool* pool)
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
 	BackgroundWorkerUnblockSignals();
-	BackgroundWorkerInitializeConnection(pool->dbname, pool->dbuser, 0);
+	BackgroundWorkerInitializeConnectionByOid(pool->db_id, pool->user_id, 0);
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
+
+	receiver_mtm_cfg = MtmLoadConfig();
 
 	while (true)
 	{
@@ -138,7 +139,10 @@ BgwPoolMainLoop(BgwPool* pool)
 	mtm_log(BgwPoolEvent, "Shutdown background worker %d", MyProcPid);
 }
 
-void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  char const* dbuser, size_t queueSize, size_t nWorkers)
+// XXX: this is called during _PG_init because we need to allocate queue.
+// Better to use DSM, so that can be done dynamically.
+void
+BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nWorkers)
 {
 	MtmPool = pool;
 
@@ -164,8 +168,6 @@ void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname,  c
 	pool->nWorkers = nWorkers;
 	pool->lastPeakTime = 0;
 	pool->lastDynamicWorkerStartTime = 0;
-	strncpy(pool->dbname, dbname, MAX_DBNAME_LEN);
-	strncpy(pool->dbuser, dbuser, MAX_DBUSER_LEN);
 }
  
 timestamp_t BgwGetLastPeekTime(BgwPool* pool)
@@ -173,28 +175,17 @@ timestamp_t BgwGetLastPeekTime(BgwPool* pool)
 	return pool->lastPeakTime;
 }
 
-void BgwPoolStaticWorkerMainLoop(Datum arg)
-{
-	BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
-}
-
 void BgwPoolDynamicWorkerMainLoop(Datum arg)
 {
 	BgwPoolMainLoop((BgwPool*)DatumGetPointer(arg));
 }
 
-void BgwPoolStart(BgwPool* pool, char *poolName)
+void
+BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
 {
-	BackgroundWorker worker;
-
-	MemSet(&worker, 0, sizeof(BackgroundWorker));
-    worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "BgwPoolStaticWorkerMainLoop");
-	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
-
 	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
+	pool->db_id = db_id;
+	pool->user_id = user_id;
 }
 
 size_t BgwPoolGetQueueSize(BgwPool* pool)

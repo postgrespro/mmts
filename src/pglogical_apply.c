@@ -521,16 +521,16 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	{
 		int ntasks;
 
-		SpinLockAcquire(&Mtm->nodes[rctx->node_id-1].pool.lock);
-		ntasks = Mtm->nodes[rctx->node_id-1].pool.active +
-				 Mtm->nodes[rctx->node_id-1].pool.pending;
-		SpinLockRelease(&Mtm->nodes[rctx->node_id-1].pool.lock);
+		SpinLockAcquire(&Mtm->pools[rctx->node_id-1].lock);
+		ntasks = Mtm->pools[rctx->node_id-1].active +
+				 Mtm->pools[rctx->node_id-1].pending;
+		SpinLockRelease(&Mtm->pools[rctx->node_id-1].lock);
 
 		Assert(ntasks >= 0);
 		if (ntasks == 0)
 			break;
 
-		ConditionVariableSleep(&Mtm->nodes[rctx->node_id-1].pool.syncpoint_cv,
+		ConditionVariableSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv,
 			PG_WAIT_EXTENSION);
 	}
 	ConditionVariableCancelSleep();
@@ -550,7 +550,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		Assert(rc == 3);
 
 		/* skip our own syncpoints */
-		if (origin_node == MtmNodeId)
+		if (origin_node == Mtm->my_node_id)
 			return;
 
 		local_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
@@ -564,7 +564,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		origin_node = rctx->node_id;
 		rc = sscanf(msg, UINT64_FORMAT, &trim_lsn);
 		Assert(rc == 1);
-		Assert(origin_node != MtmNodeId);
+		Assert(origin_node != Mtm->my_node_id);
 
 		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
 						   origin_node, origin_lsn, trim_lsn);
@@ -827,7 +827,7 @@ read_rel(StringInfo s, LOCKMODE mode)
 static void
 mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 {
-	DmqDestinationId dest_id = Mtm->nodes[node_id-1].destination_id;
+	DmqDestinationId dest_id = receiver_mtm_cfg->nodes[node_id-1].destination_id;
 	MtmArbiterMessage msg;
 
 	MtmInitMessage(&msg, msg_code);

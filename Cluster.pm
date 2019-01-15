@@ -62,7 +62,7 @@ sub new
 	foreach my $i (1..$nodenum)
 	{
 		my $host = "127.0.0.1";
-		my ($pgport, $arbiter_port) = allocate_ports($host, 2);
+		my ($pgport) = allocate_ports($host, 1);
 
 		if(defined $ENV{MMPORT}) {
 			$pgport = $ENV{MMPORT};
@@ -72,8 +72,7 @@ sub new
 		my $node = new PostgresNode("node$i", $host, $pgport);
 		$node->{id} = $i;
 		$node->{dbname} = 'postgres';
-		$node->{arbiter_port} = $arbiter_port;
-		$node->{mmconnstr} = "${ \$node->connstr($node->{dbname}) } arbiter_port=${ \$node->{arbiter_port} }";
+		$node->{mmconnstr} = $node->connstr($node->{dbname});
 		push(@$nodes, $node);
 	}
 
@@ -102,7 +101,7 @@ sub all_connstrs
 {
 	my ($self) = @_;
 	my $nodes = $self->{nodes};
-	return join(', ', map { "${ \$_->connstr($_->{dbname}) } arbiter_port=${ \$_->{arbiter_port} }" } @$nodes);
+	return join(', ', map { "\" ${ \$_->connstr($_->{dbname}) } \"" } @$nodes);
 }
 
 
@@ -126,15 +125,11 @@ sub configure
 		}
 	}
 
-	my $connstr = $self->all_connstrs();
-	$connstr =~ s/'//gms;
-
 	foreach my $node (@$nodes)
 	{
 		my $id = $node->{id};
 		my $host = $node->host;
 		my $pgport = $node->port;
-		my $arbiter_port = $node->{arbiter_port};
 		my $unix_sock_dir = $ENV{PGHOST};
 
 		$node->append_conf("postgresql.conf", qq(
@@ -148,18 +143,16 @@ sub configure
 			wal_level = logical
 			max_wal_senders = 6
 			wal_sender_timeout = 0
-			max_replication_slots = 6
+			max_replication_slots = 12
 			shared_preload_libraries = 'multimaster'
 			shared_buffers = 16MB
 
-			multimaster.node_id = $id
-			multimaster.conn_strings = '$connstr'
 			multimaster.heartbeat_recv_timeout = 8050
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_nodes = 6
 			# XXX try without ignore_tables_without_pk
 			multimaster.ignore_tables_without_pk = true
-			# multimaster.volkswagen_mode = 1
+			multimaster.volkswagen_mode = 1
 			log_line_prefix = '%t [%p]: '
 		));
 
@@ -175,11 +168,17 @@ sub start
 {
 	my ($self) = @_;
 	my $nodes = $self->{nodes};
+	my $node_id = 1;
+
+	my $connstrs = $self->all_connstrs();
+	$connstrs =~ s/'/''/gms;
 
 	foreach my $node (@$nodes)
 	{
 		$node->start();
 		$node->safe_psql($node->{dbname}, "create extension multimaster;");
+		$node->safe_psql($node->{dbname}, "select mtm.init_node($node_id, '{$connstrs}');");
+		$node_id = $node_id + 1;
 		note( "Starting node with connstr 'port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
 	}
 }
@@ -370,7 +369,6 @@ sub add_node()
 	my ($self, %params) = @_;
 
 	my $pgport;
-	my $arbiter_port;
 	my $connstrs;
 	my $node_id;
 
@@ -378,15 +376,13 @@ sub add_node()
 	{
 		$node_id = $params{node_id};
 		$pgport = $params{port};
-		$arbiter_port = $params{arbiter_port};
 		$connstrs = $self->all_connstrs();
 	}
 	else
 	{
 		$node_id = scalar(@{$self->{nodes}}) + 1;
 		$pgport = (allocate_ports('127.0.0.1', 1))[0];
-		$arbiter_port = (allocate_ports('127.0.0.1', 1))[0];
-		$connstrs = $self->all_connstrs() . ", dbname=${ \$self->{nodes}->[0]->{dbname} } host=127.0.0.1 port=$pgport arbiter_port=$arbiter_port";
+		$connstrs = $self->all_connstrs() . ", dbname=${ \$self->{nodes}->[0]->{dbname} } host=127.0.0.1 port=$pgport";
 	}
 
 	$connstrs =~ s/'//gms;
@@ -402,12 +398,9 @@ sub add_node()
 	$node->{_port} = $pgport;
 	$node->{port} = $pgport;
 	$node->{host} = '127.0.0.1';
-	$node->{arbiter_port} = $arbiter_port;
-	$node->{mmconnstr} = "${ \$node->connstr($node->{dbname}) } arbiter_port=${ \$node->{arbiter_port} }";
+	$node->{mmconnstr} = $node->connstr($node->{dbname});
 	$node->append_conf("postgresql.conf", qq(
-		multimaster.arbiter_port = $arbiter_port
 		multimaster.conn_strings = '$connstrs'
-		multimaster.node_id = $node_id
 		port = $pgport
 	));
 	$node->append_conf("pg_hba.conf", qq(

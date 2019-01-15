@@ -157,7 +157,7 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	MtmIsFilteredTxn = false;
 
 	pq_sendbyte(out, 'B');		/* BEGIN */
-	pq_sendint(out, MtmNodeId, 4);
+	pq_sendint(out, hooks_data->cfg->my_node_id, 4);
 	pq_sendint64(out, txn->xid);
 	pq_sendint64(out, 42);
 	pq_sendint64(out, 142);
@@ -374,28 +374,25 @@ write_startup_message(StringInfo out, List *msg)
 }
 
 static void
-send_node_id(StringInfo out, ReorderBufferTXN *txn)
+send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 {
 	if (txn->origin_id != InvalidRepOriginId)
 	{
 		int i;
-		for (i = 0; i < Mtm->nAllNodes && Mtm->nodes[i].originId != txn->origin_id; i++)
-			;
-		if (i == Mtm->nAllNodes)
+		for (i = 0; i < private->cfg->n_nodes; i++)
 		{
-			mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
-			i = MtmNodeId - 1;
-			Assert(false);
+			if (private->cfg->nodes[i].origin_id == txn->origin_id)
+			{
+				pq_sendbyte(out, i + 1);
+				return;
+			}
 		}
-		else
-		{
-			// Assert(i == MtmNodeId - 1 || txn->origin_lsn != InvalidXLogRecPtr);
-		}
-		pq_sendbyte(out, i + 1);
+		mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
+		Assert(false);
 	}
 	else
 	{
-		pq_sendbyte(out, MtmNodeId);
+		pq_sendbyte(out, private->cfg->my_node_id);
 	}
 }
 
@@ -407,6 +404,7 @@ void
 pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 	uint8 event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
 
 	/* Ensure that we reset DDLInProgress */
@@ -419,14 +417,14 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
 	pq_sendbyte(out, event);
-	pq_sendbyte(out, MtmNodeId);
+	pq_sendbyte(out, hooks_data->cfg->my_node_id);
 
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
 	pq_sendint64(out, txn->commit_time);
 
-	send_node_id(out, txn);
+	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
 
 	pq_sendstring(out, txn->gid);
@@ -448,14 +446,14 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
 	pq_sendbyte(out, PGLOGICAL_COMMIT_PREPARED);
-	pq_sendbyte(out, MtmNodeId);
+	pq_sendbyte(out, hooks_data->cfg->my_node_id);
 
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
 	pq_sendint64(out, txn->commit_time);
 
-	send_node_id(out, txn);
+	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
 
 	/* only for commit prepared */
@@ -478,14 +476,14 @@ pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
 	pq_sendbyte(out, PGLOGICAL_ABORT_PREPARED);
-	pq_sendbyte(out, MtmNodeId);
+	pq_sendbyte(out, hooks_data->cfg->my_node_id);
 
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
 	pq_sendint64(out, txn->commit_time);
 
-	send_node_id(out, txn);
+	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
 
 	/* skip CSN */
@@ -497,6 +495,7 @@ static void
 pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 	uint8 event = PGLOGICAL_COMMIT;
 
 	if (MtmIsFilteredTxn)
@@ -505,14 +504,14 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendbyte(out, 'C');
 	pq_sendbyte(out, event);
-	pq_sendbyte(out, MtmNodeId);
+	pq_sendbyte(out, hooks_data->cfg->my_node_id);
 
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
 	pq_sendint64(out, txn->commit_time);
 
-	send_node_id(out, txn);
+	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
 }
 
@@ -715,15 +714,13 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 {
 	ListCell *param;
 	MtmDecoderPrivate   *hooks_data;
-	int i;
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
 	hooks_data->session_id = 0;
 	hooks_data->recovery_done = false;
 	hooks_data->is_recovery = false;
-
-	Mtm->nodes[MtmReplicationNodeId-1].senderPid = MyProcPid;
+	hooks_data->cfg = MtmLoadConfig();
 
 	foreach(param, args->in_params)
 	{
@@ -780,34 +777,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	 * callback in vanilla pg and adding one will require some carefull thoughts.
 	 */
 	MtmLock(LW_EXCLUSIVE);
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1))
 	{
-		char	   *originName;
-		RepOriginId originId;
-
-		originName = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
-		originId = replorigin_by_name(originName, true);
-		if (originId == InvalidRepOriginId) {
-			originId = replorigin_create(originName);
-		}
-		CommitTransactionCommand();
-		StartTransactionCommand();
-		Mtm->nodes[i].originId = originId;
-	}
-
-	if (BIT_CHECK(Mtm->stalledNodeMask, MtmReplicationNodeId-1)) {
-		MtmUnlock();
-		mtm_log(ERROR, "Stalled node %d tries to initiate recovery",
-				 MtmReplicationNodeId);
-	}
-
-	if (BIT_CHECK(Mtm->stoppedNodeMask, MtmReplicationNodeId-1)) {
-		MtmUnlock();
-		mtm_log(ERROR, "Stopped node %d tries to connect",
-				 MtmReplicationNodeId);
-	}
-
-	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1)) {
 		MtmUnlock();
 		mtm_log(ERROR, "Out-of-clique node %d tries to connect",
 				 MtmReplicationNodeId);

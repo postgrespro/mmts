@@ -40,18 +40,17 @@ typedef struct
     bool   producerBlocked;
 	bool   shutdown;
 	char   poolName[MAX_NAME_LEN];
-    char   dbname[MAX_DBNAME_LEN];
-	char   dbuser[MAX_DBUSER_LEN];
+	Oid		db_id;
+	Oid		user_id;
     char*  queue;
-
 	BackgroundWorkerHandle **bgwhandles;
 } BgwPool;
 
 typedef BgwPool*(*BgwPoolConstructor)(void);
 
-extern void BgwPoolStart(BgwPool* pool, char *poolName);
+extern void BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id);
 
-extern void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, char const* dbname, char const* dbuser, size_t queueSize, size_t nWorkers);
+extern void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nWorkers);
 
 extern void BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx);
 
