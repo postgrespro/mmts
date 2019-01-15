@@ -1012,7 +1012,6 @@ MtmMonitor(Datum arg)
 	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
 		char   *connstr_with_appname;
-		int		destination_id;
 
 		if (i + 1 == Mtm->my_node_id)
 			continue;
@@ -1021,10 +1020,10 @@ MtmMonitor(Datum arg)
 										mtm_cfg->nodes[i].conninfo,
 										MULTIMASTER_BROADCAST_SERVICE);
 
-		destination_id = dmq_destination_add(connstr_with_appname,
-											 psprintf("node%d", mtm_cfg->my_node_id),
-											 psprintf("node%d", i + 1),
-											 MtmHeartbeatSendTimeout);
+		dmq_destination_add(connstr_with_appname,
+							psprintf("node%d", mtm_cfg->my_node_id),
+							psprintf("node%d", i + 1),
+							MtmHeartbeatSendTimeout);
 
 		pfree(connstr_with_appname);
 	}

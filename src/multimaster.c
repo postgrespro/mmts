@@ -903,7 +903,6 @@ mtm_init_node(PG_FUNCTION_ARGS)
 
 	for (i = 0; i < n_nodes; i++)
 	{
-		RepOriginId	origin_id;
 		char	   *origin_name;
 		char	   *recovery_slot;
 
@@ -912,7 +911,7 @@ mtm_init_node(PG_FUNCTION_ARGS)
 
 		/* create origin for this neighbour */
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
-		origin_id = replorigin_create(origin_name);
+		replorigin_create(origin_name);
 
 		/* Create recovery slot to hold WAL files that we may need during recovery */
 		recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, i + 1);

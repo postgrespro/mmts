@@ -4,11 +4,10 @@
 #ifndef __BKB_H__
 #define __BKB_H__
 
-#include "postgres.h" /* nodemask_t */
+#include "postgres.h"
 
-#define MAX_NODES sizeof(nodemask_t)
-typedef uint64 nodemask_t;
+#define MAX_NODES sizeof(uint64)
 
-extern nodemask_t MtmFindMaxClique(nodemask_t* matrix, int n_modes, int* clique_size);
+extern uint64 MtmFindMaxClique(uint64* matrix, int n_modes, int* clique_size);
 
 #endif

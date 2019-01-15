@@ -3,6 +3,7 @@
 
 #define BIT_CHECK(mask, bit) (((mask) & ((nodemask_t)1 << (bit))) != 0)
 #define BIT_SET(mask, bit)   (mask |= ((nodemask_t)1 << (bit)))
+typedef uint64 nodemask_t;
 
 /*
  * Bron–Kerbosch algorithm to find maximum clique in graph
