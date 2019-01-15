@@ -140,7 +140,7 @@ MtmTwoPhaseCommit()
 {
 	nodemask_t participantsMask;
 	bool	ret;
-	int		failed_at;
+	int		failed_at = 0;
 	TransactionId xid;
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
