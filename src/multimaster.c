@@ -93,6 +93,7 @@ static void MtmShmemStartup(void);
 
 static void launcher_init(void);
 void launcher_main(Datum main_arg);
+void drop_node_entry(int node_id);
 
 MtmState* Mtm;
 
@@ -718,7 +719,7 @@ create_node_entry(int node_id, char *connstr, bool is_self)
 }
 
 /* delete node entry */
-static void
+void
 drop_node_entry(int node_id)
 {
 	char	   *sql;
