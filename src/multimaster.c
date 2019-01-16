@@ -814,7 +814,7 @@ MtmLoadConfig()
 			}
 		}
 
-		Assert(cfg->my_node_id != 0);
+		Assert(cfg->my_node_id != 0 || cfg->n_nodes == 0);
 	}
 	else
 	{
