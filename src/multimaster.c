@@ -739,6 +739,11 @@ drop_node_entry(int node_id)
 	PopActiveSnapshot();
 }
 
+/*
+ * Load mtm config.
+ *
+ * In case of absense of configured nodes will return cfg->n_nodes = 0.
+ */
 MtmConfig *
 MtmLoadConfig()
 {
@@ -773,8 +778,6 @@ MtmLoadConfig()
 		Assert(SPI_processed <= MtmMaxNodes);
 		cfg->n_nodes = SPI_processed;
 		cfg->my_node_id = 0;
-
-		// XXX: allow zero nodes?
 
 		for (i = 0; i < cfg->n_nodes; i++)
 		{

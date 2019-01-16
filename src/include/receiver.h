@@ -6,7 +6,7 @@ typedef struct
 	int node_id;
 	bool is_recovery;
 	bool parallel_allowed;
-	TimestampTz session_id;
+	uint64 session_id;
 	XLogRecPtr end_lsn;
 } MtmReceiverContext;
 

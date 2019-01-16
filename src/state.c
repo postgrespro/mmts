@@ -998,7 +998,19 @@ MtmMonitor(Datum arg)
 	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
 	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
-	mtm_cfg = MtmLoadConfig();
+	/*
+	 * During init_node() our worker is started from transaction that created
+	 * mtm config, so we can get here before this transaction is committed,
+	 * so we won't see config yet. Just wait for it to became visible.
+	 */
+	for (;;)
+	{
+		mtm_cfg = MtmLoadConfig();
+		if (mtm_cfg->n_nodes > 0)
+			break;
+		pfree(mtm_cfg);
+		MtmSleep(USECS_PER_SEC);
+	}
 
 	/* Set proper values in Mtm structure */
 	MtmStateFill(mtm_cfg);

@@ -376,7 +376,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	ByteBufferAlloc(&buf);
 	EnumerateLocks(MtmSerializeLock, &buf);
 
-	Assert(replorigin_session_origin == InvalidRepOriginId);
+	// Assert(replorigin_session_origin == InvalidRepOriginId);
 	XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
 
 	MtmGraphInit(&graph);

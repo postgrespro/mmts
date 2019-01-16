@@ -21,9 +21,15 @@ typedef struct
 	XLogRecPtr	local_lsn;
 } Syncpoint;
 
+/*
+ * Used as a hashkey in recovery filter.
+ *
+ * NB: make sure to memset this structure to zeroes before using as hashkey
+ * because it contains 4-byte padding hole in the middle.
+ */
 typedef struct
 {
-	int64		node_id;
+	int			node_id;
 	XLogRecPtr	origin_lsn;
 } FilterEntry;
 

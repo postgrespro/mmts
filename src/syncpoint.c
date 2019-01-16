@@ -524,9 +524,13 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 		if (XLogRecGetRmid(xlogreader) == RM_XACT_ID)
 		{
-			uint32 info = XLogRecGetInfo(xlogreader);
-			FilterEntry				entry = {node_id, InvalidXLogRecPtr};
-			bool					found;
+			uint32		info = XLogRecGetInfo(xlogreader);
+			FilterEntry	entry;
+			bool		found;
+
+			memset(&entry, '\0', sizeof(FilterEntry));
+			entry.node_id = node_id;
+			entry.origin_lsn = InvalidXLogRecPtr;
 
 			switch (info & XLOG_XACT_OPMASK)
 			{
@@ -563,7 +567,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 				continue;
 
 			Assert(entry.origin_lsn != InvalidXLogRecPtr);
-			mtm_log(MtmReceiverFilter, "load_filter_map: add {%ld, %"INT64_MODIFIER"x } %d (%"INT64_MODIFIER"x)",
+			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %"INT64_MODIFIER"x } %d (%"INT64_MODIFIER"x)",
 					entry.node_id, entry.origin_lsn, info & XLOG_XACT_OPMASK, xlogreader->EndRecPtr);
 			hash_search(filter_map, &entry, HASH_ENTER, &found);
 			Assert(!found);

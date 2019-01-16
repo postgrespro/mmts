@@ -383,8 +383,12 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 	}
 	else
 	{
-		FilterEntry	entry = {origin_node, tx_lsn};
+		FilterEntry	entry;
 		bool		found;
+
+		memset(&entry, '\0', sizeof(FilterEntry));
+		entry.node_id = origin_node;
+		entry.origin_lsn = tx_lsn;
 
 		hash_search(filter_map, &entry, HASH_FIND, &found);
 
@@ -580,7 +584,13 @@ pglogical_receiver_main(Datum main_arg)
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
 
-		receiver_ctx.session_id = MtmGetIncreasingTimestamp();
+		/*
+		 * Hand-made uuid. First byte is node_id, then rest is timestamp which
+		 * is guaranteed to be uniq on this node.
+		 */
+		receiver_ctx.session_id = ((uint64) receiver_mtm_cfg->my_node_id << 56)
+								  + MtmGetIncreasingTimestamp();
+
 		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
 		receiver_ctx.parallel_allowed = false;
 
