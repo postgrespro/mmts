@@ -516,8 +516,11 @@ dmq_sender_main(Datum main_arg)
 
 			for (conn_id = 0; conn_id < DMQ_MAX_DESTINATIONS; conn_id++)
 			{
+				if (!conns[conn_id].active)
+					continue;
+
 				/* Idle --> Connecting */
-				if (conns[conn_id].active && conns[conn_id].state == Idle)
+				if (conns[conn_id].state == Idle)
 				{
 					double		pqtime;
 
@@ -576,6 +579,8 @@ dmq_sender_main(Datum main_arg)
 		else if (nevents > 0 && event.events & WL_SOCKET_MASK)
 		{
 			uintptr_t conn_id = (uintptr_t) event.user_data;
+
+			Assert(conns[conn_id].active);
 
 			switch (conns[conn_id].state)
 			{
