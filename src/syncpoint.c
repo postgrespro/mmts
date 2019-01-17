@@ -423,7 +423,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	HASHCTL		hash_ctl;
 	HTAB	   *filter_map;
 	int			estimate_size;
-	XLogRecPtr	start_lsn = UINT64_MAX;
+	XLogRecPtr	start_lsn = PG_UINT64_MAX;
 	XLogRecPtr	current_last_lsn = GetFlushRecPtr();
 	int			i;
 
@@ -451,7 +451,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 			start_lsn, filter_node_id, current_last_lsn);
 
 	Assert(start_lsn != InvalidXLogRecPtr);
-	if (start_lsn == UINT64_MAX)
+	if (start_lsn == PG_UINT64_MAX)
 		return filter_map;
 
 	xlogreader = XLogReaderAllocate(wal_segment_size, &read_local_xlog_page, NULL);
