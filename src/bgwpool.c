@@ -13,6 +13,8 @@
 #include "tcop/pquery.h"
 #include "utils/guc.h"
 #include "tcop/tcopprot.h"
+#include "utils/syscache.h"
+#include "utils/inval.h"
 
 #include "bgwpool.h"
 #include "multimaster.h"
@@ -39,6 +41,13 @@ BgwShutdownHandler(int sig)
 	 */
 	die(sig);
 }
+
+static void
+subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	receiver_mtm_cfg_valid = false;
+}
+
 
 static void
 BgwPoolMainLoop(BgwPool* pool)
@@ -70,6 +79,10 @@ BgwPoolMainLoop(BgwPool* pool)
 	ActivePortal->sourceText = "";
 
 	receiver_mtm_cfg = MtmLoadConfig();
+	/* Keep us informed about subscription changes. */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  subscription_change_cb,
+								  (Datum) 0);
 
 	while (true)
 	{
@@ -209,7 +222,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_restart_time = BGW_NEVER_RESTART;
 	worker.bgw_main_arg = PointerGetDatum(pool);
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");

@@ -10,18 +10,71 @@ BEGIN
 END
 $$;
 
-
+-- message queue receiver, for internal use only
 CREATE FUNCTION mtm.dmq_receiver_loop(sender_name text) RETURNS void
 AS 'MODULE_PATHNAME','dmq_receiver_loop'
 LANGUAGE C;
 
+---
+--- Plumbering of node management: internal tables and triggers.
+--- Not indended to be used directly by users but rather through add/drop/init
+--- functions.
+---
+
+CREATE TABLE mtm.nodes(
+    id int primary key not null,
+    conninfo text not null,
+    is_self bool not null
+);
+
+CREATE FUNCTION mtm.after_node_create()
+RETURNS TRIGGER
+AS 'MODULE_PATHNAME','mtm_after_node_create'
+LANGUAGE C;
+
+CREATE TRIGGER on_node_create
+    AFTER INSERT ON mtm.nodes
+    FOR EACH ROW
+    EXECUTE FUNCTION mtm.after_node_create();
+
+CREATE FUNCTION mtm.after_node_drop()
+RETURNS TRIGGER
+AS 'MODULE_PATHNAME','mtm_after_node_drop'
+LANGUAGE C;
+
+CREATE TRIGGER on_node_drop
+    AFTER DELETE ON mtm.nodes
+    FOR EACH ROW
+    EXECUTE FUNCTION mtm.after_node_drop();
+
+---
+--- User facing API for node management.
+---
+
+CREATE OR REPLACE FUNCTION mtm.init_node(node_id integer, connstrs text[]) RETURNS void AS
+$$
+BEGIN
+    IF node_id <= 0 OR node_id > least(16, array_length(connstrs, 1)) THEN
+        RAISE EXCEPTION 'node_id should be in range [1 .. length(connstrs)]';
+    END IF;
+    EXECUTE 'SET mtm.emerging_node_id = ' || node_id || ';';
+    INSERT INTO mtm.nodes SELECT
+        ordinality::int as id,
+        unnest as conninfo,
+        ordinality = current_setting('mtm.emerging_node_id')::int as is_self
+    FROM
+        unnest(connstrs)
+    WITH ORDINALITY;
+END
+$$
+LANGUAGE plpgsql;
+
+---
+--- Various
+---
 
 CREATE FUNCTION mtm.make_table_local(relation regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_make_table_local'
-LANGUAGE C;
-
-CREATE FUNCTION mtm.init_node(node_id integer, connstrs text[]) RETURNS void
-AS 'MODULE_PATHNAME','mtm_init_node'
 LANGUAGE C;
 
 CREATE FUNCTION mtm.dump_lock_graph() RETURNS text
@@ -50,11 +103,6 @@ CREATE TABLE mtm.syncpoints(
     primary key(node_id, origin_lsn)
 );
 
-CREATE TABLE mtm.nodes(
-    id int primary key not null,
-    conninfo text not null,
-    is_self bool not null
-);
 
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$

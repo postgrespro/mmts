@@ -407,12 +407,20 @@ dmq_sender_main(Datum main_arg)
 			for (i = 0; i < DMQ_MAX_DESTINATIONS; i++)
 			{
 				DmqDestination *dest = &(dmq_state->destinations[i]);
+				/* start connection for a freshly added destination */
 				if (dest->active && !conns[i].active)
 				{
 					conns[i] = *dest;
 					Assert(conns[i].pgconn == NULL);
 					conns[i].state = Idle;
 					prev_timer_at = 0; /* do not wait for timer event */
+				}
+				/* close connection to deleted destination */
+				else if (!dest->active && conns[i].active)
+				{
+					PQfinish(conns[i].pgconn);
+					conns[i].active = false;
+					conns[i].pgconn = NULL;
 				}
 			}
 			LWLockRelease(dmq_state->lock);
@@ -1002,7 +1010,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	/* register ourself in dmq_state */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 
-	/* check for a conflicting receiver_name */
+	/* is this sender already connected? */
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
 		if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
@@ -1129,6 +1137,29 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+void
+dmq_terminate_receiver(char *name)
+{
+	int			i;
+	pid_t		pid = 0;
+
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+	{
+		if (dmq_state->receivers[i].active &&
+			strncmp(dmq_state->receivers[i].name, name, DMQ_NAME_MAXLEN) == 0)
+		{
+			pid = dmq_state->receivers[i].pid;
+			Assert(pid > 0);
+			break;
+		}
+	}
+	LWLockRelease(dmq_state->lock);
+
+	if (pid != 0)
+		kill(pid, SIGTERM);
+}
+
 
 /*****************************************************************************
  *
@@ -1241,7 +1272,7 @@ dmq_reattach_shm_mq(int handle_id)
 		{
 			receiver_id = i;
 			receiver_procno = dmq_state->receivers[i].procno;
-			receiver_dsm = dmq_state->receivers[receiver_id].dsm_h;
+			receiver_dsm = dmq_state->receivers[i].dsm_h;
 			break;
 		}
 	}
@@ -1289,7 +1320,6 @@ dmq_reattach_shm_mq(int handle_id)
 
 	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 
-
 	toc = shm_toc_attach(DMQ_MQ_MAGIC,
 				dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg));
 	if (toc == NULL)
@@ -1313,10 +1343,26 @@ dmq_reattach_shm_mq(int handle_id)
 	return true;
 }
 
-void
+int
 dmq_attach_receiver(char *sender_name, int mask_pos)
 {
-	int handle_id = dmq_local.n_inhandles;
+	int			i;
+	int			handle_id;
+
+	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+	{
+		if (dmq_local.inhandles[i].name[0] == '\0')
+		{
+			handle_id = i;
+			break;
+		}
+	}
+
+	if (i == DMQ_MAX_RECEIVERS)
+		mtm_log(ERROR, "[DMQ] dmq_attach_receiver: max receivers already attached");
+
+	if (handle_id == dmq_local.n_inhandles)
+		dmq_local.n_inhandles++;
 
 	dmq_local.inhandles[handle_id].mqh = NULL;
 	dmq_local.inhandles[handle_id].mask_pos = mask_pos;
@@ -1324,7 +1370,42 @@ dmq_attach_receiver(char *sender_name, int mask_pos)
 
 	dmq_reattach_shm_mq(handle_id);
 
-	dmq_local.n_inhandles++;
+	return handle_id;
+}
+
+void
+dmq_detach_receiver(char *sender_name)
+{
+	int			i;
+	int			handle_id = -1;
+
+	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+	{
+		if (strncmp(dmq_local.inhandles[i].name, sender_name, DMQ_NAME_MAXLEN) == 0)
+		{
+			handle_id = i;
+			break;
+		}
+	}
+
+	if (handle_id < 0)
+		mtm_log(ERROR, "[DMQ] dmq_detach_receiver: receiver from %s not found",
+				sender_name);
+
+	if (dmq_local.inhandles[handle_id].mqh)
+	{
+		shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
+		dmq_local.inhandles[handle_id].mqh = NULL;
+	}
+
+	if (dmq_local.inhandles[handle_id].dsm_seg)
+	{
+		// dsm_unpin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
+		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
+		dmq_local.inhandles[handle_id].dsm_seg =  NULL;
+	}
+
+	dmq_local.inhandles[handle_id].name[0] = '\0';
 }
 
 void
@@ -1365,8 +1446,9 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 
 	for (;;)
 	{
-		int i;
-		bool nowait = false;
+		int			i;
+		int			rc;
+		bool		nowait = false;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1419,8 +1501,14 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			continue;
 
 		// XXX cache that
-		WaitLatch(MyLatch, WL_LATCH_SET, 10, WAIT_EVENT_MQ_RECEIVE);
-		ResetLatch(MyLatch);
+		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 10.0,
+					   WAIT_EVENT_MQ_RECEIVE);
+
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
+
+		if (rc & WL_LATCH_SET)
+			ResetLatch(MyLatch);
 	}
 }
 
@@ -1500,4 +1588,27 @@ dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
 		return dest_id;
 }
 
+void
+dmq_destination_drop(char *receiver_name)
+{
+	DmqDestinationId dest_id;
+	pid_t sender_pid;
+
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	for (dest_id = 0; dest_id < DMQ_MAX_DESTINATIONS; dest_id++)
+	{
+		DmqDestination *dest = &(dmq_state->destinations[dest_id]);
+		if (dest->active &&
+			strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)
+		{
+			dest->active = false;
+			break;
+		}
+	}
+	sender_pid = dmq_state->sender_pid;
+	LWLockRelease(dmq_state->lock);
+
+	if (sender_pid)
+		kill(sender_pid, SIGHUP);
+}
 

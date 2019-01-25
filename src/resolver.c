@@ -20,6 +20,8 @@
 #include "storage/latch.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
+#include "utils/syscache.h"
+#include "utils/inval.h"
 
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -50,6 +52,7 @@ static HTAB *gid2tx = NULL;
 
 /* sender_id to node_id mapping */
 static int		sender_to_node[MTM_MAX_NODES];
+static bool		config_valid;
 
 /* Auxiliary stuff for bgworker lifecycle */
 static shmem_startup_hook_type PreviousShmemStartupHook;
@@ -116,7 +119,7 @@ ResolverInit(void)
 	shmem_startup_hook = resolver_shmem_startup_hook;
 }
 
-void
+BackgroundWorkerHandle *
 ResolverStart(Oid db_id, Oid user_id)
 {
 	BackgroundWorker worker;
@@ -136,6 +139,8 @@ ResolverStart(Oid db_id, Oid user_id)
 
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 		elog(ERROR, "Failed to start resolver worker");
+
+	return handle;
 }
 
 
@@ -176,7 +181,7 @@ load_tasks(int node_id)
 			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
 			added_xacts++;
 
-			for (j = 0; j < Mtm->nAllNodes; j++)
+			for (j = 0; j < MTM_MAX_NODES; j++)
 				tx->state[j] = MtmTxUnknown;
 
 			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
@@ -385,8 +390,9 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 		for (i = 0; i < mtm_cfg->n_nodes; i++)
 		{
-			if (i + 1 != mtm_cfg->my_node_id && !BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
+			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
 			{
+				int			node_id = mtm_cfg->nodes[i].node_id;
 				MtmArbiterMessage msg;
 				DmqDestinationId dest_id;
 
@@ -394,11 +400,14 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				MtmInitMessage(&msg, MSG_POLL_REQUEST);
 				strncpy(msg.gid, tx->gid, GIDSIZE);
 
-				dest_id = mtm_cfg->nodes[i].destination_id;
+				MtmLock(LW_SHARED);
+				dest_id = Mtm->dmq_dest_ids[node_id - 1];
+				MtmUnlock();
+				Assert(dest_id > 0);
 
 				mtm_log(ResolverTraceTxMsg,
 						"[RESOLVER] sending request for %s to node%d",
-						tx->gid, i+1);
+						tx->gid, node_id);
 
 				dmq_push_buffer(dest_id, "txreq", &msg,
 								sizeof(MtmArbiterMessage));
@@ -433,15 +442,34 @@ handle_responses(void)
 	}
 }
 
+static void
+subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	config_valid = false;
+}
+
+static void
+attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	int sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
+										node_id - 1);
+	sender_to_node[sender_id] = node_id;
+}
+
+static void
+detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	/* detach incoming queues from this node */
+	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
+}
+
 void
 ResolverMain(Datum main_arg)
 {
-	int			i,
-				sender_id = 0;
 	bool		send_requests = true;
 	Oid			db_id,
 				user_id;
-	MtmConfig  *mtm_cfg;
+	MtmConfig  *mtm_cfg = NULL;
 
 	/* init this worker */
 	pqsignal(SIGHUP, PostgresSigHupHandler);
@@ -456,17 +484,10 @@ ResolverMain(Datum main_arg)
 	/* Connect to a database */
 	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
-	mtm_cfg = MtmLoadConfig();
-
-	/* subscribe to status-responses channels from other nodes */
-	for (i = 0; i < mtm_cfg->n_nodes; i++)
-	{
-		if (i + 1 != mtm_cfg->my_node_id)
-		{
-			dmq_attach_receiver(psprintf("node%d", i + 1), i);
-			sender_to_node[sender_id++] = i + 1;
-		}
-	}
+	/* Keep us informed about subscription changes. */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  subscription_change_cb,
+								  (Datum) 0);
 
 	dmq_stream_subscribe("txresp");
 
@@ -479,6 +500,17 @@ ResolverMain(Datum main_arg)
 		int		rc;
 
 		CHECK_FOR_INTERRUPTS();
+
+		AcceptInvalidationMessages();
+		if (!config_valid)
+		{
+			mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
+
+			if (mtm_cfg->my_node_id == 0)
+				proc_exit(0);
+
+			config_valid = true;
+		}
 
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)

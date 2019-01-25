@@ -7,6 +7,11 @@
 #include "tcop/tcopprot.h"
 #include "storage/ipc.h"
 #include "miscadmin.h" /* PostmasterPid */
+#include "utils/syscache.h"
+#include "utils/inval.h"
+#include "replication/slot.h"
+#include "replication/origin.h"
+#include "miscadmin.h"
 
 #include "multimaster.h"
 #include "bkb.h"
@@ -74,10 +79,10 @@ countZeroBits(nodemask_t mask, int nNodes)
 	return count;
 }
 
-static void
+void
 MtmStateFill(MtmConfig *cfg)
 {
-	Mtm->nAllNodes = cfg->n_nodes;
+	Mtm->nAllNodes = cfg->n_nodes + 1;
 	Mtm->my_node_id = cfg->my_node_id;
 }
 
@@ -360,6 +365,7 @@ void MtmDisableNode(int nodeId)
 	BIT_SET(Mtm->disabledNodeMask, nodeId-1);
 	// Mtm->nodes[nodeId-1].timeline += 1;
 
+	// XXX: and node_id != my_node_id
 	if (Mtm->status == MTM_ONLINE) {
 		/* Make decision about prepared transaction status only in quorum */
 		// MtmLock(LW_EXCLUSIVE);
@@ -385,12 +391,12 @@ MtmEnableNode(int nodeId)
 /*
  *
  */
-
-void MtmOnNodeDisconnect(char *node_name)
+void
+MtmOnNodeDisconnect(char *node_name)
 {
 	int nodeId;
 
-	sscanf(node_name, "node%d", &nodeId);
+	sscanf(node_name, MTM_DMQNAME_FMT, &nodeId);
 
 	if (BIT_CHECK(SELF_CONNECTIVITY_MASK, nodeId-1))
 		return;
@@ -412,14 +418,18 @@ void MtmOnNodeDisconnect(char *node_name)
 // XXXX: make that event too
 void MtmOnNodeConnect(char *node_name)
 {
-	int nodeId;
+	int			node_id = -1;
+	MtmConfig  *cfg = MtmLoadConfig();
 
-	sscanf(node_name, "node%d", &nodeId);
+	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
-	mtm_log(MtmStateMessage, "[STATE] Node %i: connected", nodeId);
+	if (MtmNodeById(cfg, node_id) == NULL)
+		mtm_log(ERROR, "[STATE] Node %i not found.", node_id);
+	else
+		mtm_log(MtmStateMessage, "[STATE] Node %i: connected", node_id);
 
 	MtmLock(LW_EXCLUSIVE);
-	BIT_CLEAR(SELF_CONNECTIVITY_MASK, nodeId-1);
+	BIT_CLEAR(SELF_CONNECTIVITY_MASK, node_id - 1);
 	MtmCheckState();
 	MtmUnlock();
 }
@@ -892,7 +902,9 @@ MtmGetDisabledNodeMask()
 
 void MtmMonitor(Datum arg);
 
+// XXX: change dmq api and evict that
 static int		sender_to_node[MTM_MAX_NODES];
+static bool		config_valid = false;
 
 void
 MtmMonitorStart(Oid db_id, Oid user_id)
@@ -965,7 +977,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 		msg->code = MSG_POLL_STATUS;
 		msg->node = Mtm->my_node_id;
 
-		dest_id = mtm_cfg->nodes[sender_node_id - 1].destination_id;
+		MtmLock(LW_SHARED);
+		dest_id = Mtm->dmq_dest_ids[sender_node_id - 1];
+		MtmUnlock();
 
 		// XXX: and define channels as strings too
 		dmq_push_buffer(dest_id, "txresp", msg,
@@ -976,14 +990,108 @@ check_status_requests(MtmConfig *mtm_cfg)
 	}
 }
 
+static void
+start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
+	DmqDestinationId dest;
+	int			sender_id;
+
+	elog(LOG, "ololoo start_node_workers %d", node_id);
+
+	char	   *connstr_with_appname = psprintf("%s application_name=%s",
+									MtmNodeById(new_cfg, node_id)->conninfo,
+									MULTIMASTER_BROADCAST_SERVICE);
+
+	dest = dmq_destination_add(connstr_with_appname,
+						psprintf(MTM_DMQNAME_FMT, new_cfg->my_node_id),
+						psprintf(MTM_DMQNAME_FMT, node_id),
+						MtmHeartbeatSendTimeout);
+
+	MtmLock(LW_EXCLUSIVE);
+	Mtm->dmq_dest_ids[node_id - 1] = dest;
+	MtmUnlock();
+
+	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
+											  GetAuthenticatedUserId(),
+											  MyProcPid);
+
+	sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
+									node_id - 1);
+	sender_to_node[sender_id] = node_id;
+
+	pfree(connstr_with_appname);
+}
+
+static void
+stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
+	char	   *dmq_name = psprintf(MTM_DMQNAME_FMT, node_id);
+	char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
+	char	   *recovery_slot_name =
+					psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+
+	Assert(!IsTransactionState());
+
+	/* detach incoming queues from this node */
+	dmq_detach_receiver(dmq_name);
+
+	/*
+	 * Disable this node by terminating receiver.
+	 * It shouldn't came back online as dmq-receiver check node_id presense
+	 * in mtm.nodes.
+	 */
+	dmq_terminate_receiver(dmq_name);
+
+	/* do not try to connect this node by dmq */
+	dmq_destination_drop(dmq_name);
+
+	MtmLock(LW_EXCLUSIVE);
+	Mtm->dmq_dest_ids[node_id - 1] = -1;
+	MtmUnlock();
+
+	/*
+	 * Stop corresponding receiver.
+	 * Also await for termination, so that we can drop slots and origins that
+	 * were acquired by receiver.
+	 */
+	TerminateBackgroundWorker(receivers[node_id - 1]);
+	WaitForBackgroundWorkerShutdown(receivers[node_id - 1]);
+	pfree(receivers[node_id - 1]);
+	receivers[node_id - 1] = NULL;
+
+	/* delete recovery slot, was acquired by receiver */
+	ReplicationSlotDrop(recovery_slot_name, true);
+
+	/* delete replication origin, was acquired by receiver */
+	StartTransactionCommand();
+	replorigin_drop(replorigin_by_name(slot_name, false), true);
+	CommitTransactionCommand();
+
+	/*
+	 * Delete logical slot. It is aquired by walsender, so call with
+	 * nowait = false and wait for walsender exit.
+	 */
+	ReplicationSlotDrop(slot_name, false);
+}
+
+static void
+pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	config_valid = false;
+}
+
 void
 MtmMonitor(Datum arg)
 {
-	int			i,
-				sender_id = 0;
 	Oid			db_id,
 				user_id;
-	MtmConfig  *mtm_cfg;
+	MtmConfig  *mtm_cfg = NULL;
+	BackgroundWorkerHandle *receivers[MTM_MAX_NODES];
+	BackgroundWorkerHandle *resolver;
+
+	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
 
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
@@ -1002,62 +1110,42 @@ MtmMonitor(Datum arg)
 	 * During init_node() our worker is started from transaction that created
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
+	 *
+	 * Do not use mtm_cfg, as it need to be NULL on first entry to
+	 * MtmReloadConfig() to fire on_node_create callbacks.
 	 */
 	for (;;)
 	{
-		mtm_cfg = MtmLoadConfig();
-		if (mtm_cfg->n_nodes > 0)
+		MtmConfig  *cfg = MtmLoadConfig();
+		int			n_nodes = cfg->n_nodes;
+
+		pfree(cfg);
+		if (n_nodes > 0)
 			break;
-		pfree(mtm_cfg);
+
 		MtmSleep(USECS_PER_SEC);
 	}
 
-	/* Set proper values in Mtm structure */
-	MtmStateFill(mtm_cfg);
+	/*
+	 * Keep us informed about subscription changes, so we can react on node
+	 * addition or deletion.
+	 */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONNAME,
+								  pubsub_change_cb,
+								  (Datum) 0);
+
+	/*
+	 * Keep us informed about publication changes. This is used to stop mtm
+	 * after our node was dropped.
+	 */
+	CacheRegisterSyscacheCallback(PUBLICATIONNAME,
+								  pubsub_change_cb,
+								  (Datum) 0);
 
 	/* Now start all other necessary workers */
 
 	/* Launch resolver */
-	ResolverStart(db_id, user_id);
-
-	/* Order dmq-sender to connect with publishers */
-	for (i = 0; i < mtm_cfg->n_nodes; i++)
-	{
-		char   *connstr_with_appname;
-
-		if (i + 1 == Mtm->my_node_id)
-			continue;
-
-		connstr_with_appname = psprintf("%s application_name=%s",
-										mtm_cfg->nodes[i].conninfo,
-										MULTIMASTER_BROADCAST_SERVICE);
-
-		dmq_destination_add(connstr_with_appname,
-							psprintf("node%d", mtm_cfg->my_node_id),
-							psprintf("node%d", i + 1),
-							MtmHeartbeatSendTimeout);
-
-		pfree(connstr_with_appname);
-	}
-
-	/* Launch receivers */
-	for (i = 0; i < mtm_cfg->n_nodes; i++)
-	{
-		if (i == mtm_cfg->my_node_id - 1)
-			continue;
-		MtmStartReceiver(i + 1, db_id, user_id);
-	}
-
-	// XXX: turn this into a function
-	/* subscribe to status-requests channels from other nodes */
-	for (i = 0; i < mtm_cfg->n_nodes; i++)
-	{
-		if (i + 1 != mtm_cfg->my_node_id)
-		{
-			dmq_attach_receiver(psprintf("node%d", i + 1), i);
-			sender_to_node[sender_id++] = i + 1;
-		}
-	}
+	resolver = ResolverStart(db_id, user_id);
 
 	dmq_stream_subscribe("txreq");
 
@@ -1073,15 +1161,36 @@ MtmMonitor(Datum arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		MtmRefreshClusterStatus();
+		/* check wheter we need to update config */
+		AcceptInvalidationMessages();
+
+		if (!config_valid)
+		{
+			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
+							stop_node_workers, (Datum) receivers);
+
+			if (mtm_cfg->my_node_id == 0)
+			{
+				int			i;
+				for (i = 0; i < MTM_MAX_NODES; i++)
+				{
+					if (receivers[i] != NULL)
+						stop_node_workers(i + 1, NULL, (Datum) receivers);
+				}
+				TerminateBackgroundWorker(resolver);
+
+				// XXX: kill myself somehow?
+				proc_exit(0);
+			}
+
+			config_valid = true;
+		}
 
 		check_status_requests(mtm_cfg);
 
-		// MtmCheckSlots(); // XXX: add locking
-
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   MtmHeartbeatRecvTimeout, PG_WAIT_EXTENSION);
+					   1000, PG_WAIT_EXTENSION);
 
 		/* Emergency bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)

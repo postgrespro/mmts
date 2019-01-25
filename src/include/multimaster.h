@@ -24,6 +24,9 @@
 #define MULTIMASTER_SCHEMA_NAME          "mtm"
 #define MULTIMASTER_NAME                 "multimaster"
 #define MULTIMASTER_SLOT_PATTERN         "mtm_slot_%d"
+// XXX: change to one NODENAME_FMT
+#define MTM_SUBNAME_FMT					 "mtm_sub_%d"
+#define MTM_DMQNAME_FMT					 "node%d"
 #define MULTIMASTER_RECOVERY_SLOT_PATTERN "mtm_recovery_slot_%d"
 #define MULTIMASTER_LOCAL_TABLES_TABLE   "local_tables"
 #define MULTIMASTER_MAX_CONN_STR_SIZE    128
@@ -48,6 +51,16 @@ typedef uint64 nodemask_t;
 #define ALL_BITS ((nodemask_t)~0)
 
 #define EQUAL_GTID(x,y) ((x).node == (y).node && (x).xid == (y).xid)
+
+
+/*
+ * Definitions for the "mtm.nodes" table.
+ */
+#define MTM_NODES					"nodes"
+#define Natts_mtm_nodes				3
+#define Anum_mtm_nodes_id			1	/* node_id, same accross cluster */
+#define Anum_mtm_nodes_connifo		2	/* connection string */
+#define Anum_mtm_nodes_is_self		3	/* is that tuple for our node? */
 
 
 /* Identifier of global transaction */
@@ -129,17 +142,20 @@ typedef struct
 
 typedef struct
 {
+	int			node_id;
+	char	   *conninfo;
+	RepOriginId	origin_id;
+} MtmNode;
+
+typedef struct
+{
 	int		n_nodes;
 	int		my_node_id;
-	struct
-	{
-		char	   *conninfo;
-		RepOriginId	origin_id;
-		DmqDestinationId destination_id;
-	} nodes[MTM_MAX_NODES];
+	MtmNode	nodes[MTM_MAX_NODES];
 } MtmConfig;
 
 extern MtmConfig *receiver_mtm_cfg;
+extern bool receiver_mtm_cfg_valid;
 
 typedef struct
 {
@@ -176,6 +192,7 @@ typedef struct
 	int			recoveryCount;	/* Number of completed recoveries */
 	int			donorNodeId;	/* Cluster node from which this node was
 								 * populated */
+	int			dmq_dest_ids[MTM_MAX_NODES];
 	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
 } MtmState;
 
@@ -220,6 +237,16 @@ extern void MtmSleep(timestamp_t interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);
 extern MtmConfig *MtmLoadConfig(void);
+
+typedef void (*mtm_cfg_change_cb)(int node_id, MtmConfig *new_cfg, Datum arg);
+
+extern MtmConfig *MtmReloadConfig(MtmConfig *old_cfg,
+								  mtm_cfg_change_cb node_add_cb,
+								  mtm_cfg_change_cb node_drop_cb,
+								  Datum arg);
+extern MtmNode *MtmNodeById(MtmConfig *cfg, int node_id);
+
+extern void MtmStateFill(MtmConfig *cfg);
 
 extern void MtmLock(LWLockMode mode);
 extern void MtmUnlock(void);

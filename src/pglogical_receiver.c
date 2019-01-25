@@ -42,6 +42,8 @@
 #include "utils/portal.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
+#include "utils/syscache.h"
+#include "utils/inval.h"
 
 #ifdef WITH_RSOCKET
 #include "libpq-int.h"
@@ -93,6 +95,7 @@ static char const* const MtmReplicationModeName[] =
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
 MtmConfig *receiver_mtm_cfg;
+bool		receiver_mtm_cfg_valid;
 
 /* Signal handling */
 static volatile sig_atomic_t got_sighup = false;
@@ -459,7 +462,7 @@ void
 MtmBeginSession(int nodeId)
 {
 	Assert(replorigin_session_origin == InvalidRepOriginId);
-	replorigin_session_origin = receiver_mtm_cfg->nodes[nodeId-1].origin_id;
+	replorigin_session_origin = MtmNodeById(receiver_mtm_cfg, nodeId)->origin_id;
 	Assert(replorigin_session_origin != InvalidRepOriginId);
 
 	// XXX: that is expensive! better to switch only in recovery
@@ -479,6 +482,74 @@ MtmEndSession(int nodeId, bool unlock)
 		replorigin_session_origin_timestamp = 0;
 		replorigin_session_reset();
 	}
+}
+
+static PGconn *
+receiver_connect(char *conninfo)
+{
+	PGconn *conn;
+	ConnStatusType status;
+	const char *keys[] = {"dbname", "replication", NULL};
+	const char *vals[] = {conninfo, "database", NULL};
+
+	conn = PQconnectdbParams(keys, vals, /* expand_dbname = */ true);
+	status = PQstatus(conn);
+	if (status != CONNECTION_OK)
+	{
+		// XXX: make this error
+		mtm_log(WARNING, "Could not establish connection to '%s': %s",
+				conninfo, PQerrorMessage(conn));
+		PQfinish(conn);
+		return NULL;
+	}
+
+	return conn;
+}
+
+/*
+ * Create slot on remote using logical replication protocol.
+ */
+void
+MtmReceiverCreateSlot(char *conninfo, int my_node_id)
+{
+	StringInfoData cmd;
+	PGresult   *res;
+	PGconn	   *conn = receiver_connect(conninfo);
+
+	if (!conn)
+		mtm_log(ERROR, "Could not connect to '%s'", conninfo);
+
+	initStringInfo(&cmd);
+	appendStringInfo(&cmd, "CREATE_REPLICATION_SLOT " MULTIMASTER_SLOT_PATTERN
+					 " LOGICAL multimaster", my_node_id);
+	res = PQexec(conn, cmd.data);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+		if (!sqlstate || strcmp(sqlstate, ERRCODE_DUPLICATE_OBJECT_STR) != 0)
+		{
+			PQclear(res);
+			pfree(cmd.data);
+			PQfinish(conn);
+			mtm_log(ERROR, "Could not create logical slot on '%s'", conninfo);
+		}
+	}
+	PQclear(res);
+	pfree(cmd.data);
+	PQfinish(conn);
+}
+
+static void
+subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	receiver_mtm_cfg_valid = false;
+}
+
+static void
+pglogical_receiver_at_exit(int status, Datum arg)
+{
+	int node_id = DatumGetInt32(arg);
+	BgwPoolCancel(&Mtm->pools[node_id - 1]);
 }
 
 void
@@ -501,6 +572,8 @@ pglogical_receiver_main(Datum main_arg)
 
 	Oid db_id;
 	Oid user_id;
+
+	on_shmem_exit(pglogical_receiver_at_exit, Int32GetDatum(nodeId));
 
 	MtmIsReceiver = true;
 
@@ -534,6 +607,13 @@ pglogical_receiver_main(Datum main_arg)
 
 	receiver_mtm_cfg = MtmLoadConfig();
 
+	/* Keep us informed about subscription changes. */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  subscription_change_cb,
+								  (Datum) 0);
+
+	snprintf(worker_proc, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d",
+			 receiver_mtm_cfg->my_node_id, nodeId);
 	BgwPoolStart(&Mtm->pools[nodeId-1], worker_proc, db_id, user_id);
 
 	/* Acquire recovery rep slot, so we can advance it without search */
@@ -566,20 +646,9 @@ pglogical_receiver_main(Datum main_arg)
 		count = Mtm->recoveryCount;
 
 		/* Establish connection to remote server */
-		{
-			ConnStatusType status;
-			const char *keys[] = {"dbname", "replication", NULL};
-			const char *vals[] = {receiver_mtm_cfg->nodes[nodeId-1].conninfo, "database", NULL};
-
-			conn = PQconnectdbParams(keys, vals, /* expand_dbname = */ true);
-			status = PQstatus(conn);
-			if (status != CONNECTION_OK)
-			{
-				ereport(WARNING, (MTM_ERRMSG("%s: Could not establish connection to remote server (%s), status = %d, error = %s",
-										worker_proc, receiver_mtm_cfg->nodes[nodeId-1].conninfo, status, PQerrorMessage(conn))));
-				goto OnError;
-			}
-		}
+		conn = receiver_connect(MtmNodeById(receiver_mtm_cfg, nodeId)->conninfo);
+		if (conn ==  NULL)
+			goto OnError;
 
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
@@ -657,6 +726,12 @@ pglogical_receiver_main(Datum main_arg)
 		for(;;)
 		{
 			int rc, hdr_len;
+
+			if (ProcDiePending)
+				BgwPoolStop(&Mtm->pools[nodeId-1]);
+
+			CHECK_FOR_INTERRUPTS();
+
 			/* Wait necessary amount of time */
 			rc = WaitLatch(&MyProc->procLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
@@ -956,8 +1031,8 @@ pglogical_receiver_main(Datum main_arg)
 	proc_exit(1);
 }
 
-void
-MtmStartReceiver(int nodeId, Oid db_id, Oid user_id)
+BackgroundWorkerHandle *
+MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 {
 	BackgroundWorker worker;
 	BackgroundWorkerHandle *handle;
@@ -967,6 +1042,7 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id)
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
 	worker.bgw_main_arg = Int32GetDatum(nodeId);
+	worker.bgw_notify_pid = monitor_pid;
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
 	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
@@ -977,4 +1053,6 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id)
 
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 		elog(ERROR, "Failed to start receiver worker");
+
+	return handle;
 }

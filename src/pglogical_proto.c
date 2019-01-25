@@ -383,7 +383,7 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 		{
 			if (private->cfg->nodes[i].origin_id == txn->origin_id)
 			{
-				pq_sendbyte(out, i + 1);
+				pq_sendbyte(out, private->cfg->nodes[i].node_id);
 				return;
 			}
 		}

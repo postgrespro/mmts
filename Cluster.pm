@@ -176,10 +176,16 @@ sub start
 	foreach my $node (@$nodes)
 	{
 		$node->start();
+		note( "Starting node with connstr 'port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
+	}
+
+	$self->await_nodes( (0..$self->{nodenum}-1) );
+
+	foreach my $node (@$nodes)
+	{
 		$node->safe_psql($node->{dbname}, "create extension multimaster;");
 		$node->safe_psql($node->{dbname}, "select mtm.init_node($node_id, '{$connstrs}');");
 		$node_id = $node_id + 1;
-		note( "Starting node with connstr 'port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
 	}
 }
 

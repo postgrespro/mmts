@@ -14,6 +14,8 @@
 #include "access/transam.h"
 #include "storage/proc.h"
 #include "utils/guc.h"
+#include "utils/syscache.h"
+#include "utils/inval.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
 #include "catalog/pg_subscription.h"
@@ -26,7 +28,9 @@
 #include "state.h"
 #include "syncpoint.h"
 
-static bool	backend_init_done;
+static bool	subchange_cb_registered;
+static bool	config_valid;
+// XXX: change dmq api and avoid that
 static int	sender_to_node[MTM_MAX_NODES];
 static MtmConfig *mtm_cfg;
 
@@ -38,22 +42,24 @@ static void GatherPrecommits(TransactionId xid, nodemask_t participantsMask,
 						     MtmMessageCode code);
 
 static void
-backend_init()
+pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
-	int		i,
-			sender_id = 0;
+	config_valid = false;
+}
 
-	/* load mm config */
-	mtm_cfg = MtmLoadConfig();
+static void
+attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	int sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
+										node_id - 1);
+	sender_to_node[sender_id] = node_id;
+}
 
-	/* attach ourself to receiver queues and fill out sender_to_node[] */
-	for (i = 0; i < mtm_cfg->n_nodes; i++)
-	{
-		if (i + 1 == mtm_cfg->my_node_id)
-			continue;
-		dmq_attach_receiver(psprintf("node%d", i + 1), i);
-		sender_to_node[sender_id++] = i + 1;
-	}
+static void
+detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	/* detach incoming queues from this node */
+	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
 }
 
 void
@@ -103,11 +109,23 @@ MtmBeginTransaction()
 		return;
 	}
 
-	// XXX: reload on new node. (origin inval callback?)
-	if (!backend_init_done)
+	if (!subchange_cb_registered)
 	{
-		backend_init();
-		backend_init_done = true;
+		/* Keep us informed about subscription changes. */
+		CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  pubsub_change_cb,
+								  (Datum) 0);
+		CacheRegisterSyscacheCallback(PUBLICATIONOID,
+								  pubsub_change_cb,
+								  (Datum) 0);
+		subchange_cb_registered = true;
+	}
+
+	AcceptInvalidationMessages();
+	if (!config_valid)
+	{
+		mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
+		config_valid = true;
 	}
 
 	/* Reset MtmTx */
@@ -119,7 +137,6 @@ MtmBeginTransaction()
 	MtmTx.distributed = true;
 
 	MtmDDLResetStatement();
-
 
 	/* Application name can be changed using PGAPPNAME environment variable */
 	if (Mtm->status != MTM_ONLINE
@@ -191,9 +208,8 @@ MtmTwoPhaseCommit()
 	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
 
 	MtmLock(LW_SHARED);
-	participantsMask = (((nodemask_t)1 << mtm_cfg->n_nodes) - 1) &
-								  ~Mtm->disabledNodeMask &
-								  ~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+	participantsMask = ~Mtm->disabledNodeMask &
+						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
 	if (Mtm->status != MTM_ONLINE)
 		mtm_log(ERROR, "This node became offline during current transaction");
 	MtmUnlock();
@@ -241,8 +257,6 @@ static bool
 GatherPrepares(TransactionId xid, nodemask_t participantsMask, int *failed_at)
 {
 	bool prepared = true;
-
-	Assert(participantsMask != 0);
 
 	while (participantsMask != 0)
 	{
@@ -311,8 +325,6 @@ GatherPrepares(TransactionId xid, nodemask_t participantsMask, int *failed_at)
 static void
 GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode code)
 {
-	Assert(participantsMask != 0);
-
 	while (participantsMask != 0)
 	{
 		bool ret;

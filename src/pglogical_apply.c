@@ -30,6 +30,7 @@
 #include "mb/pg_wchar.h"
 
 #include "parser/parse_type.h"
+#include "parser/parse_relation.h"
 
 #include "replication/message.h"
 #include "replication/logical.h"
@@ -54,7 +55,7 @@
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
-#include "parser/parse_relation.h"
+#include "utils/inval.h"
 
 #include "multimaster.h"
 #include "mm.h"
@@ -458,13 +459,19 @@ create_rel_estate(Relation rel)
 	estate = CreateExecutorState();
 
 	resultRelInfo = makeNode(ResultRelInfo);
-	resultRelInfo->ri_RangeTableIndex = 1;		/* dummy */
-	resultRelInfo->ri_RelationDesc = rel;
-	resultRelInfo->ri_TrigInstrument = NULL;
+	InitResultRelInfo(resultRelInfo, rel, 1, NULL, 0);
 
 	estate->es_result_relations = resultRelInfo;
 	estate->es_num_result_relations = 1;
 	estate->es_result_relation_info = resultRelInfo;
+	estate->es_output_cid = GetCurrentCommandId(true);
+
+	/* Triggers might need a slot */
+	if (resultRelInfo->ri_TrigDesc)
+		estate->es_trig_tuple_slot = ExecInitExtraTupleSlot(estate, NULL);
+
+	/* Prepare to catch AFTER triggers. */
+	AfterTriggerBeginQuery();
 
 	return estate;
 }
@@ -491,6 +498,20 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	/* ddd */
 	xid = GetCurrentTransactionId();
 	MtmDeadlockDetectorAddXact(xid, gtid);
+
+	// AcceptInvalidationMessages();
+	// if (!receiver_mtm_cfg_valid)
+	// {
+	// 	if (receiver_mtm_cfg)
+	// 		pfree(receiver_mtm_cfg);
+
+	// 	receiver_mtm_cfg = MtmLoadConfig();
+
+	// 	if (receiver_mtm_cfg->my_node_id == 0)
+	// 		proc_exit(0);
+
+	// 	receiver_mtm_cfg_valid = true;
+	// }
 
 	return true;
 }
@@ -827,8 +848,12 @@ read_rel(StringInfo s, LOCKMODE mode)
 static void
 mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 {
-	DmqDestinationId dest_id = receiver_mtm_cfg->nodes[node_id-1].destination_id;
+	DmqDestinationId dest_id;
 	MtmArbiterMessage msg;
+
+	MtmLock(LW_SHARED);
+	dest_id = Mtm->dmq_dest_ids[node_id - 1];
+	MtmUnlock();
 
 	MtmInitMessage(&msg, msg_code);
 	msg.dxid = xid;
@@ -1156,6 +1181,9 @@ process_remote_insert(StringInfo s, Relation rel)
 	if (ActiveSnapshotSet())
 		PopActiveSnapshot();
 
+	/* Handle queued AFTER triggers. */
+	AfterTriggerEndQuery(estate);
+
 	// XXX: maybe just insert it during extension creation?
 	if (strcmp(RelationGetRelationName(rel), MULTIMASTER_LOCAL_TABLES_TABLE) == 0 &&
 		strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
@@ -1285,6 +1313,10 @@ process_remote_update(StringInfo s, Relation rel)
 		index_close(idxrel, NoLock);
 
 	PopActiveSnapshot();
+
+	/* Handle queued AFTER triggers. */
+	AfterTriggerEndQuery(estate);
+
 	ExecResetTupleTable(estate->es_tupleTable, true);
 	FreeExecutorState(estate);
 
@@ -1347,6 +1379,10 @@ process_remote_delete(StringInfo s, Relation rel)
 	if (found_old)
 	{
 		simple_heap_delete(rel, &oldslot->tts_tuple->t_self);
+
+		/* AFTER ROW DELETE Triggers */
+		ExecARDeleteTriggers(estate, estate->es_result_relation_info,
+							 &oldslot->tts_tuple->t_self, NULL, NULL);
 	}
 	else
 	{
@@ -1357,6 +1393,9 @@ process_remote_delete(StringInfo s, Relation rel)
 	}
 
 	PopActiveSnapshot();
+
+	/* Handle queued AFTER triggers. */
+	AfterTriggerEndQuery(estate);
 
 	if (OidIsValid(idxoid))
 		index_close(idxrel, NoLock);
@@ -1391,6 +1430,21 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     }
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
+
+
+	AcceptInvalidationMessages();
+	if (!receiver_mtm_cfg_valid)
+	{
+		if (receiver_mtm_cfg)
+			pfree(receiver_mtm_cfg);
+
+		receiver_mtm_cfg = MtmLoadConfig();
+
+		if (receiver_mtm_cfg->my_node_id == 0)
+			proc_exit(0);
+
+		receiver_mtm_cfg_valid = true;
+	}
 
 	StartTransactionCommand();
 	SetPGVariable("session_authorization", NIL, false);

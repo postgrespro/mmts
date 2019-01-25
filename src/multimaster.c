@@ -37,14 +37,19 @@
 #include "catalog/pg_class.h"
 #include "commands/tablecmds.h"
 #include "commands/publicationcmds.h"
+#include "commands/subscriptioncmds.h"
 #include "executor/spi.h"
 #include "catalog/pg_type.h"
 #include "tcop/tcopprot.h"
 #include "catalog/pg_subscription.h"
+#include "catalog/pg_publication.h"
 #include "utils/syscache.h"
 #include "catalog/objectaddress.h"
 #include "utils/rel.h"
 #include "catalog/indexing.h"
+#include "utils/hsearch.h"
+#include "commands/defrem.h"
+#include "utils/syscache.h"
 
 #include "multimaster.h"
 #include "ddd.h"
@@ -76,9 +81,8 @@ void _PG_fini(void);
 
 PG_MODULE_MAGIC;
 
-PG_FUNCTION_INFO_V1(mtm_init_node);
-PG_FUNCTION_INFO_V1(mtm_add_node);
-PG_FUNCTION_INFO_V1(mtm_drop_node);
+PG_FUNCTION_INFO_V1(mtm_after_node_create);
+PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -341,7 +345,10 @@ MtmStateShmemStartup()
 
 		// XXX: change to dsa and make it per-receiver
 		for (i = 0; i < MtmMaxNodes; i++)
+		{
+			Mtm->dmq_dest_ids[i] = -1;
 			BgwPoolInit(&Mtm->pools[i], MtmExecutor, MtmQueueSize, 0);
+		}
 	}
 
 	RegisterXactCallback(MtmXactCallback2, NULL);
@@ -363,65 +370,6 @@ MtmShmemStartup(void)
 	MtmDeadlockDetectorShmemStartup(MtmMaxNodes);
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
-}
-
-/*
- * Check correctness of multimaster configuration
- */
-static bool ConfigIsSane(void)
-{
-	bool ok = true;
-
-	if (MtmMaxNodes < 1)
-	{
-		mtm_log(WARNING, "multimaster requires multimaster.max_nodes > 0");
-		ok = false;
-	}
-
-	if (max_prepared_xacts < 1)
-	{
-		mtm_log(WARNING,
-			 "multimaster requires max_prepared_transactions > 0, "
-			 "because all transactions are implicitly two-phase");
-		ok = false;
-	}
-
-	{
-		int workers_required = 2 * MtmMaxNodes + 1;
-		if (max_worker_processes < workers_required)
-		{
-			mtm_log(WARNING,
-				 "multimaster requires max_worker_processes >= %d",
-				 workers_required);
-			ok = false;
-		}
-	}
-
-	if (wal_level != WAL_LEVEL_LOGICAL)
-	{
-		mtm_log(WARNING,
-			 "multimaster requires wal_level = 'logical', "
-			 "because it is build on top of logical replication");
-		ok = false;
-	}
-
-	if (max_wal_senders < MtmMaxNodes)
-	{
-		mtm_log(WARNING,
-			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
-		ok = false;
-	}
-
-	if (max_replication_slots < MtmMaxNodes)
-	{
-		mtm_log(WARNING,
-			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
-		ok = false;
-	}
-
-	return ok;
 }
 
 void
@@ -631,18 +579,6 @@ _PG_fini(void)
 	shmem_startup_hook = PreviousShmemStartupHook;
 }
 
-Datum
-mtm_drop_node(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_VOID();
-}
-
-Datum
-mtm_add_node(PG_FUNCTION_ARGS)
-{
-	PG_RETURN_VOID();
-}
-
 /*
  * Genenerate global transaction identifier for two-pahse commit.
  * It should be unique for all nodes
@@ -671,6 +607,21 @@ MtmGidParseXid(const char* gid)
 	return xid;
 }
 
+/*
+ * Publication named 'multimaster' acts as a flag that that multimaster
+ * extension was created and configured, so we can hijack transactions.
+ * We can't hijack transactions before configuration is done because
+ * configuration itself is going to need some transactions that better not
+ * be aborted because of Mtm->status being DISABLED. Also publication
+ * is uniq with respect to (db_id, pub_name) so "All your base are belong
+ * to us" won't happen.
+ */
+bool
+MtmIsEnabled()
+{
+	return OidIsValid(get_publication_oid(MULTIMASTER_NAME, true));
+}
+
 bool
 MtmAllApplyWorkersFinished()
 {
@@ -696,47 +647,260 @@ MtmAllApplyWorkersFinished()
 	return true;
 }
 
-/* create node entry */
-// XXX: put all table names in constants
-static void
-create_node_entry(int node_id, char *connstr, bool is_self)
+/*****************************************************************************
+ *
+ * Node management stuff.
+ *
+ *****************************************************************************/
+
+/*
+ * Check correctness of multimaster configuration
+ */
+static bool
+check_config()
 {
-	char	   *sql;
-	int			rc;
+	bool ok = true;
 
-	if (SPI_connect() != SPI_OK_CONNECT)
-		mtm_log(ERROR, "could not connect using SPI");
-	PushActiveSnapshot(GetTransactionSnapshot());
+	if (MtmMaxNodes < 1)
+	{
+		mtm_log(WARNING, "multimaster requires multimaster.max_nodes > 0");
+		ok = false;
+	}
 
-	sql = psprintf("insert into mtm.nodes values (%d, $$%s$$, '%c')",
-				   node_id, connstr, is_self ? 't' : 'f');
-	rc = SPI_execute(sql, false, 0);
-	if (rc < 0)
-		mtm_log(ERROR, "Failed to save syncpoint");
+	if (max_prepared_xacts < 1)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires max_prepared_transactions > 0, "
+			 "because all transactions are implicitly two-phase");
+		ok = false;
+	}
 
-	SPI_finish();
-	PopActiveSnapshot();
+	{
+		int workers_required = 2 * MtmMaxNodes + 1;
+		if (max_worker_processes < workers_required)
+		{
+			mtm_log(WARNING,
+				 "multimaster requires max_worker_processes >= %d",
+				 workers_required);
+			ok = false;
+		}
+	}
+
+	if (wal_level != WAL_LEVEL_LOGICAL)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires wal_level = 'logical', "
+			 "because it is build on top of logical replication");
+		ok = false;
+	}
+
+	if (max_wal_senders < MtmMaxNodes)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
+			 MtmMaxNodes);
+		ok = false;
+	}
+
+	if (max_replication_slots < MtmMaxNodes)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
+			 MtmMaxNodes);
+		ok = false;
+	}
+
+	return ok;
 }
 
-/* delete node entry */
-void
-drop_node_entry(int node_id)
+Datum
+mtm_after_node_create(PG_FUNCTION_ARGS)
 {
-	char	   *sql;
-	int			rc;
+	CreatePublicationStmt *pub_stmt = makeNode(CreatePublicationStmt);
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	int			node_id;
+	bool		node_id_isnull;
+	bool		is_self;
+	bool		is_self_isnull;
+	char	   *conninfo;
+	bool		conninfo_isnull;
+	char	   *origin_name;
+	char	   *recovery_slot;
 
-	if (SPI_connect() != SPI_OK_CONNECT)
-		mtm_log(ERROR, "could not connect using SPI");
-	PushActiveSnapshot(GetTransactionSnapshot());
+	Assert(CALLED_AS_TRIGGER(fcinfo));
+	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
+	Assert(TRIGGER_FIRED_BY_INSERT(trigdata->tg_event));
 
-	sql = psprintf("delete from mtm.nodes where id=%d",
-				   node_id);
-	rc = SPI_execute(sql, false, 0);
-	if (rc < 0)
-		mtm_log(ERROR, "Failed to save syncpoint");
+	node_id = DatumGetInt32(heap_getattr(trigdata->tg_trigtuple,
+							 Anum_mtm_nodes_id,
+							 RelationGetDescr(trigdata->tg_relation),
+							 &node_id_isnull));
+	Assert(!node_id_isnull);
 
-	SPI_finish();
-	PopActiveSnapshot();
+	conninfo = text_to_cstring(DatumGetTextP(heap_getattr(trigdata->tg_trigtuple,
+							 Anum_mtm_nodes_connifo,
+							 RelationGetDescr(trigdata->tg_relation),
+							 &conninfo_isnull)));
+
+	is_self = DatumGetBool(heap_getattr(trigdata->tg_trigtuple,
+							 Anum_mtm_nodes_is_self,
+							 RelationGetDescr(trigdata->tg_relation),
+							 &is_self_isnull));
+	Assert(!is_self_isnull);
+
+	if (node_id <= 0 || node_id > MTM_MAX_NODES)
+		mtm_log(ERROR,
+			"node_id should be in range from 1 to %d, but %d is given",
+			MTM_MAX_NODES, node_id);
+
+	if (!check_config())
+		mtm_log(ERROR, "multimaster can't start with current configs");
+
+	if (is_self)
+	{
+		/*
+		 * Create dummy pub. It will be used by backends to check whether
+		 * multimaster is configured.
+		 */
+		pub_stmt->pubname = MULTIMASTER_NAME;
+		pub_stmt->for_all_tables = true;
+		pub_stmt->tables = NIL;
+		pub_stmt->options = NIL;
+		CreatePublication(pub_stmt);
+
+		/* liftoff */
+		MtmMonitorStart(MyDatabaseId, GetUserId());
+	}
+	else
+	{
+		CreateSubscriptionStmt *cs_stmt = makeNode(CreateSubscriptionStmt);
+		int			my_node_id = Mtm->my_node_id;
+
+		if (my_node_id == 0)
+		{
+			const char *em_node_id =
+						GetConfigOption("mtm.emerging_node_id", true, false);
+
+			if (em_node_id == NULL)
+				mtm_log(ERROR,
+					"please create node with is_self = 'true' first or set mtm.emerging_node_id");
+
+			sscanf(em_node_id, "%d", &my_node_id);
+
+			if (my_node_id <= 0 || my_node_id > MTM_MAX_NODES)
+				mtm_log(ERROR,
+					"mtm.emerging_node_id should be in range from 1 to %d", MTM_MAX_NODES);
+		}
+
+		Assert(!conninfo_isnull);
+
+		/*
+		 * We are not creating slots for other nodes on our node by calling
+		 * ReplicationSlotCreate() because of following reasons:
+		 *   * Slot creation requires transaction without assigned xid. So when we want
+		 *     to setup bunch of nodes we can't just several times call function that
+		 *     setups individual node.
+		 *   * That way our receiver will not face situation when slot on remote
+		 *     node wasn't yet created during initial setup.
+		 *   * We anyway need to check connection string.
+		 *
+		 * So instead we are creating slots for our node on neighbour.
+		 */
+		MtmReceiverCreateSlot(conninfo, my_node_id);
+
+		/*
+		 * Dummy subscription. It is used by launcher to start workers in databases
+		 * where multimaster is configured (pg_publication is shared catalog
+		 * relation, so launcher can find it from postgres database). Also our
+		 * workers and backends are subscribed to cache invalidations of
+		 * pg_publication, so that can know aboun node creating/deletion.
+		 */
+		cs_stmt->subname = psprintf(MTM_SUBNAME_FMT, node_id);
+		cs_stmt->conninfo = conninfo;
+		cs_stmt->publication = list_make1(makeString(MULTIMASTER_NAME));
+		cs_stmt->options = list_make4(
+			makeDefElem("slot_name", (Node *) makeString("none"), -1),
+			makeDefElem("create_slot", (Node *) makeString("false"), -1),
+			makeDefElem("connect", (Node *) makeString("false"), -1),
+			makeDefElem("enabled", (Node *) makeString("false"), -1)
+		);
+		CreateSubscription(cs_stmt, true);
+
+		/* Create recovery slot to hold WAL files that we may need during recovery */
+		recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
+		ReplicationSlotReserveWal();
+		/* Write this slot to disk */
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
+		ReplicationSlotRelease();
+
+		/*
+		 * Create origin for this neighbour.
+		 * It is tempting to use 'pg_#{suboid}' but accessing syscache in
+		 * MtmLoadConfig() will lead to deadlock if receiver tries to load
+		 * config just before committing tx that modified subscriptions.
+		 *
+		 * Other way around is to write suboid to mtm.nodes tuple, but that is
+		 * too much ado for now.
+		 */
+		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
+		replorigin_create(origin_name);
+	}
+
+	PG_RETURN_VOID();
+}
+
+Datum
+mtm_after_node_drop(PG_FUNCTION_ARGS)
+{
+	TriggerData *trigdata = (TriggerData *) fcinfo->context;
+	int			node_id;
+	bool		node_id_isnull;
+	bool		is_self;
+	bool		is_self_isnull;
+
+	Assert(CALLED_AS_TRIGGER(fcinfo));
+	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
+	Assert(TRIGGER_FIRED_BY_DELETE(trigdata->tg_event));
+
+	node_id = DatumGetInt32(heap_getattr(trigdata->tg_trigtuple,
+							 Anum_mtm_nodes_id,
+							 RelationGetDescr(trigdata->tg_relation),
+							 &node_id_isnull));
+	Assert(!node_id_isnull);
+	Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
+
+	is_self = DatumGetBool(heap_getattr(trigdata->tg_trigtuple,
+							 Anum_mtm_nodes_is_self,
+							 RelationGetDescr(trigdata->tg_relation),
+							 &is_self_isnull));
+	Assert(!is_self_isnull);
+
+	/*
+	 * This will produce invalidation that others can consume and reload
+	 * state.
+	 */
+	if (is_self)
+	{
+		DropStmt *dp_stmt = makeNode(DropStmt);
+
+		dp_stmt->removeType = OBJECT_PUBLICATION;
+		dp_stmt->behavior = DROP_CASCADE;
+		dp_stmt->concurrent = false;
+		dp_stmt->missing_ok = false;
+		dp_stmt->objects = list_make1(makeString(MULTIMASTER_NAME));
+		RemoveObjects(dp_stmt);
+	}
+	else
+	{
+		DropSubscriptionStmt *ds_stmt = makeNode(DropSubscriptionStmt);
+
+		ds_stmt->subname = psprintf(MTM_SUBNAME_FMT, node_id);
+		DropSubscription(ds_stmt, true);
+	}
+
+	PG_RETURN_VOID();
 }
 
 /*
@@ -750,8 +914,8 @@ MtmLoadConfig()
 	MtmConfig  *cfg;
 	int			rc;
 	int			i;
-	int			dest_id = 0;
 	bool		inside_tx = IsTransactionState();
+	TupleDesc	tupdesc;
 
 	cfg = (MtmConfig *) MemoryContextAlloc(TopMemoryContext,
 										   sizeof(MtmConfig));
@@ -764,61 +928,52 @@ MtmLoadConfig()
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
 
-
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	rc = SPI_execute("select * from mtm.nodes order by id asc", true, 0);
-	if (rc < 0)
-		mtm_log(ERROR, "Failed to save syncpoint");
-
-	if (rc == SPI_OK_SELECT)
-	{
-		TupleDesc	tupdesc	= SPI_tuptable->tupdesc;
-
-		Assert(SPI_processed <= MtmMaxNodes);
-		cfg->n_nodes = SPI_processed;
-		cfg->my_node_id = 0;
-
-		for (i = 0; i < cfg->n_nodes; i++)
-		{
-			HeapTuple	tup = SPI_tuptable->vals[i];
-			bool		isnull;
-			int			node_id;
-			char	   *connstr;
-			bool		is_self;
-
-			node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
-			Assert(!isnull);
-			Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT4OID);
-			Assert(node_id == i + 1);
-
-			connstr = SPI_getvalue(tup, tupdesc, 2);
-			Assert(TupleDescAttr(tupdesc, 1)->atttypid == TEXTOID);
-
-			is_self = DatumGetBool(SPI_getbinval(tup, tupdesc, 3, &isnull));
-			Assert(!isnull);
-			Assert(TupleDescAttr(tupdesc, 2)->atttypid == BOOLOID);
-
-			/* Empty connstr mean that this is our node */
-			if (is_self)
-			{
-				/* Ensure that there is only one tuple representing our node */
-				Assert(cfg->my_node_id == 0);
-				cfg->my_node_id = node_id;
-			}
-			else
-			{
-				/* Assume that connstr correctness was checked upon creation */
-				cfg->nodes[i].conninfo = MemoryContextStrdup(TopMemoryContext, connstr);
-				Assert(cfg->nodes[i].conninfo != NULL);
-			}
-		}
-
-		Assert(cfg->my_node_id != 0 || cfg->n_nodes == 0);
-	}
-	else
-	{
+	if (rc < 0 || rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to load saved nodes");
+
+	Assert(SPI_processed <= MtmMaxNodes);
+	tupdesc	= SPI_tuptable->tupdesc;
+
+	cfg->n_nodes = 0;
+	cfg->my_node_id = 0;
+
+	for (i = 0; i < SPI_processed; i++)
+	{
+		HeapTuple	tup = SPI_tuptable->vals[i];
+		bool		isnull;
+		int			node_id;
+		char	   *connstr;
+		bool		is_self;
+
+		node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_id, &isnull));
+		Assert(!isnull);
+		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_id - 1)->atttypid == INT4OID);
+
+		connstr = SPI_getvalue(tup, tupdesc, Anum_mtm_nodes_connifo);
+		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_connifo - 1)->atttypid == TEXTOID);
+
+		is_self = DatumGetBool(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_is_self, &isnull));
+		Assert(!isnull);
+		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_is_self - 1)->atttypid == BOOLOID);
+
+		/* Empty connstr mean that this is our node */
+		if (is_self)
+		{
+			/* Ensure that there is only one tuple representing our node */
+			Assert(cfg->my_node_id == 0);
+			cfg->my_node_id = node_id;
+		}
+		else
+		{
+			/* Assume that connstr correctness was checked upon creation */
+			cfg->nodes[cfg->n_nodes].conninfo = MemoryContextStrdup(TopMemoryContext, connstr);
+			cfg->nodes[cfg->n_nodes].node_id = node_id;
+			Assert(cfg->nodes[cfg->n_nodes].conninfo != NULL);
+			cfg->n_nodes++;
+		}
 	}
 
 	/* Load origin_id's */
@@ -826,24 +981,13 @@ MtmLoadConfig()
 	{
 		char	   *origin_name;
 		RepOriginId	origin_id;
+		int			node_id = cfg->nodes[i].node_id;
 
-		if (i == cfg->my_node_id - 1)
-			continue;
-
-		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
+		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		origin_id = replorigin_by_name(origin_name, true);
 
 		Assert(origin_id != InvalidRepOriginId);
 		cfg->nodes[i].origin_id = origin_id;
-	}
-
-	/* fill dest_id's */
-	for (i = 0; i < cfg->n_nodes; i++)
-	{
-		if (i == cfg->my_node_id - 1)
-			continue;
-
-		cfg->nodes[i].destination_id = dest_id++;
 	}
 
 	SPI_finish();
@@ -855,144 +999,84 @@ MtmLoadConfig()
 	return cfg;
 }
 
-Datum
-mtm_init_node(PG_FUNCTION_ARGS)
+MtmConfig *
+MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
+				mtm_cfg_change_cb node_drop_cb, Datum arg)
 {
-	int			my_node_id = PG_GETARG_INT32(0);
-	ArrayType *connstrs_arr = PG_GETARG_ARRAYTYPE_P(1);
-	Datum	   *connstrs_datums;
-	bool	   *connstrs_nulls;
-	int			n_nodes;
-	int			i;
+	MtmConfig  *new_cfg;
+	Bitmapset  *old_bms = NULL,
+			   *new_bms = NULL,
+			   *deleted,
+			   *created;
+	int			i,
+				node_id;
 
+	new_cfg = MtmLoadConfig();
 
-	if (!ConfigIsSane())
-		mtm_log(ERROR, "Multimaster config is insane, refusing to work");
-
-	/* parse array with connstrings */
-	Assert(ARR_ELEMTYPE(connstrs_arr) == TEXTOID);
-	Assert(ARR_NDIM(connstrs_arr) == 1);
-	deconstruct_array(connstrs_arr,
-					  TEXTOID, -1, false, 'i',
-					  &connstrs_datums, &connstrs_nulls, &n_nodes);
-
-
-	for (i = 0; i < n_nodes; i++)
-	{
-		LogicalDecodingContext *ctx = NULL;
-		char	   *logical_slot;
-
-		if (i == my_node_id - 1)
-			continue;
-
-		/* Now create logical slot for our publication to this neighbour */
-		logical_slot = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
-		ReplicationSlotCreate(logical_slot, true, RS_EPHEMERAL);
-		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
-								false,	/* do not build snapshot */
-								logical_read_local_xlog_page, NULL, NULL,
-								NULL);
-		DecodingContextFindStartpoint(ctx);
-		FreeDecodingContext(ctx);
-		ReplicationSlotPersist();
-		ReplicationSlotRelease();
-	}
-
-	/* create node entries */
-	for (i = 0; i < n_nodes; i++)
-	{
-		bool is_self = i == my_node_id - 1;
-		create_node_entry(i + 1, TextDatumGetCString(connstrs_datums[i]), is_self);
-	}
-
-	for (i = 0; i < n_nodes; i++)
-	{
-		char	   *origin_name;
-		char	   *recovery_slot;
-
-		if (i == my_node_id - 1)
-			continue;
-
-		/* create origin for this neighbour */
-		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, i + 1);
-		replorigin_create(origin_name);
-
-		/* Create recovery slot to hold WAL files that we may need during recovery */
-		recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, i + 1);
-		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
-		ReplicationSlotReserveWal();
-		/* Write this slot to disk */
-		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
-		ReplicationSlotRelease();
-	}
+	/* Set proper values in Mtm structure */
+	MtmStateFill(new_cfg);
 
 	/*
-	 * Dummy subscription to indicate that this database contains configured
-	 * multimaster. Used by launcher to start workers with necessary user_id's.
+	 * Construct bitmapsets from old and new mtm_config's and find
+	 * out whether some nodes were added or deleted.
 	 */
+	if (old_cfg != NULL)
 	{
-		bool		nulls[Natts_pg_subscription];
-		Datum		values[Natts_pg_subscription];
-		Relation	rel;
-		Oid			owner = GetUserId();
-		Oid			subid;
-		HeapTuple	tup;
-		Datum		pub;
-		ArrayType  *pubarr;
+		for (i = 0; i < old_cfg->n_nodes; i++)
+			old_bms = bms_add_member(old_bms, old_cfg->nodes[i].node_id);
+	}
+	for (i = 0; i < new_cfg->n_nodes; i++)
+		new_bms = bms_add_member(new_bms, new_cfg->nodes[i].node_id);
 
+	deleted = bms_difference(old_bms, new_bms);
+	created = bms_difference(new_bms, old_bms);
 
-		rel = heap_open(SubscriptionRelationId, RowExclusiveLock);
-
-		/* Check if name is used */
-		subid = GetSysCacheOid2(SUBSCRIPTIONNAME, MyDatabaseId,
-								CStringGetDatum(MULTIMASTER_NAME));
-		if (OidIsValid(subid))
-		{
-			ereport(ERROR,
-					(errcode(ERRCODE_DUPLICATE_OBJECT),
-					errmsg("subscription \"%s\" already exists",
-							MULTIMASTER_NAME)));
-		}
-
-		/* dummy publication name to satisfy GetSubscription() */
-		pub = CStringGetTextDatum(MULTIMASTER_NAME);
-		pubarr = construct_array(&pub, 1, TEXTOID, -1, false, 'i');
-
-		/* form tuple for our subscription */
-		memset(values, 0, sizeof(values));
-		memset(nulls, false, sizeof(nulls));
-		values[Anum_pg_subscription_subdbid - 1] =
-			ObjectIdGetDatum(MyDatabaseId);
-		values[Anum_pg_subscription_subname - 1] =
-			DirectFunctionCall1(namein, CStringGetDatum(MULTIMASTER_NAME));
-		values[Anum_pg_subscription_subowner - 1] = ObjectIdGetDatum(owner);
-		/* disable so logical launcher won't try to start this one */
-		values[Anum_pg_subscription_subenabled - 1] = BoolGetDatum(false);
-		values[Anum_pg_subscription_subconninfo - 1] =
-			CStringGetTextDatum("");
-		nulls[Anum_pg_subscription_subslotname - 1] = true;
-		values[Anum_pg_subscription_subsynccommit - 1] =
-			CStringGetTextDatum("off");
-		values[Anum_pg_subscription_subpublications - 1] =
-			PointerGetDatum(pubarr);
-
-		tup = heap_form_tuple(RelationGetDescr(rel), values, nulls);
-
-		/* Insert tuple into catalog. */
-		subid = CatalogTupleInsert(rel, tup);
-		heap_freetuple(tup);
-
-		recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
-		heap_close(rel, RowExclusiveLock);
+	/*
+	 * Call launch/stop callbacks for added/deleted nodes.
+	 */
+	if (node_add_cb)
+	{
+		node_id = -1;
+		while ((node_id = bms_next_member(created, node_id)) >= 0)
+			node_add_cb(node_id, new_cfg, arg);
 	}
 
-	/* liftoff */
-	MtmMonitorStart(MyDatabaseId, GetUserId());
+	if (node_drop_cb)
+	{
+		node_id = -1;
+		while ((node_id = bms_next_member(deleted, node_id)) >= 0)
+			node_drop_cb(node_id, new_cfg, arg);
+	}
 
-	PG_RETURN_VOID();
+	if (old_cfg != NULL)
+		pfree(old_cfg);
+
+	return new_cfg;
 }
 
+/* Helper to find node with specified id in cfg->nodes */
+MtmNode *
+MtmNodeById(MtmConfig *cfg, int node_id)
+{
+	int			i;
+
+	for (i = 0; i < cfg->n_nodes; i++)
+	{
+		if (cfg->nodes[i].node_id == node_id)
+			return &(cfg->nodes[i]);
+	}
+
+	return NULL;
+}
+
+/*****************************************************************************
+ *
+ * Launcher worker.
+ *
+ * During node boot searches for configured multimasters inspecting
+ * pg_subscription and starts mtm-monitor.
+ *
+ *****************************************************************************/
 
 /*
  * Register static worker for launcher.
@@ -1020,13 +1104,20 @@ launcher_init()
 void
 launcher_main(Datum main_arg)
 {
-	Relation	rel;
-	HeapScanDesc scan;
-	HeapTuple	tup;
+	Relation		rel;
+	HeapScanDesc	scan;
+	HeapTuple		tup;
+	HASHCTL			hash_info;
+	HTAB		   *already_started;
 
 	/* init this worker */
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+
+	memset(&hash_info, 0, sizeof(hash_info));
+	hash_info.entrysize = hash_info.keysize = sizeof(Oid);
+	already_started = hash_create("already_started", 16, &hash_info,
+								  HASH_ELEM | HASH_BLOBS);
 
 	/* Connect to a postgres database */
 	BackgroundWorkerInitializeConnection(NULL, NULL, 0);
@@ -1044,14 +1135,21 @@ launcher_main(Datum main_arg)
 	rel = heap_open(SubscriptionRelationId, AccessShareLock);
 	scan = heap_beginscan_catalog(rel, 0, NULL);
 
+	/* is there any mtm subscriptions in a given database? */
 	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
 	{
 		Form_pg_subscription subform = (Form_pg_subscription) GETSTRUCT(tup);
+		int			node_id;
 
 		if (!subform->subenabled &&
-			namestrcmp(&subform->subname, MULTIMASTER_NAME) == 0)
+			sscanf(NameStr(subform->subname), MTM_SUBNAME_FMT, &node_id) == 1 &&
+			!hash_search(already_started, &subform->subdbid, HASH_FIND, NULL))
 		{
+			bool		found;
+
 			MtmMonitorStart(subform->subdbid, subform->subowner);
+			hash_search(already_started, &subform->subdbid, HASH_ENTER, &found);
+			Assert(!found);
 		}
 	}
 
@@ -1062,17 +1160,4 @@ launcher_main(Datum main_arg)
 }
 
 
-/*
- * Subscription named 'multimaster' acts as a flag that that multimaster
- * extension was created and configured, so we can hijack transactions.
- * We can't hijack transactions before configuration is done because
- * configuration itself is going to need some transactions that better not
- * be aborted because of Mtm->status being DISABLED. Also subscription
- * is uniq with respect to (db_id, sub_name) so "All your base are belong
- * to us" won't happen.
- */
-bool
-MtmIsEnabled()
-{
-	return OidIsValid(get_subscription_oid(MULTIMASTER_NAME, true));
-}
+

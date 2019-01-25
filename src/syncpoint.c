@@ -61,7 +61,7 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
 	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
 		if (mtm_cfg->nodes[i].origin_id == origin_id)
-			return i+1;
+			return mtm_cfg->nodes[i].node_id;
 	}
 
 	Assert(false);

@@ -1,6 +1,8 @@
 #ifndef RESOLVER_H
 #define RESOLVER_H
 
+#include "postmaster/bgworker.h"
+
 typedef enum
 {
 	MtmTxUnknown		= (1<<0),
@@ -17,7 +19,7 @@ typedef int MtmTxStateMask;
 
 extern void ResolverMain(Datum main_arg);
 extern void ResolverInit(void);
-extern void ResolverStart(Oid db_id, Oid user_id);
+extern BackgroundWorkerHandle *ResolverStart(Oid db_id, Oid user_id);
 extern void ResolveTransactionsForNode(int node_id);
 extern void ResolveAllTransactions(void);
 extern char *MtmTxStateMnem(MtmTxState state);
