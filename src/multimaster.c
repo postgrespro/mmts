@@ -417,6 +417,7 @@ _PG_init(void)
 		NULL
 	);
 
+	// XXX
 	DefineCustomIntVariable(
 		"multimaster.max_nodes",
 		"Maximal number of cluster nodes",
@@ -460,6 +461,7 @@ _PG_init(void)
 		NULL
 	);
 
+	// XXX
 	DefineCustomBoolVariable(
 		"multimaster.ignore_tables_without_pk",
 		"Do not replicate tables without primary key",
@@ -514,6 +516,7 @@ _PG_init(void)
 		NULL
 	);
 
+	// XXX
 	DefineCustomIntVariable(
 		"multimaster.queue_size",
 		"Multimaster queue size",

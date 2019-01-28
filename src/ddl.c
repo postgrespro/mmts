@@ -671,8 +671,8 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_LoadStmt:
 		case T_ClusterStmt:
 		case T_VariableShowStmt:
-		case T_ReassignOwnedStmt:
-		case T_LockStmt: // XXX: check whether we should replicate that
+		case T_ReassignOwnedStmt: // XXX?
+		case T_LockStmt:
 		case T_CheckPointStmt:
 		case T_ReindexStmt:
 		case T_AlterSystemStmt:
