@@ -24,7 +24,8 @@ LANGUAGE C;
 CREATE TABLE mtm.nodes(
     id int primary key not null,
     conninfo text not null,
-    is_self bool not null
+    is_self bool not null,
+    init_done bool not null default 'f'
 );
 
 CREATE FUNCTION mtm.after_node_create()
@@ -47,6 +48,11 @@ CREATE TRIGGER on_node_drop
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_drop();
 
+CREATE FUNCTION mtm.join_node(node_id int)
+RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_join_node'
+LANGUAGE C;
+
 ---
 --- User facing API for node management.
 ---
@@ -57,6 +63,7 @@ BEGIN
     IF node_id <= 0 OR node_id > least(16, array_length(connstrs, 1)) THEN
         RAISE EXCEPTION 'node_id should be in range [1 .. length(connstrs)]';
     END IF;
+    -- XXX
     EXECUTE 'SET mtm.emerging_node_id = ' || node_id || ';';
     INSERT INTO mtm.nodes SELECT
         ordinality::int as id,
@@ -65,6 +72,27 @@ BEGIN
     FROM
         unnest(connstrs)
     WITH ORDINALITY;
+END
+$$
+LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION mtm.add_node(connstr text) RETURNS void AS
+$$
+DECLARE
+    new_node_id int;
+BEGIN
+    -- XXX: add only to a configured mm?
+
+    INSERT INTO mtm.nodes SELECT
+        min(unused_ids.id), connstr, 'false'
+    FROM (
+        SELECT id FROM generate_series(1,16) id
+        EXCEPT
+        SELECT id FROM mtm.nodes
+    ) unused_ids
+    RETURNING id INTO new_node_id;
+
+    -- SELECT mtm.node_join(new_node_id, connstr);
 END
 $$
 LANGUAGE plpgsql;

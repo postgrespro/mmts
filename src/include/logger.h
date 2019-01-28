@@ -75,6 +75,9 @@ typedef enum MtmLogTag
 	/* syncpoints */
 	SyncpointCreated		= LOG,
 	SyncpointApply			= LOG,
+
+	/* Node add/drop */
+	NodeMgmt				= LOG
 } MtmLogTag;
 
 // XXX: also meaningful process name would be cool

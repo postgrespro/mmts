@@ -199,6 +199,18 @@ BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
 	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
 	pool->db_id = db_id;
 	pool->user_id = user_id;
+	pool->nWorkers = 0;
+	pool->shutdown = false;
+	pool->producerBlocked = false;
+	pool->head = 0;
+	pool->tail = 0;
+	pool->active = 0;
+	pool->pending = 0;
+	pool->lastPeakTime = 0;
+	pool->lastDynamicWorkerStartTime = 0;
+
+	PGSemaphoreReset(pool->available);
+	PGSemaphoreReset(pool->overflow);
 }
 
 size_t BgwPoolGetQueueSize(BgwPool* pool)

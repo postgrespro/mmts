@@ -23,7 +23,6 @@
 #include "replication/origin.h"
 #include "replication/slot.h"
 #include "replication/logical.h"
-#include "replication/logicalfuncs.h"
 #include "replication/walsender.h"
 #include "storage/ipc.h"
 #include "utils/guc.h"
@@ -58,6 +57,7 @@
 #include "receiver.h"
 #include "resolver.h"
 #include "logger.h"
+#include "syncpoint.h"
 
 #include "compat.h"
 
@@ -83,6 +83,7 @@ PG_MODULE_MAGIC;
 
 PG_FUNCTION_INFO_V1(mtm_after_node_create);
 PG_FUNCTION_INFO_V1(mtm_after_node_drop);
+PG_FUNCTION_INFO_V1(mtm_join_node);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -724,8 +725,6 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	bool		is_self_isnull;
 	char	   *conninfo;
 	bool		conninfo_isnull;
-	char	   *origin_name;
-	char	   *recovery_slot;
 
 	Assert(CALLED_AS_TRIGGER(fcinfo));
 	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
@@ -756,6 +755,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	if (!check_config())
 		mtm_log(ERROR, "multimaster can't start with current configs");
 
+	mtm_log(NodeMgmt, "Creating node%d", node_id);
+
 	if (is_self)
 	{
 		/*
@@ -774,39 +775,9 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	else
 	{
 		CreateSubscriptionStmt *cs_stmt = makeNode(CreateSubscriptionStmt);
-		int			my_node_id = Mtm->my_node_id;
-
-		if (my_node_id == 0)
-		{
-			const char *em_node_id =
-						GetConfigOption("mtm.emerging_node_id", true, false);
-
-			if (em_node_id == NULL)
-				mtm_log(ERROR,
-					"please create node with is_self = 'true' first or set mtm.emerging_node_id");
-
-			sscanf(em_node_id, "%d", &my_node_id);
-
-			if (my_node_id <= 0 || my_node_id > MTM_MAX_NODES)
-				mtm_log(ERROR,
-					"mtm.emerging_node_id should be in range from 1 to %d", MTM_MAX_NODES);
-		}
+		char	   *origin_name;
 
 		Assert(!conninfo_isnull);
-
-		/*
-		 * We are not creating slots for other nodes on our node by calling
-		 * ReplicationSlotCreate() because of following reasons:
-		 *   * Slot creation requires transaction without assigned xid. So when we want
-		 *     to setup bunch of nodes we can't just several times call function that
-		 *     setups individual node.
-		 *   * That way our receiver will not face situation when slot on remote
-		 *     node wasn't yet created during initial setup.
-		 *   * We anyway need to check connection string.
-		 *
-		 * So instead we are creating slots for our node on neighbour.
-		 */
-		MtmReceiverCreateSlot(conninfo, my_node_id);
 
 		/*
 		 * Dummy subscription. It is used by launcher to start workers in databases
@@ -824,16 +795,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 			makeDefElem("connect", (Node *) makeString("false"), -1),
 			makeDefElem("enabled", (Node *) makeString("false"), -1)
 		);
+		// XXX: stupid warning
 		CreateSubscription(cs_stmt, true);
-
-		/* Create recovery slot to hold WAL files that we may need during recovery */
-		recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
-		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
-		ReplicationSlotReserveWal();
-		/* Write this slot to disk */
-		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
-		ReplicationSlotRelease();
 
 		/*
 		 * Create origin for this neighbour.
@@ -846,6 +809,15 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 */
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		replorigin_create(origin_name);
+
+		/*
+		 * We need to be sure that latest syncpoint will happens after slot
+		 * creation, so that new basebackuped node will be able to resume
+		 * replication.
+		 * As this is done in trigger, we can be sure that syncpoint will
+		 * be completed everywhere before returning control to user.
+		 */
+		MaybeLogSyncpoint(true);
 	}
 
 	PG_RETURN_VOID();
@@ -877,6 +849,8 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 							 &is_self_isnull));
 	Assert(!is_self_isnull);
 
+	mtm_log(NodeMgmt, "Dropping node%d", node_id);
+
 	/*
 	 * This will produce invalidation that others can consume and reload
 	 * state.
@@ -899,6 +873,122 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 		ds_stmt->subname = psprintf(MTM_SUBNAME_FMT, node_id);
 		DropSubscription(ds_stmt, true);
 	}
+
+	PG_RETURN_VOID();
+}
+
+Datum
+mtm_join_node(PG_FUNCTION_ARGS)
+{
+	int			rc;
+	int			new_node_id = PG_GETARG_INT32(0);
+	int			backup_node_id = 0;
+	char	   *query;
+	char	   *mtm_nodes;
+	char	   *conninfo;
+	PGconn	   *conn;
+	PGresult   *res;
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	/* get conninfo of this node */
+	query = psprintf("select conninfo from " MTM_NODES " where id = %d",
+					 new_node_id);
+	rc = SPI_execute(query, true, 0);
+	if (rc != SPI_OK_SELECT || SPI_processed != 1)
+		mtm_log(ERROR, "Con't load node%d conninfo", backup_node_id);
+	conninfo = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
+
+	/* serialize our mtm.nodes table into string */
+	query = psprintf("select array_agg((n.id, n.conninfo, n.id = %d, 'f')::" MTM_NODES ") "
+					 "from mtm.nodes n", new_node_id);
+	rc = SPI_execute(query, true, 0);
+	if (rc != SPI_OK_SELECT || SPI_processed != 1)
+		mtm_log(ERROR, "Failed to load node list");
+	mtm_nodes = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
+
+	elog(LOG, "XXX: %s", mtm_nodes);
+
+	/*
+	 * Prepare node for joining cluster.
+	 */
+
+	conn = PQconnectdb(conninfo);
+	if (PQstatus(conn) != CONNECTION_OK)
+	{
+		PQfinish(conn);
+		mtm_log(ERROR, "Could not connect to a node '%s'", conninfo);
+	}
+
+	/* was this node basebackuped from another node? */
+	res = PQexec(conn, "select id from mtm.nodes where is_self = 't'");
+	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
+		PQnfields(res) != 1)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		mtm_log(ERROR, "Failed to discover backup source node on '%s' %d %d",
+				conninfo, PQresultStatus(res), PQnfields(res));
+	}
+	else if (PQntuples(res) == 1)
+	{
+		backup_node_id = 1;
+	}
+	else if (PQntuples(res) != 0)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		mtm_log(ERROR, "Found several is_self = 't' nodes on '%s', refusing to proceed",
+				conninfo);
+	}
+	PQclear(res);
+
+	/* clean pre-basebackup version of mtm.nodes */
+	res = PQexec(conn, "delete from " MTM_NODES);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		mtm_log(ERROR, "Can't clean old mtm.nodes on '%s'", conninfo);
+	}
+	PQclear(res);
+
+	/* and replace with a adjusted version */
+	query = psprintf("insert into " MTM_NODES
+					 " select * from unnest($$%s$$::" MTM_NODES "[]);",
+					 mtm_nodes);
+	res = PQexec(conn, query);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		PQclear(res);
+		PQfinish(conn);
+		mtm_log(ERROR, "Failed to insert new mtm.nodes on '%s'", conninfo);
+	}
+	PQclear(res);
+
+	if (backup_node_id > 0)
+	{
+		/* and create syncpoint for backup origin node */
+		query = psprintf("insert into mtm.syncpoints values "
+						"(%d, pg_current_wal_lsn(), pg_current_wal_lsn())",
+						backup_node_id);
+		res = PQexec(conn, query);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			PQclear(res);
+			PQfinish(conn);
+			mtm_log(ERROR, "Failed to create syncpoint on '%s'", conninfo);
+		}
+		PQclear(res);
+	}
+
+	PQfinish(conn);
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		mtm_log(ERROR, "could not finish SPI");
+	PopActiveSnapshot();
 
 	PG_RETURN_VOID();
 }
@@ -947,6 +1037,7 @@ MtmLoadConfig()
 		int			node_id;
 		char	   *connstr;
 		bool		is_self;
+		bool		init_done;
 
 		node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_id, &isnull));
 		Assert(!isnull);
@@ -958,6 +1049,10 @@ MtmLoadConfig()
 		is_self = DatumGetBool(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_is_self, &isnull));
 		Assert(!isnull);
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_is_self - 1)->atttypid == BOOLOID);
+
+		init_done = DatumGetBool(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_init_done, &isnull));
+		Assert(!isnull);
+		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_init_done - 1)->atttypid == BOOLOID);
 
 		/* Empty connstr mean that this is our node */
 		if (is_self)
@@ -971,6 +1066,7 @@ MtmLoadConfig()
 			/* Assume that connstr correctness was checked upon creation */
 			cfg->nodes[cfg->n_nodes].conninfo = MemoryContextStrdup(TopMemoryContext, connstr);
 			cfg->nodes[cfg->n_nodes].node_id = node_id;
+			cfg->nodes[cfg->n_nodes].init_done = init_done;
 			Assert(cfg->nodes[cfg->n_nodes].conninfo != NULL);
 			cfg->n_nodes++;
 		}
@@ -986,7 +1082,8 @@ MtmLoadConfig()
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		origin_id = replorigin_by_name(origin_name, true);
 
-		Assert(origin_id != InvalidRepOriginId);
+		Assert(origin_id != InvalidRepOriginId || MtmIsMonitorWorker);
+
 		cfg->nodes[i].origin_id = origin_id;
 	}
 
@@ -1014,7 +1111,8 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	new_cfg = MtmLoadConfig();
 
 	/* Set proper values in Mtm structure */
-	MtmStateFill(new_cfg);
+	if (new_cfg->my_node_id != 0)
+		MtmStateFill(new_cfg);
 
 	/*
 	 * Construct bitmapsets from old and new mtm_config's and find

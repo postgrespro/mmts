@@ -1018,7 +1018,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	if (!receiver_ctx->is_recovery)
 	{
 		Assert(replorigin_session_origin == InvalidRepOriginId);
-		MaybeLogSyncpoint();
+		MaybeLogSyncpoint(false);
 	}
 }
 
@@ -1108,6 +1108,11 @@ process_remote_insert(StringInfo s, Relation rel)
 				recheckIndexes =
 					ExecInsertIndexTuples(newslot, &bufferedTuples[i]->t_self,
 										  estate, false, NULL, NIL);
+
+				/* AFTER ROW INSERT Triggers */
+				ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
+									recheckIndexes, NULL);
+
 				list_free(recheckIndexes);
 			}
 		}
@@ -1176,6 +1181,9 @@ process_remote_insert(StringInfo s, Relation rel)
 		simple_heap_insert(rel, newslot->tts_tuple);
 		UserTableUpdateOpenIndexes(estate, newslot);
 
+		/* AFTER ROW INSERT Triggers */
+		ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
+							NIL, NULL);
 	}
 	ExecCloseIndices(estate->es_result_relation_info);
 	if (ActiveSnapshotSet())
@@ -1440,7 +1448,8 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 
 		receiver_mtm_cfg = MtmLoadConfig();
 
-		if (receiver_mtm_cfg->my_node_id == 0)
+		if (receiver_mtm_cfg->my_node_id == 0 ||
+			MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL)
 			proc_exit(0);
 
 		receiver_mtm_cfg_valid = true;

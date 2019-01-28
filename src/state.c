@@ -12,6 +12,7 @@
 #include "replication/slot.h"
 #include "replication/origin.h"
 #include "miscadmin.h"
+#include "replication/logicalfuncs.h"
 
 #include "multimaster.h"
 #include "bkb.h"
@@ -906,6 +907,8 @@ void MtmMonitor(Datum arg);
 static int		sender_to_node[MTM_MAX_NODES];
 static bool		config_valid = false;
 
+bool			MtmIsMonitorWorker;
+
 void
 MtmMonitorStart(Oid db_id, Oid user_id)
 {
@@ -990,49 +993,176 @@ check_status_requests(MtmConfig *mtm_cfg)
 	}
 }
 
+static bool
+slot_exists(char *name)
+{
+	int			i;
+	bool		exists = false;
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (i = 0; i < max_replication_slots; i++)
+	{
+		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+		if (s->in_use && strcmp(name, NameStr(s->data.name)) == 0)
+		{
+			exists = true;
+			break;
+		}
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	return exists;
+}
+
+static bool
+is_basebackuped(MtmConfig *mtm_cfg)
+{
+	int			i;
+	int			n_missing_slots = 0;
+
+	StartTransactionCommand();
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
+	{
+		char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN,
+										 mtm_cfg->nodes[i].node_id);
+
+		if (mtm_cfg->nodes[i].init_done && !slot_exists(slot_name))
+			n_missing_slots++;
+	}
+	CommitTransactionCommand();
+
+	if (n_missing_slots == 0)
+		return false;
+	else if (n_missing_slots == mtm_cfg->n_nodes)
+		return true;
+	else
+		mtm_log(ERROR, "Missing %d replication slots out of %d",
+				n_missing_slots, mtm_cfg->n_nodes);
+}
+
 static void
 start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 {
 	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
+	LogicalDecodingContext *ctx;
 	DmqDestinationId dest;
 	int			sender_id;
+	char	   *dmq_connstr,
+			   *slot,
+			   *recovery_slot,
+			   *dmq_my_name,
+			   *dmq_node_name;
 
-	elog(LOG, "ololoo start_node_workers %d", node_id);
+	/*
+	 * Transaction is needed for logical slot and replication origin creation.
+	 * Also it clean ups psprintfs.
+	 */
+	StartTransactionCommand();
 
-	char	   *connstr_with_appname = psprintf("%s application_name=%s",
-									MtmNodeById(new_cfg, node_id)->conninfo,
-									MULTIMASTER_BROADCAST_SERVICE);
+	dmq_connstr = psprintf("%s application_name=%s",
+						   MtmNodeById(new_cfg, node_id)->conninfo,
+						   MULTIMASTER_BROADCAST_SERVICE);
+	slot = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
+	recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+	dmq_my_name = psprintf(MTM_DMQNAME_FMT, new_cfg->my_node_id);
+	dmq_node_name = psprintf(MTM_DMQNAME_FMT, node_id);
 
-	dest = dmq_destination_add(connstr_with_appname,
-						psprintf(MTM_DMQNAME_FMT, new_cfg->my_node_id),
-						psprintf(MTM_DMQNAME_FMT, node_id),
-						MtmHeartbeatSendTimeout);
+	if (MtmNodeById(new_cfg, node_id)->init_done)
+	{
+		if (!slot_exists(recovery_slot))
+			mtm_log(ERROR, "can't find recovery slot for node%d", node_id);
 
+		if (!slot_exists(slot))
+			mtm_log(ERROR, "can't find replication slot for node%d", node_id);
+	}
+	else
+	{
+		char	   *query;
+		int			rc;
+
+		/* Create logical slot for our publication to this neighbour */
+		ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
+		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
+										// XXX?
+										false,  /* do not build snapshot */
+										logical_read_local_xlog_page, NULL, NULL,
+										NULL);
+		DecodingContextFindStartpoint(ctx);
+		FreeDecodingContext(ctx);
+		ReplicationSlotPersist();
+		ReplicationSlotRelease();
+
+		/*
+		 * Create recovery slot to hold WAL files that we may need during
+		 * recovery.
+		 */
+		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
+		ReplicationSlotReserveWal();
+		/* Write this slot to disk */
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
+		ReplicationSlotRelease();
+
+		/*
+		 * Mark this node as init_done, so at next boot we won't try to create
+		 * slots again.
+		 */
+		if (SPI_connect() != SPI_OK_CONNECT)
+			mtm_log(ERROR, "could not connect using SPI");
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		query = psprintf("update " MTM_NODES " set init_done = 't' "
+						 "where id = %d", node_id);
+		rc = SPI_execute(query, false, 0);
+		if (rc < 0 || rc != SPI_OK_UPDATE)
+			mtm_log(ERROR, "Failed to set init_done to true for node%d", node_id);
+
+		if (SPI_finish() != SPI_OK_FINISH)
+			mtm_log(ERROR, "could not finish SPI");
+		PopActiveSnapshot();
+	}
+
+	/* Add dmq destination */
+	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
+							   MtmHeartbeatSendTimeout);
 	MtmLock(LW_EXCLUSIVE);
 	Mtm->dmq_dest_ids[node_id - 1] = dest;
 	MtmUnlock();
 
-	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
-											  GetAuthenticatedUserId(),
-											  MyProcPid);
-
-	sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
-									node_id - 1);
+	/* Attach receiver so we can collect tx requests */
+	sender_id = dmq_attach_receiver(dmq_node_name, node_id - 1);
 	sender_to_node[sender_id] = node_id;
 
-	pfree(connstr_with_appname);
+	CommitTransactionCommand();
+
+	/*
+	 * Finally start receiver.
+	 * Do that after commit, so bgw handle will be allocated in TopMcxt.
+	 */
+	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
+											  GetUserId(), MyProcPid);
+
+	mtm_log(NodeMgmt, "Attached node%d", node_id);
 }
 
 static void
 stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 {
 	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
-	char	   *dmq_name = psprintf(MTM_DMQNAME_FMT, node_id);
-	char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
-	char	   *recovery_slot_name =
-					psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+	char	   *dmq_name;
+	char	   *logical_slot;
+	char	   *recovery_slot_name;
 
 	Assert(!IsTransactionState());
+
+	mtm_log(LOG, "dropping node %d", node_id);
+
+	StartTransactionCommand();
+
+	dmq_name = psprintf(MTM_DMQNAME_FMT, node_id);
+	logical_slot = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
+	recovery_slot_name = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
 
 	/* detach incoming queues from this node */
 	dmq_detach_receiver(dmq_name);
@@ -1065,15 +1195,17 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	ReplicationSlotDrop(recovery_slot_name, true);
 
 	/* delete replication origin, was acquired by receiver */
-	StartTransactionCommand();
-	replorigin_drop(replorigin_by_name(slot_name, false), true);
-	CommitTransactionCommand();
+	replorigin_drop(replorigin_by_name(logical_slot, false), true);
 
 	/*
 	 * Delete logical slot. It is aquired by walsender, so call with
 	 * nowait = false and wait for walsender exit.
 	 */
-	ReplicationSlotDrop(slot_name, false);
+	ReplicationSlotDrop(logical_slot, false);
+
+	CommitTransactionCommand();
+
+	mtm_log(NodeMgmt, "Detached node%d", node_id);
 }
 
 static void
@@ -1097,6 +1229,7 @@ MtmMonitor(Datum arg)
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 	
 	MtmBackgroundWorker = true;
+	MtmIsMonitorWorker = true;
 
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
@@ -1110,21 +1243,43 @@ MtmMonitor(Datum arg)
 	 * During init_node() our worker is started from transaction that created
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
-	 *
-	 * Do not use mtm_cfg, as it need to be NULL on first entry to
-	 * MtmReloadConfig() to fire on_node_create callbacks.
 	 */
-	for (;;)
+	while ((mtm_cfg = MtmLoadConfig()) && mtm_cfg->n_nodes == 0)
 	{
-		MtmConfig  *cfg = MtmLoadConfig();
-		int			n_nodes = cfg->n_nodes;
-
-		pfree(cfg);
-		if (n_nodes > 0)
-			break;
-
+		pfree(mtm_cfg);
 		MtmSleep(USECS_PER_SEC);
 	}
+
+	/*
+	 * Ok, we are starting from a basebackup. Delete neighbors from mtm.nodes
+	 * so we don't start receivers using wrong my_node_id. mtm.join_cluster()
+	 * should create proper info in mtm.nodes.
+	 */
+	if (is_basebackuped(mtm_cfg))
+	{
+		int			rc;
+
+		StartTransactionCommand();
+		if (SPI_connect() != SPI_OK_CONNECT)
+			mtm_log(ERROR, "could not connect using SPI");
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		rc = SPI_execute("delete from " MTM_NODES " where is_self = 'f'",
+						 false, 0);
+		if (rc < 0 || rc != SPI_OK_DELETE)
+			mtm_log(ERROR, "Failed to clean up nodes after a basebackup");
+
+		SPI_finish();
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
+
+	/*
+	 * Reset mtm_cfg, as it need to be NULL during first call of MtmReloadConfig
+	 * to properly fire on_node_create callbacks.
+	 */
+	pfree(mtm_cfg);
+	mtm_cfg = NULL;
 
 	/*
 	 * Keep us informed about subscription changes, so we can react on node
@@ -1163,21 +1318,37 @@ MtmMonitor(Datum arg)
 
 		/* check wheter we need to update config */
 		AcceptInvalidationMessages();
-
 		if (!config_valid)
 		{
 			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
 							stop_node_workers, (Datum) receivers);
 
+			/* we were excluded from cluster */
 			if (mtm_cfg->my_node_id == 0)
 			{
 				int			i;
+				int			rc;
+
 				for (i = 0; i < MTM_MAX_NODES; i++)
 				{
 					if (receivers[i] != NULL)
 						stop_node_workers(i + 1, NULL, (Datum) receivers);
 				}
 				TerminateBackgroundWorker(resolver);
+
+				StartTransactionCommand();
+				if (SPI_connect() != SPI_OK_CONNECT)
+					mtm_log(ERROR, "could not connect using SPI");
+				PushActiveSnapshot(GetTransactionSnapshot());
+
+				rc = SPI_execute("delete from mtm.nodes", false, 0);
+				if (rc < 0 || rc != SPI_OK_DELETE)
+					mtm_log(ERROR, "Failed delete nodes");
+
+				if (SPI_finish() != SPI_OK_FINISH)
+					mtm_log(ERROR, "could not finish SPI");
+				PopActiveSnapshot();
+				CommitTransactionCommand();
 
 				// XXX: kill myself somehow?
 				proc_exit(0);

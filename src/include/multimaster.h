@@ -56,11 +56,12 @@ typedef uint64 nodemask_t;
 /*
  * Definitions for the "mtm.nodes" table.
  */
-#define MTM_NODES					"nodes"
+#define MTM_NODES					"mtm.nodes"
 #define Natts_mtm_nodes				3
 #define Anum_mtm_nodes_id			1	/* node_id, same accross cluster */
 #define Anum_mtm_nodes_connifo		2	/* connection string */
 #define Anum_mtm_nodes_is_self		3	/* is that tuple for our node? */
+#define Anum_mtm_nodes_init_done	4	/* did monitor already create slots? */
 
 
 /* Identifier of global transaction */
@@ -145,6 +146,7 @@ typedef struct
 	int			node_id;
 	char	   *conninfo;
 	RepOriginId	origin_id;
+	bool		init_done;
 } MtmNode;
 
 typedef struct
@@ -213,6 +215,7 @@ extern bool MtmBackgroundWorker;
 extern bool MtmIsLogicalReceiver;
 extern bool MtmIsReceiver;
 extern bool MtmIsPoolWorker;
+extern bool MtmIsMonitorWorker;
 
 /* GUCs */
 extern int	MtmTransSpillThreshold;

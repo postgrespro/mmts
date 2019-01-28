@@ -82,17 +82,19 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
  * otherwise skewed node usage can result in needlessly long recovery.
  */
 void
-MaybeLogSyncpoint(void)
+MaybeLogSyncpoint(bool force)
 {
 	XLogRecPtr	syncpoint_lsn;
 	XLogRecPtr	min_confirmed_flush = InvalidXLogRecPtr;
 
 	/* do unlocked check first */
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)
+	if (force ||
+		GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)
 		return;
 
 	LWLockAcquire(MtmSyncpointLock, LW_EXCLUSIVE);
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint >= MULTIMASTER_SYNCPOINT_INTERVAL)
+	if (force ||
+		GetInsertRecPtr() - Mtm->latestSyncpoint >= MULTIMASTER_SYNCPOINT_INTERVAL)
 	{
 		int			i;
 		char	   *msg;
