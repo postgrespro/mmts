@@ -173,12 +173,12 @@ fe_sendint64(int64 i, char *buf)
 
 	/* High order half first, since we're doing MSB-first */
 	n32 = (uint32) (i >> 32);
-	n32 = htonl(n32);
+	n32 = pg_hton32(n32);
 	memcpy(&buf[0], &n32, 4);
 
 	/* Now the low order half */
 	n32 = (uint32) i;
-	n32 = htonl(n32);
+	n32 = pg_hton32(n32);
 	memcpy(&buf[4], &n32, 4);
 }
 
@@ -194,8 +194,8 @@ fe_recvint64(char *buf)
 
 	memcpy(&h32, buf, 4);
 	memcpy(&l32, buf + 4, 4);
-	h32 = ntohl(h32);
-	l32 = ntohl(l32);
+	h32 = pg_ntoh32(h32);
+	l32 = pg_ntoh32(l32);
 
 	result = h32;
 	result <<= 32;
