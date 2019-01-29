@@ -1221,7 +1221,7 @@ MtmMonitor(Datum arg)
 				user_id;
 	MtmConfig  *mtm_cfg = NULL;
 	BackgroundWorkerHandle *receivers[MTM_MAX_NODES];
-	BackgroundWorkerHandle *resolver;
+	BackgroundWorkerHandle *resolver = NULL;
 
 	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
 
@@ -1297,11 +1297,6 @@ MtmMonitor(Datum arg)
 								  pubsub_change_cb,
 								  (Datum) 0);
 
-	/* Now start all other necessary workers */
-
-	/* Launch resolver */
-	resolver = ResolverStart(db_id, user_id);
-
 	dmq_stream_subscribe("txreq");
 
 	for (;;)
@@ -1356,6 +1351,11 @@ MtmMonitor(Datum arg)
 
 			config_valid = true;
 		}
+
+		/* Launch resolver after we added dmq destinations */
+		// XXX: that's because of current use of Mtm->dmq_dest_ids[]
+		if (resolver == NULL)
+			resolver = ResolverStart(db_id, user_id);
 
 		check_status_requests(mtm_cfg);
 
