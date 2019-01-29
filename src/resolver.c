@@ -408,7 +408,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				MtmLock(LW_SHARED);
 				dest_id = Mtm->dmq_dest_ids[node_id - 1];
 				MtmUnlock();
-				Assert(dest_id > 0);
+				Assert(dest_id >= 0);
 
 				dmq_push_buffer(dest_id, "txreq", &msg,
 								sizeof(MtmArbiterMessage));
