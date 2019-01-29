@@ -400,7 +400,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				MtmInitMessage(&msg, MSG_POLL_REQUEST);
 				strncpy(msg.gid, tx->gid, GIDSIZE);
 
-				// XXX
+				// XXX: we need here to await destination
 				MtmLock(LW_SHARED);
 				dest_id = Mtm->dmq_dest_ids[node_id - 1];
 				MtmUnlock();
