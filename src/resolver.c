@@ -388,11 +388,11 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	{
 		int i;
 
-		for (i = 0; i < mtm_cfg->n_nodes; i++)
+		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
 			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
 			{
-				int			node_id = mtm_cfg->nodes[i].node_id;
+				int			node_id = i + 1;
 				MtmArbiterMessage msg;
 				DmqDestinationId dest_id;
 
@@ -400,15 +400,15 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				MtmInitMessage(&msg, MSG_POLL_REQUEST);
 				strncpy(msg.gid, tx->gid, GIDSIZE);
 
+				mtm_log(ResolverTraceTxMsg,
+						"[RESOLVER] sending request for %s to node%d",
+						tx->gid, node_id);
+
 				// XXX: we need here to await destination
 				MtmLock(LW_SHARED);
 				dest_id = Mtm->dmq_dest_ids[node_id - 1];
 				MtmUnlock();
 				Assert(dest_id > 0);
-
-				mtm_log(ResolverTraceTxMsg,
-						"[RESOLVER] sending request for %s to node%d",
-						tx->gid, node_id);
 
 				dmq_push_buffer(dest_id, "txreq", &msg,
 								sizeof(MtmArbiterMessage));
