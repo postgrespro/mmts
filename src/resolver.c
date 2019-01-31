@@ -388,12 +388,12 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	{
 		int i;
 
-		for (i = 0; i < MTM_MAX_NODES; i++)
+		for (i = 0; i < mtm_cfg->n_nodes; i++)
 		{
-			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, i) &&
-				i + 1 != mtm_cfg->my_node_id)
+			int			node_id = mtm_cfg->nodes[i].node_id;
+
+			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, node_id - 1))
 			{
-				int			node_id = i + 1;
 				MtmArbiterMessage msg;
 				DmqDestinationId dest_id;
 
