@@ -137,9 +137,9 @@ sub configure
 			listen_addresses = '$host'
 			unix_socket_directories = '$unix_sock_dir'
 			port = $pgport
-			max_prepared_transactions = 150
-			max_connections = 10
-			max_worker_processes = 100
+			max_prepared_transactions = 250
+			max_connections = 50
+			max_worker_processes = 150
 			wal_level = logical
 			max_wal_senders = 6
 			wal_sender_timeout = 0
