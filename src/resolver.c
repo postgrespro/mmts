@@ -390,7 +390,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
-			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, i))
+			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, i) &&
+				i + 1 != mtm_cfg->my_node_id)
 			{
 				int			node_id = i + 1;
 				MtmArbiterMessage msg;
