@@ -43,10 +43,10 @@ char const* const MtmEventMnem[] =
 
 char const* const MtmNodeStatusMnem[] =
 {
-	"Disabled",
-	"Recovery",
-	"Recovered",
-	"Online"
+	"disabled",
+	"recovery",
+	"recovered",
+	"online"
 };
 
 static int  MtmRefereeGetWinner(void);
@@ -1171,7 +1171,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	/*
 	 * Disable this node by terminating receiver.
 	 * It shouldn't came back online as dmq-receiver check node_id presense
-	 * in mtm.nodes.
+	 * in mtm.cluster_nodes.
 	 */
 	dmq_terminate_receiver(dmq_name);
 
@@ -1252,9 +1252,9 @@ MtmMonitor(Datum arg)
 	}
 
 	/*
-	 * Ok, we are starting from a basebackup. Delete neighbors from mtm.nodes
-	 * so we don't start receivers using wrong my_node_id. mtm.join_cluster()
-	 * should create proper info in mtm.nodes.
+	 * Ok, we are starting from a basebackup. Delete neighbors from
+	 * mtm.cluster_nodes so we don't start receivers using wrong my_node_id.
+	 * mtm.join_cluster() should create proper info in mtm.cluster_nodes.
 	 */
 	if (is_basebackuped(mtm_cfg))
 	{
@@ -1337,7 +1337,7 @@ MtmMonitor(Datum arg)
 					mtm_log(ERROR, "could not connect using SPI");
 				PushActiveSnapshot(GetTransactionSnapshot());
 
-				rc = SPI_execute("delete from mtm.nodes", false, 0);
+				rc = SPI_execute("delete from " MTM_NODES, false, 0);
 				if (rc < 0 || rc != SPI_OK_DELETE)
 					mtm_log(ERROR, "Failed delete nodes");
 

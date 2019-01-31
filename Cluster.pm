@@ -167,26 +167,31 @@ sub configure
 sub start
 {
 	my ($self) = @_;
+	my $node1 = $self->{nodes}->[0];
 	my $nodes = $self->{nodes};
 	my $node_id = 1;
-
-	my $connstrs = $self->all_connstrs();
-	$connstrs =~ s/'/''/gms;
+	my $my_connstr;
+	my $peers_connstrs = '';
 
 	foreach my $node (@$nodes)
 	{
 		$node->start();
-		note( "Starting node with connstr 'port=@{[ $node->port() ]} host=@{[ $node->host() ]}'");
+		if ($node_id == 1)
+		{
+			$my_connstr = $node->connstr($node->{dbname});
+		}
+		else
+		{
+			$peers_connstrs .= '"' . $node->connstr($node->{dbname}) . '",';
+		}
+		$node_id += 1;
 	}
+	$peers_connstrs =~ s/.{1}$//gms;
 
+	note( "Starting cluster with nodes: |$my_connstr|$peers_connstrs|");
 	$self->await_nodes( (0..$self->{nodenum}-1) );
-
-	foreach my $node (@$nodes)
-	{
-		$node->safe_psql($node->{dbname}, "create extension multimaster;");
-		$node->safe_psql($node->{dbname}, "select mtm.init_node($node_id, '{$connstrs}');");
-		$node_id = $node_id + 1;
-	}
+	$node1->safe_psql($node1->{dbname}, "create extension multimaster;");
+	$node1->safe_psql($node1->{dbname}, "select mtm.init_cluster(\$\$$my_connstr\$\$, \$\${$peers_connstrs}\$\$);");
 }
 
 sub stopnode

@@ -21,7 +21,7 @@ LANGUAGE C;
 --- functions.
 ---
 
-CREATE TABLE mtm.nodes(
+CREATE TABLE mtm.cluster_nodes(
     id int primary key not null,
     conninfo text not null,
     is_self bool not null,
@@ -34,7 +34,7 @@ AS 'MODULE_PATHNAME','mtm_after_node_create'
 LANGUAGE C;
 
 CREATE TRIGGER on_node_create
-    AFTER INSERT ON mtm.nodes
+    AFTER INSERT ON mtm.cluster_nodes
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_create();
 
@@ -44,58 +44,76 @@ AS 'MODULE_PATHNAME','mtm_after_node_drop'
 LANGUAGE C;
 
 CREATE TRIGGER on_node_drop
-    AFTER DELETE ON mtm.nodes
+    AFTER DELETE ON mtm.cluster_nodes
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_drop();
 
-CREATE FUNCTION mtm.join_node(node_id int)
-RETURNS VOID
-AS 'MODULE_PATHNAME','mtm_join_node'
+CREATE FUNCTION mtm.node_info(id int)
+RETURNS mtm.node_info
+AS 'MODULE_PATHNAME','mtm_node_info'
 LANGUAGE C;
 
+CREATE TYPE mtm.node_info AS (
+    "enabled" bool,
+    "connected" bool,
+    "sender_pid" int,
+    "receiver_pid" int,
+    "n_workers" int,
+    "receiver_status" text
+);
+
 ---
---- User facing API for node management.
+--- User facing API for node info and management.
 ---
 
-CREATE OR REPLACE FUNCTION mtm.init_node(node_id integer, connstrs text[]) RETURNS void AS
-$$
-BEGIN
-    IF node_id <= 0 OR node_id > least(16, array_length(connstrs, 1)) THEN
-        RAISE EXCEPTION 'node_id should be in range [1 .. length(connstrs)]';
-    END IF;
-    -- XXX
-    EXECUTE 'SET mtm.emerging_node_id = ' || node_id || ';';
-    INSERT INTO mtm.nodes SELECT
-        ordinality::int as id,
-        unnest as conninfo,
-        ordinality = current_setting('mtm.emerging_node_id')::int as is_self
-    FROM
-        unnest(connstrs)
-    WITH ORDINALITY;
-END
-$$
-LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION mtm.init_cluster(my_conninfo text, peers_conninfo text[])
+RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_init_cluster'
+LANGUAGE C;
+
+CREATE TYPE mtm.cluster_status AS (
+    "my_node_id" int,
+    "status" text,
+    "n_nodes" int,
+    "n_connected" int,
+    "n_enabled" int
+);
+
+CREATE FUNCTION mtm.status()
+RETURNS mtm.cluster_status
+AS 'MODULE_PATHNAME','mtm_status'
+LANGUAGE C;
+
+CREATE VIEW mtm.nodes AS
+    SELECT id, conninfo, is_self, (mtm.node_info(id)).* FROM mtm.cluster_nodes;
 
 CREATE OR REPLACE FUNCTION mtm.add_node(connstr text) RETURNS void AS
 $$
 DECLARE
     new_node_id int;
 BEGIN
-    -- XXX: add only to a configured mm?
-
-    INSERT INTO mtm.nodes SELECT
-        min(unused_ids.id), connstr, 'false'
+    INSERT INTO mtm.cluster_nodes SELECT
+        min(unused_ids.id), connstr, 'false', 'false'
     FROM (
         SELECT id FROM generate_series(1,16) id
         EXCEPT
-        SELECT id FROM mtm.nodes
+        SELECT id FROM mtm.cluster_nodes
     ) unused_ids
     RETURNING id INTO new_node_id;
-
-    -- SELECT mtm.node_join(new_node_id, connstr);
 END
 $$
 LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION mtm.drop_node(node_id int) RETURNS void AS
+$$
+DELETE FROM mtm.cluster_nodes WHERE id = $1;
+$$
+LANGUAGE sql;
+
+CREATE FUNCTION mtm.join_node(node_id int)
+RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_join_node'
+LANGUAGE C;
 
 ---
 --- Various

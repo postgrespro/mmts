@@ -54,14 +54,35 @@ typedef uint64 nodemask_t;
 
 
 /*
- * Definitions for the "mtm.nodes" table.
+ * Definitions for the "mtm.cluster_nodes" table.
  */
-#define MTM_NODES					"mtm.nodes"
-#define Natts_mtm_nodes				3
+#define MTM_NODES					"mtm.cluster_nodes"
+#define Natts_mtm_nodes				4
 #define Anum_mtm_nodes_id			1	/* node_id, same accross cluster */
 #define Anum_mtm_nodes_connifo		2	/* connection string */
 #define Anum_mtm_nodes_is_self		3	/* is that tuple for our node? */
 #define Anum_mtm_nodes_init_done	4	/* did monitor already create slots? */
+
+/*
+ * Definitions for the "mtm.cluster_status" type.
+ */
+#define Natts_mtm_status			5
+#define Anum_mtm_status_node_id		1
+#define Anum_mtm_status_status		2
+#define Anum_mtm_status_n_nodes		3
+#define Anum_mtm_status_n_connected	4
+#define Anum_mtm_status_n_enabled	5
+
+/*
+ * Definitions for the "mtm.node_info" type.
+ */
+#define Natts_mtm_node_info					6
+#define Anum_mtm_node_info_enabled			1
+#define Anum_mtm_node_info_connected		2
+#define Anum_mtm_node_info_sender_pid		3
+#define Anum_mtm_node_info_receiver_pid		4
+#define Anum_mtm_node_info_n_workers		5
+#define Anum_mtm_node_info_receiver_status	6
 
 
 /* Identifier of global transaction */

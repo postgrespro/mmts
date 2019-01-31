@@ -84,6 +84,9 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(mtm_after_node_create);
 PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 PG_FUNCTION_INFO_V1(mtm_join_node);
+PG_FUNCTION_INFO_V1(mtm_init_cluster);
+PG_FUNCTION_INFO_V1(mtm_node_info);
+PG_FUNCTION_INFO_V1(mtm_status);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -717,6 +720,169 @@ check_config()
 	return ok;
 }
 
+// XXX: check also that nodes are different?
+// XXX: add connection check to after create triggers?
+Datum
+mtm_init_cluster(PG_FUNCTION_ARGS)
+{
+	char	   *my_conninfo = text_to_cstring(PG_GETARG_TEXT_P(0));
+	ArrayType  *peers_arr = PG_GETARG_ARRAYTYPE_P(1);
+	Datum	   *peers_datums;
+	bool	   *peers_nulls;
+	int			i,
+				rc,
+				n_peers;
+	PGconn	  **peer_conns;
+	StringInfoData local_query;
+
+	// if (!check_config())
+	// 	mtm_log(ERROR, "Multimaster config is not ok, refusing to work");
+
+	/* parse array with peer connstrings */
+	Assert(ARR_ELEMTYPE(peers_arr) == TEXTOID);
+	Assert(ARR_NDIM(peers_arr) == 1);
+	deconstruct_array(peers_arr,
+					  TEXTOID, -1, false, 'i',
+					  &peers_datums, &peers_nulls, &n_peers);
+
+	if (n_peers + 1 >= MTM_MAX_NODES)
+		mtm_log(ERROR,
+			"multimaster allows at maximum %d nodes, but %d was given",
+			MTM_MAX_NODES, n_peers + 1);
+
+	if (n_peers < 1)
+		mtm_log(ERROR, "at least one peer node should be specified");
+
+	peer_conns = (PGconn **) palloc0(n_peers * sizeof(PGconn *));
+
+	/* open connections to peers and create multimaster extension */
+	for (i = 0; i < n_peers; i++)
+	{
+		PGresult   *res;
+		char	   *conninfo = TextDatumGetCString(peers_datums[i]);
+		StringInfoData query;
+		int			j;
+
+		/* connect */
+		peer_conns[i] = PQconnectdb(conninfo);
+		if (PQstatus(peer_conns[i]) != CONNECTION_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+			PQfinish(peer_conns[i]);
+			mtm_log(ERROR,
+					"Could not connect to a node '%s' from this node: %s",
+					conninfo, msg);
+		}
+
+		/* create extension */
+		res = PQexec(peer_conns[i], "create extension if not exists multimaster");
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+			PQclear(res);
+			PQfinish(peer_conns[i]);
+			mtm_log(ERROR,
+					"Failed to create multimaster extension on '%s': %s",
+					conninfo, msg);
+		}
+
+		/* construct table contents for this node */
+		initStringInfo(&query);
+		appendStringInfoString(&query, "insert into " MTM_NODES " values ");
+		for (j = 0; j < n_peers; j++)
+		{
+			appendStringInfo(&query, "(%d, $$%s$$, '%c', 'f'), ",
+							 j + 2, TextDatumGetCString(peers_datums[j]),
+							 j == i ? 't' : 'f');
+		}
+		appendStringInfo(&query, "(%d, $$%s$$, '%c', 'f')",
+							 1, my_conninfo, 'f');
+
+		res = PQexec(peer_conns[i], query.data);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+			PQclear(res);
+			PQfinish(peer_conns[i]);
+			mtm_log(ERROR, "Failed to fill mtm.cluster_nodes on '%s': %s",
+					conninfo, msg);
+		}
+		PQclear(res);
+
+		PQfinish(peer_conns[i]);
+	}
+
+	/* fill our mtm.cluster_nodes */
+	initStringInfo(&local_query);
+	appendStringInfoString(&local_query, "insert into " MTM_NODES " values ");
+	for (i = 0; i < n_peers; i++)
+	{
+		appendStringInfo(&local_query, "(%d, $$%s$$, 'f', 'f'), ",
+							i + 2, TextDatumGetCString(peers_datums[i]));
+	}
+	appendStringInfo(&local_query, "(%d, $$%s$$, 't', 'f')",
+					 1, my_conninfo);
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	rc = SPI_execute(local_query.data, false, 0);
+	if (rc != SPI_OK_INSERT)
+		mtm_log(ERROR, "Failed to load node list");
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		mtm_log(ERROR, "could not finish SPI");
+	PopActiveSnapshot();
+
+	PG_RETURN_VOID();
+}
+
+Datum
+mtm_node_info(PG_FUNCTION_ARGS)
+{
+	int			node_id = PG_GETARG_INT32(0);
+	TupleDesc	desc;
+	Datum		values[Natts_mtm_node_info];
+	bool		nulls[Natts_mtm_node_info] = {false};
+
+	MtmLock(LW_SHARED);
+	values[Anum_mtm_node_info_enabled - 1] =
+		BoolGetDatum(!BIT_CHECK(Mtm->disabledNodeMask, node_id - 1));
+	values[Anum_mtm_node_info_connected - 1] =
+		BoolGetDatum(!BIT_CHECK(Mtm->selfConnectivityMask, node_id - 1));
+	values[Anum_mtm_node_info_sender_pid - 1] = Int32GetDatum(0);
+	values[Anum_mtm_node_info_receiver_pid - 1] = Int32GetDatum(0);
+	values[Anum_mtm_node_info_n_workers - 1] = Int32GetDatum(0);
+	values[Anum_mtm_node_info_receiver_status - 1] = CStringGetTextDatum("unimplemented");
+	MtmUnlock();
+
+	get_call_result_type(fcinfo, NULL, &desc);
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
+}
+
+Datum
+mtm_status(PG_FUNCTION_ARGS)
+{
+	TupleDesc	desc;
+	Datum		values[Natts_mtm_status];
+	bool		nulls[Natts_mtm_status] = {false};
+
+	MtmLock(LW_SHARED);
+	values[Anum_mtm_status_node_id - 1] = Int32GetDatum(Mtm->my_node_id);
+	values[Anum_mtm_status_status - 1] =
+		CStringGetTextDatum(MtmNodeStatusMnem[Mtm->status]);
+	values[Anum_mtm_status_n_nodes - 1] = Int32GetDatum(Mtm->nAllNodes);
+	values[Anum_mtm_status_n_connected - 1] =
+		Int32GetDatum(countZeroBits(Mtm->selfConnectivityMask, Mtm->nAllNodes));
+	values[Anum_mtm_status_n_enabled - 1] =
+		Int32GetDatum(countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes));
+	MtmUnlock();
+
+	get_call_result_type(fcinfo, NULL, &desc);
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
+}
+
 Datum
 mtm_after_node_create(PG_FUNCTION_ARGS)
 {
@@ -807,8 +973,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 * MtmLoadConfig() will lead to deadlock if receiver tries to load
 		 * config just before committing tx that modified subscriptions.
 		 *
-		 * Other way around is to write suboid to mtm.nodes tuple, but that is
-		 * too much ado for now.
+		 * Other way around is to write suboid to mtm.cluster_nodes tuple, but
+		 * that is too much ado for now.
 		 */
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		replorigin_create(origin_name);
@@ -904,15 +1070,13 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		mtm_log(ERROR, "Con't load node%d conninfo", backup_node_id);
 	conninfo = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
 
-	/* serialize our mtm.nodes table into string */
+	/* serialize our mtm.cluster_nodes table into string */
 	query = psprintf("select array_agg((n.id, n.conninfo, n.id = %d, 'f')::" MTM_NODES ") "
-					 "from mtm.nodes n", new_node_id);
+					 "from " MTM_NODES " n", new_node_id);
 	rc = SPI_execute(query, true, 0);
 	if (rc != SPI_OK_SELECT || SPI_processed != 1)
 		mtm_log(ERROR, "Failed to load node list");
 	mtm_nodes = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
-
-	elog(LOG, "XXX: %s", mtm_nodes);
 
 	/*
 	 * Prepare node for joining cluster.
@@ -926,7 +1090,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	}
 
 	/* was this node basebackuped from another node? */
-	res = PQexec(conn, "select id from mtm.nodes where is_self = 't'");
+	res = PQexec(conn, "select id from " MTM_NODES " where is_self = 't'");
 	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
 		PQnfields(res) != 1)
 	{
@@ -948,13 +1112,13 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	}
 	PQclear(res);
 
-	/* clean pre-basebackup version of mtm.nodes */
+	/* clean pre-basebackup version of mtm.cluster_nodes */
 	res = PQexec(conn, "delete from " MTM_NODES);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
 		PQclear(res);
 		PQfinish(conn);
-		mtm_log(ERROR, "Can't clean old mtm.nodes on '%s'", conninfo);
+		mtm_log(ERROR, "Can't clean old mtm.cluster_nodes on '%s'", conninfo);
 	}
 	PQclear(res);
 
@@ -967,7 +1131,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	{
 		PQclear(res);
 		PQfinish(conn);
-		mtm_log(ERROR, "Failed to insert new mtm.nodes on '%s'", conninfo);
+		mtm_log(ERROR, "Failed to insert new mtm.cluster_nodes on '%s'", conninfo);
 	}
 	PQclear(res);
 
@@ -1016,14 +1180,14 @@ MtmLoadConfig()
 	if (!inside_tx)
 		StartTransactionCommand();
 
-	/* Load node_id's with connection strings from mtm.nodes */
+	/* Load node_id's with connection strings from mtm.cluster_nodes */
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	rc = SPI_execute("select * from mtm.nodes order by id asc", true, 0);
+	rc = SPI_execute("select * from " MTM_NODES " order by id asc", true, 0);
 	if (rc < 0 || rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to load saved nodes");
 
