@@ -332,7 +332,7 @@ MtmStateShmemStartup()
 		MemSet(Mtm, 0, sizeof(MtmState));
 		Mtm->stop_new_commits = false;
 		Mtm->recovered = false;
-		Mtm->status = MTM_DISABLED; //MTM_INITIALIZATION;
+		Mtm->status = MTM_DISABLED;
 		Mtm->recoverySlot = 0;
 		Mtm->locks = GetNamedLWLockTranche(MULTIMASTER_NAME);
 		Mtm->disabledNodeMask = (nodemask_t) -1;
@@ -347,10 +347,13 @@ MtmStateShmemStartup()
 		Mtm->localTablesHashLoaded = false;
 		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
-		// XXX: change to dsa and make it per-receiver
 		for (i = 0; i < MtmMaxNodes; i++)
 		{
-			Mtm->dmq_dest_ids[i] = -1;
+			Mtm->peers[i].receiver_pid = InvalidPid;
+			Mtm->peers[i].sender_pid = InvalidPid;
+			Mtm->peers[i].dmq_dest_id = -1;
+
+			// XXX: change to dsa and make it per-receiver
 			BgwPoolInit(&Mtm->pools[i], MtmExecutor, MtmQueueSize, 0);
 		}
 	}
@@ -838,6 +841,8 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+// XXX: During evaluation of (mtm.node_info(id)).* this function called
+// once each columnt for every row. So may be just rewrite to SRF.
 Datum
 mtm_node_info(PG_FUNCTION_ARGS)
 {
@@ -847,14 +852,38 @@ mtm_node_info(PG_FUNCTION_ARGS)
 	bool		nulls[Natts_mtm_node_info] = {false};
 
 	MtmLock(LW_SHARED);
+
 	values[Anum_mtm_node_info_enabled - 1] =
 		BoolGetDatum(!BIT_CHECK(Mtm->disabledNodeMask, node_id - 1));
 	values[Anum_mtm_node_info_connected - 1] =
 		BoolGetDatum(!BIT_CHECK(Mtm->selfConnectivityMask, node_id - 1));
-	values[Anum_mtm_node_info_sender_pid - 1] = Int32GetDatum(0);
-	values[Anum_mtm_node_info_receiver_pid - 1] = Int32GetDatum(0);
-	values[Anum_mtm_node_info_n_workers - 1] = Int32GetDatum(0);
-	values[Anum_mtm_node_info_receiver_status - 1] = CStringGetTextDatum("unimplemented");
+
+	if (Mtm->peers[node_id - 1].sender_pid != InvalidPid)
+	{
+		values[Anum_mtm_node_info_sender_pid - 1] =
+			Int32GetDatum(Mtm->peers[node_id - 1].sender_pid);
+	}
+	else
+	{
+		nulls[Anum_mtm_node_info_sender_pid - 1] = true;
+	}
+
+	if (Mtm->peers[node_id - 1].receiver_pid != InvalidPid)
+	{
+		values[Anum_mtm_node_info_receiver_pid - 1] =
+			Int32GetDatum(Mtm->peers[node_id - 1].receiver_pid);
+		values[Anum_mtm_node_info_n_workers - 1] =
+			Int32GetDatum(Mtm->pools[node_id - 1].nWorkers);
+		values[Anum_mtm_node_info_receiver_status - 1] =
+			CStringGetTextDatum(MtmReplicationModeName[Mtm->peers[node_id - 1].receiver_mode]);
+	}
+	else
+	{
+		nulls[Anum_mtm_node_info_receiver_pid - 1] = true;
+		nulls[Anum_mtm_node_info_n_workers - 1] = true;
+		nulls[Anum_mtm_node_info_receiver_status - 1] = true;
+	}
+
 	MtmUnlock();
 
 	get_call_result_type(fcinfo, NULL, &desc);

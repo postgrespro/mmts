@@ -215,7 +215,12 @@ typedef struct
 	int			recoveryCount;	/* Number of completed recoveries */
 	int			donorNodeId;	/* Cluster node from which this node was
 								 * populated */
-	int			dmq_dest_ids[MTM_MAX_NODES];
+	struct {
+		MtmReplicationMode	receiver_mode;
+		pid_t				sender_pid;
+		pid_t				receiver_pid;
+		int					dmq_dest_id;
+	} peers[MTM_MAX_NODES];
 	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
 } MtmState;
 

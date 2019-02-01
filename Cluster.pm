@@ -151,7 +151,7 @@ sub configure
 			multimaster.heartbeat_send_timeout = 250
 			multimaster.max_nodes = 6
 			# XXX try without ignore_tables_without_pk
-			multimaster.ignore_tables_without_pk = true
+			# multimaster.ignore_tables_without_pk = true
 			multimaster.volkswagen_mode = 1
 			log_line_prefix = '%t [%p]: '
 		));

@@ -62,6 +62,18 @@ CREATE TYPE mtm.node_info AS (
     "receiver_status" text
 );
 
+CREATE TYPE mtm.node AS (
+    "id" int,
+    "conninfo" text,
+    "is_self" bool,
+    "enabled" bool,
+    "connected" bool,
+    "sender_pid" int,
+    "receiver_pid" int,
+    "n_workers" int,
+    "receiver_status" text
+);
+
 ---
 --- User facing API for node info and management.
 ---
@@ -84,8 +96,13 @@ RETURNS mtm.cluster_status
 AS 'MODULE_PATHNAME','mtm_status'
 LANGUAGE C;
 
-CREATE VIEW mtm.nodes AS
-    SELECT id, conninfo, is_self, (mtm.node_info(id)).* FROM mtm.cluster_nodes;
+CREATE OR REPLACE FUNCTION mtm.nodes() RETURNS SETOF mtm.node AS
+$$
+    SELECT id, conninfo, is_self, (mtm.node_info(id)).*
+    FROM mtm.cluster_nodes
+    ORDER BY id;
+$$
+LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION mtm.add_node(connstr text) RETURNS void AS
 $$

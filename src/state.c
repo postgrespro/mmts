@@ -981,7 +981,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 		msg->node = Mtm->my_node_id;
 
 		MtmLock(LW_SHARED);
-		dest_id = Mtm->dmq_dest_ids[sender_node_id - 1];
+		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
 		MtmUnlock();
 		Assert(dest_id >= 0);
 
@@ -1128,7 +1128,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
 							   MtmHeartbeatSendTimeout);
 	MtmLock(LW_EXCLUSIVE);
-	Mtm->dmq_dest_ids[node_id - 1] = dest;
+	Mtm->peers[node_id - 1].dmq_dest_id = dest;
 	MtmUnlock();
 
 	/* Attach receiver so we can collect tx requests */
@@ -1179,7 +1179,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	dmq_destination_drop(dmq_name);
 
 	MtmLock(LW_EXCLUSIVE);
-	Mtm->dmq_dest_ids[node_id - 1] = -1;
+	Mtm->peers[node_id - 1].dmq_dest_id = -1;
 	MtmUnlock();
 
 	/*
@@ -1354,7 +1354,7 @@ MtmMonitor(Datum arg)
 		}
 
 		/* Launch resolver after we added dmq destinations */
-		// XXX: that's because of current use of Mtm->dmq_dest_ids[]
+		// XXX: that's because of current use of Mtm->peers[].dmq_dest_id
 		if (resolver == NULL)
 			resolver = ResolverStart(db_id, user_id);
 

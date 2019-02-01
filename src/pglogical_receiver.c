@@ -66,15 +66,6 @@
 
 bool MtmIsReceiver;
 
-typedef enum
-{
-	REPLMODE_EXIT,         /* receiver should exit */
-	REPLMODE_RECOVERED,    /* recovery of receiver node is completed so drop old slot and restart replication from the current position in WAL */
-	REPLMODE_RECOVERY,     /* perform recovery of the node by applying all data from the slot from specified point */
-	REPLMODE_CREATE_NEW,   /* destination node is recovered: drop old slot and restart from roveredLsn position */
-	REPLMODE_OPEN_EXISTED  /* normal mode: use existed slot or create new one and start receiving data from it from the remembered position */
-} MtmReplicationMode;
-
 typedef struct MtmFlushPosition
 {
 	dlist_node node;
@@ -83,13 +74,10 @@ typedef struct MtmFlushPosition
 	XLogRecPtr	remote_end;
 } MtmFlushPosition;
 
-static char const* const MtmReplicationModeName[] =
+char const* const MtmReplicationModeName[] =
 {
-	"exit",
-	"recovered",   /* recovery of node is completed so drop old slot and restart replication from the current position in WAL */
-	"recovery",	   /* perform recorvery of the node by applying all data from theslot from specified point */
-	"create_new",  /* destination node is recovered: drop old slot and restart from roveredLsn position */
-	"open_existed" /* normal mode: use existed slot or create new one and start receiving data from it from the rememered position */
+	"recovery",    /* perform recorvery of the node by applying all data from theslot from specified point */
+	"recovered"    /* recovery of node is completed so drop old slot and restart replication from the current position in WAL */
 };
 
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
@@ -550,6 +538,9 @@ pglogical_receiver_at_exit(int status, Datum arg)
 {
 	int node_id = DatumGetInt32(arg);
 	BgwPoolCancel(&Mtm->pools[node_id - 1]);
+	MtmLock(LW_EXCLUSIVE);
+	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
+	MtmUnlock();
 }
 
 void
@@ -638,6 +629,11 @@ pglogical_receiver_main(Datum main_arg)
 		 * Slots at other nodes should be removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
+
+		MtmLock(LW_EXCLUSIVE);
+		Mtm->peers[nodeId - 1].receiver_pid = MyProcPid;
+		Mtm->peers[nodeId - 1].receiver_mode = mode;
+		MtmUnlock();
 
 		// XXX: delete unnecessary modes
 		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);

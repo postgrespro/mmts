@@ -783,6 +783,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		mtm_log(ERROR, "Out-of-clique node %d tries to connect",
 				 MtmReplicationNodeId);
 	}
+	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = MyProcPid;
 	MtmUnlock();
 
 	if (hooks_data->is_recovery)
@@ -843,6 +844,7 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
 	Assert(MtmReplicationNodeId >= 0);
 
 	MtmLock(LW_EXCLUSIVE);
+	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = InvalidPid;
 	if (BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1))
 	{
 		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
