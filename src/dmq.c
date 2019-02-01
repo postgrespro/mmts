@@ -45,6 +45,7 @@
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
 #include "utils/dynahash.h"
+#include "utils/ps_status.h"
 
 #define DMQ_MQ_SIZE  ((Size) 65536)
 #define DMQ_MQ_MAGIC 0x646d71
@@ -987,11 +988,15 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	StringInfoData		s;
 	shm_mq_handle	  **mq_handles;
 	char			   *sender_name;
+	char			   *proc_name;
 	int					i;
 	int					receiver_id = -1;
 	double				last_message_at = dmq_now();
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+
+	proc_name = psprintf("mtm-dmq-receiver %s", sender_name);
+	set_ps_display(proc_name, true);
 
 	/* setup queues with backends */
 	seg = dsm_create(dmq_toc_size(), 0);
