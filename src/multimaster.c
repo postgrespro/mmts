@@ -135,6 +135,7 @@ int	  MtmTransSpillThreshold; // XXX: align with receiver buffer size
 int	  MtmHeartbeatSendTimeout;
 int	  MtmHeartbeatRecvTimeout;
 char* MtmRefereeConnStr;
+bool  MtmBreakConnection;
 
 static int	 MtmQueueSize;
 
@@ -549,6 +550,19 @@ _PG_init(void)
 		NULL,		 /* GucStringCheckHook check_hook */
 		MtmSetRemoteFunction,		 /* GucStringAssignHook assign_hook */
 		NULL		 /* GucShowHook show_hook */
+	);
+
+	DefineCustomBoolVariable(
+		"multimaster.break_connection",
+		"Break connection with client when node is no online",
+		NULL,
+		&MtmBreakConnection,
+		false,
+		PGC_BACKEND,
+		0,
+		NULL,
+		NULL,
+		NULL
 	);
 
 	MtmDeadlockDetectorInit(MtmMaxNodes);

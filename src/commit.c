@@ -146,9 +146,18 @@ MtmBeginTransaction()
 		/* Reject all user's transactions at offline cluster.
 		 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
 		 */
-		mtm_log(ERROR,
-				"Multimaster node is not online: current status %s",
-				MtmNodeStatusMnem[Mtm->status]);
+		if (!MtmBreakConnection)
+		{
+			mtm_log(ERROR,
+					"Multimaster node is not online: current status %s",
+					MtmNodeStatusMnem[Mtm->status]);
+		}
+		else
+		{
+			mtm_log(FATAL,
+					"Multimaster node is not online: current status %s",
+					MtmNodeStatusMnem[Mtm->status]);
+		}
 	}
 }
 

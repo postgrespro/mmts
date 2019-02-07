@@ -250,6 +250,7 @@ extern int	MtmHeartbeatRecvTimeout;
 extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
 extern int	MtmMaxNodes;
+extern bool	MtmBreakConnection;
 
 /*  XXX! need rename: that's actually a disconnectivity mask */
 #define SELF_CONNECTIVITY_MASK  (Mtm->selfConnectivityMask)
