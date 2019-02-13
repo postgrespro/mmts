@@ -1,32 +1,31 @@
 use strict;
 use warnings;
+
 use Cluster;
 use TestLib;
 use Test::More tests => 6;
 
-
 my $cluster = new Cluster(3);
 $cluster->init();
-$cluster->configure();
 $cluster->start();
-$cluster->await_nodes( (0,1,2) );
+$cluster->create_mm();
 
 ########################################################
 # Check data integrity before and after recovery
 ########################################################
 
+my $hash0; my $hash1; my $hash2; my $oldhash;
+my $hash_query = q{
+select
+    md5('(' || string_agg(aid::text || ', ' || abalance::text , '),(') || ')')
+from
+    (select * from pgbench_accounts order by aid) t;
+};
+
 $cluster->pgbench(1, ('-i', -s => '10') );
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
 $cluster->pgbench(1, ('-n','-N', -T => '4') );
 $cluster->pgbench(2, ('-n','-N', -T => '4') );
-
-
-my $hash0; my $hash1; my $hash2; my $oldhash;
-my $hash_query = "
-select
-    md5('(' || string_agg(aid::text || ', ' || abalance::text , '),(') || ')')
-from
-    (select * from pgbench_accounts order by aid) t;";
 
 $cluster->{nodes}->[2]->stop('fast');
 sleep($cluster->{recv_timeout});
@@ -35,32 +34,31 @@ $cluster->await_nodes( (0,1) );
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
 $cluster->pgbench(1, ('-n','-N', -T => '4') );
 
-$cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
-$cluster->psql(1, 'postgres', $hash_query, stdout => \$hash1);
-# $cluster->psql(2, 'postgres', $hash_query, stdout => \$hash2);
-
-is( ($hash0 == $hash1) , 1, "Check that hash is the same before recovery");
-$oldhash = $hash0;
+$hash0 = $cluster->safe_psql(0, $hash_query);
+$hash1 = $cluster->safe_psql(1, $hash_query);
+is($hash0, $hash1, "Check that hash is the same before recovery");
 
 $cluster->{nodes}->[2]->start;
 $cluster->await_nodes( (2,0,1) );
 
-$cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
-$cluster->psql(1, 'postgres', $hash_query, stdout => \$hash1);
-$cluster->psql(2, 'postgres', $hash_query, stdout => \$hash2);
+$oldhash = $hash0;
+$hash0 = $cluster->safe_psql(0, $hash_query);
+$hash1 = $cluster->safe_psql(1, $hash_query);
+$hash2 = $cluster->safe_psql(2, $hash_query);
 
 note("$oldhash, $hash0, $hash1, $hash2");
-is( (($hash0 == $hash1) and ($hash1 == $hash2) and ($oldhash == $hash0)) , 1, "Check that hash is the same after recovery");
+is( (($hash0 eq $hash1) and ($hash1 eq $hash2) and ($oldhash eq $hash0)) , 1,
+    "Check that hash is the same after recovery");
 
 ########################################################
 # Check start after all nodes were disconnected
 ########################################################
 
-$cluster->psql(0, 'postgres', "create table if not exists t(k int primary key, v int);");
+$cluster->safe_psql(0, "create table if not exists t(k int primary key, v int);");
 
-$cluster->psql(0, 'postgres', "insert into t values(1, 10);");
-$cluster->psql(1, 'postgres', "insert into t values(2, 20);");
-$cluster->psql(2, 'postgres', "insert into t values(3, 30);");
+$cluster->safe_psql(0, "insert into t values(1, 10);");
+$cluster->safe_psql(1, "insert into t values(2, 20);");
+$cluster->safe_psql(2, "insert into t values(3, 30);");
 
 my $sum0; my $sum1; my $sum2;
 
@@ -72,10 +70,11 @@ $cluster->{nodes}->[2]->start;
 
 $cluster->await_nodes( (1,2,0) );
 
-$cluster->psql(0, 'postgres', "select sum(v) from t;", stdout => \$sum0);
-$cluster->psql(1, 'postgres', "select sum(v) from t;", stdout => \$sum1);
-$cluster->psql(2, 'postgres', "select sum(v) from t;", stdout => \$sum2);
-is( (($sum0 == 60) and ($sum1 == $sum0) and ($sum2 == $sum0)) , 1, "Check that nodes are working and sync");
+$sum0 = $cluster->safe_psql(0, "select sum(v) from t;");
+$sum1 = $cluster->safe_psql(1, "select sum(v) from t;");
+$sum2 = $cluster->safe_psql(2, "select sum(v) from t;");
+is( (($sum0 == 60) and ($sum1 == $sum0) and ($sum2 == $sum0)) , 1,
+    "Check that nodes are working and sync");
 
 ########################################################
 # Check recovery during some load
@@ -102,28 +101,24 @@ $cluster->pgbench_await($pgb_handle);
 $cluster->await_nodes( (2,0,1) );
 
 # check data identity
-$cluster->psql(0, 'postgres', $hash_query, stdout => \$hash0);
-$cluster->psql(1, 'postgres', $hash_query, stdout => \$hash1);
-$cluster->psql(2, 'postgres', $hash_query, stdout => \$hash2);
+$hash0 = $cluster->safe_psql(0, $hash_query);
+$hash1 = $cluster->safe_psql(1, $hash_query);
+$hash2 = $cluster->safe_psql(2, $hash_query);
 note("$hash0, $hash1, $hash2");
-is( (($hash0 == $hash1) and ($hash1 == $hash2)) , 1, "Check that hash is the same");
+is( (($hash0 eq $hash1) and ($hash1 eq $hash2)) , 1, "Check that hash is the same");
 
-$cluster->psql(0, 'postgres', "select sum(abalance) from pgbench_accounts;", stdout => \$sum0);
-$cluster->psql(1, 'postgres', "select sum(abalance) from pgbench_accounts;", stdout => \$sum1);
-$cluster->psql(2, 'postgres', "select sum(abalance) from pgbench_accounts;", stdout => \$sum2);
+$sum0 = $cluster->safe_psql(0, "select sum(abalance) from pgbench_accounts;");
+$sum1 = $cluster->safe_psql(1, "select sum(abalance) from pgbench_accounts;");
+$sum2 = $cluster->safe_psql(2, "select sum(abalance) from pgbench_accounts;");
 
 note("Sums: $sum0, $sum1, $sum2");
 is($sum2, $sum0, "Check that sum_2 == sum_0");
 is($sum2, $sum1, "Check that sum_2 == sum_1");
 
-$cluster->psql(0, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum0);
-$cluster->psql(1, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum1);
-$cluster->psql(2, 'postgres', "select count(*) from pg_prepared_xacts;", stdout => \$sum2);
+$sum0 = $cluster->safe_psql(0, "select count(*) from pg_prepared_xacts;");
+$sum1 = $cluster->safe_psql(1, "select count(*) from pg_prepared_xacts;");
+$sum2 = $cluster->safe_psql(2, "select count(*) from pg_prepared_xacts;");
 
 note("Number of prepared tx: $sum0, $sum1, $sum2");
 
-$cluster->{nodes}->[0]->stop('fast');
-$cluster->{nodes}->[1]->stop('fast');
-$cluster->{nodes}->[2]->stop('fast');
-
-1;
+$cluster->stop;

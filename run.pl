@@ -9,11 +9,14 @@ my $action = $ARGV[0];
 
 if ($action eq "--start")
 {
+	$PostgresNode::last_port_assigned = 65431;
+
 	my $cluster = new Cluster($n_nodes);
 	$cluster->init();
-	$cluster->configure('regression');
 	$cluster->start();
-	$cluster->await_nodes( (0..$n_nodes-1) );
+	$cluster->create_mm('regression');
+
+	@PostgresNode::all_nodes = ();
 }
 elsif ($action eq "--stop")
 {

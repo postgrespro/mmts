@@ -1,85 +1,20 @@
 package Cluster;
-
 use strict;
 use warnings;
-
 use PostgresNode;
 use TestLib;
 use Test::More;
 use Cwd;
-
-use Socket;
-
 use IPC::Run;
-
-sub check_port
-{
-	my ($host, $port) = @_;
-	my $iaddr = inet_aton($host);
-	my $paddr = sockaddr_in($port, $iaddr);
-	my $proto = getprotobyname("tcp");
-	my $available = 0;
-
-	socket(SOCK, PF_INET, SOCK_STREAM, $proto)
-		or die "socket failed: $!";
-
-	if (bind(SOCK, $paddr) && listen(SOCK, SOMAXCONN))
-	{
-		$available = 1;
-	}
-
-	close(SOCK);
-	return $available;
-}
-
-my %allocated_ports = ();
-sub allocate_ports
-{
-	my @allocated_now = ();
-	my ($host, $ports_to_alloc) = @_;
-
-	while ($ports_to_alloc > 0)
-	{
-		my $port = int(rand() * 16384) + 49152;
-		next if $allocated_ports{$port};
-		if (check_port($host, $port))
-		{
-			$allocated_ports{$port} = 1;
-			push(@allocated_now, $port);
-			$ports_to_alloc--;
-		}
-	}
-
-	return @allocated_now;
-}
 
 sub new
 {
-	my ($class, $nodenum) = @_;
-
-	my $nodes = [];
-
-	foreach my $i (1..$nodenum)
-	{
-		my $host = "127.0.0.1";
-		my ($pgport) = allocate_ports($host, 1);
-
-		if(defined $ENV{MMPORT}) {
-			$pgport = $ENV{MMPORT};
-			delete $ENV{MMPORT};
-		}
-
-		my $node = new PostgresNode("node$i", $host, $pgport);
-		$node->{id} = $i;
-		$node->{dbname} = 'postgres';
-		$node->{mmconnstr} = $node->connstr($node->{dbname});
-		push(@$nodes, $node);
-	}
+	my ($class, $n_nodes) = @_;
+	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
 
 	my $self = {
-		nodenum => $nodenum,
-		nodes => $nodes,
-		recv_timeout => 9,
+		nodes => \@nodes,
+		recv_timeout => 3
 	};
 
 	bless $self, $class;
@@ -93,219 +28,121 @@ sub init
 
 	foreach my $node (@$nodes)
 	{
-		$node->init(hba_permit_replication => 0);
+		$node->init(allows_streaming => 'logical');
+		$node->append_conf('postgresql.conf', q{
+			listen_addresses = '127.0.0.1'
+			max_connections = 50
+
+			shared_preload_libraries = 'multimaster'
+
+			max_prepared_transactions = 250
+			max_worker_processes = 170
+			max_wal_senders = 6
+			max_replication_slots = 12
+			wal_sender_timeout = 0
+		});
 	}
 }
 
-sub all_connstrs
-{
-	my ($self) = @_;
-	my $nodes = $self->{nodes};
-	return join(', ', map { "\" ${ \$_->connstr($_->{dbname}) } \"" } @$nodes);
-}
-
-
-sub configure
+sub create_mm
 {
 	my ($self, $dbname) = @_;
 	my $nodes = $self->{nodes};
 
-	if (defined $dbname)
-	{
-		foreach my $node (@$nodes)
-		{
-			$node->{dbname} = $dbname;
-			$node->append_conf("postgresql.conf", qq(
-				listen_addresses = '127.0.0.1'
-				unix_socket_directories = ''
-			));
-			$node->start();
-			$node->safe_psql('postgres', "CREATE DATABASE $dbname");
-			$node->stop();
-		}
-	}
+	$self->await_nodes( (0..$#{$self->{nodes}}) );
 
 	foreach my $node (@$nodes)
 	{
-		my $id = $node->{id};
-		my $host = $node->host;
-		my $pgport = $node->port;
-		my $unix_sock_dir = $ENV{PGHOST};
-
-		$node->append_conf("postgresql.conf", qq(
-			# log_statement = all
-			listen_addresses = '$host'
-			unix_socket_directories = '$unix_sock_dir'
-			port = $pgport
-			max_prepared_transactions = 250
-			max_connections = 50
-			max_worker_processes = 150
-			wal_level = logical
-			max_wal_senders = 6
-			wal_sender_timeout = 0
-			max_replication_slots = 12
-			shared_preload_libraries = 'multimaster'
-			shared_buffers = 16MB
-
-			multimaster.heartbeat_recv_timeout = 8050
-			multimaster.heartbeat_send_timeout = 250
-			multimaster.max_nodes = 6
-			# XXX try without ignore_tables_without_pk
-			# multimaster.ignore_tables_without_pk = true
-			multimaster.volkswagen_mode = 1
-			log_line_prefix = '%t [%p]: '
-		));
-
-		$node->append_conf("pg_hba.conf", qq(
-			local replication all trust
-			host replication all 127.0.0.1/32 trust
-			host replication all ::1/128 trust
-		));
+		if (defined $dbname)
+		{
+			$node->{dbname} = $dbname;
+			$node->safe_psql('postgres', "CREATE DATABASE $dbname");
+		}
+		else
+		{
+			$node->{dbname} = 'postgres';
+		}
 	}
+
+	(my $my_connstr, my @peers) = map {
+		$_->connstr($_->{dbname})
+	} @{$self->{nodes}};
+
+	my $ports = join ', ', map { $_->{_port}} @{$self->{nodes}};
+	note( "Starting cluster with ports: $ports");
+
+	my $node1 = $self->{nodes}->[0];
+	my $peer_connstrs = join ',', @peers;
+	$node1->safe_psql($node1->{dbname}, "create extension multimaster;");
+	$node1->safe_psql($node1->{dbname}, qq(
+		select mtm.init_cluster(\$\$$my_connstr\$\$, \$\${$peer_connstrs}\$\$);
+	));
+
+	$self->await_nodes( (0..$#{$self->{nodes}}) );
 }
 
 sub start
 {
 	my ($self) = @_;
-	my $node1 = $self->{nodes}->[0];
-	my $nodes = $self->{nodes};
-	my $node_id = 1;
-	my $my_connstr;
-	my $peers_connstrs = '';
-
-	foreach my $node (@$nodes)
-	{
-		$node->start();
-		if ($node_id == 1)
-		{
-			$my_connstr = $node->connstr($node->{dbname});
-		}
-		else
-		{
-			$peers_connstrs .= '"' . $node->connstr($node->{dbname}) . '",';
-		}
-		$node_id += 1;
-	}
-	$peers_connstrs =~ s/.{1}$//gms;
-
-	note( "Starting cluster with nodes: |$my_connstr|$peers_connstrs|");
-	$self->await_nodes( (0..$self->{nodenum}-1) );
-	$node1->safe_psql($node1->{dbname}, "create extension multimaster;");
-	$node1->safe_psql($node1->{dbname}, "select mtm.init_cluster(\$\$$my_connstr\$\$, \$\${$peers_connstrs}\$\$);");
-}
-
-sub stopnode
-{
-	my ($node, $mode) = @_;
-	return 1 unless defined $node->{_pid};
-	$mode = 'fast' unless defined $mode;
-	my $name   = $node->name;
-	note("stopping $name ${mode}ly");
-
-	if ($mode eq 'kill') {
-		killtree($node->{_pid});
-		return 1;
-	}
-
-	my $pgdata = $node->data_dir;
-	my $ret = TestLib::system_log('pg_ctl', '-D', $pgdata, '-m', 'fast', 'stop');
-	my $pidfile = $node->data_dir . "/postmaster.pid";
-	note("unlink $pidfile");
-	unlink $pidfile;
-	$node->{_pid} = undef;
-	$node->_update_pid;
-
-	if ($ret != 0) {
-		note("$name failed to stop ${mode}ly");
-		return 0;
-	}
-
-	return 1;
-}
-
-sub stopid
-{
-	my ($self, $idx, $mode) = @_;
-	return stopnode($self->{nodes}->[$idx]);
-}
-
-sub dumplogs
-{
-	my ($self) = @_;
-	my $nodes = $self->{nodes};
-
-	note("Dumping logs:");
-	foreach my $node (@$nodes) {
-		note("##################################################################");
-		note($node->{_logfile});
-		note("##################################################################");
-		my $filename = $node->{_logfile};
-		open my $fh, '<', $filename or die "error opening $filename: $!";
-		my $data = do { local $/; <$fh> };
-		note($data);
-		note("##################################################################\n\n");
-	}
+	$_->start() foreach @{$self->{nodes}};
 }
 
 sub stop
 {
-	my ($self, $mode) = @_;
-	my $nodes = $self->{nodes};
-	$mode = 'fast' unless defined $mode;
-
-	my $ok = 1;
-	note("stopping cluster ${mode}ly");
-	
-	foreach my $node (@$nodes) {
-		$node->stop($mode);
-	}
-
-	# $self->dumplogs();
-
-	return $ok;
+	my ($self) = @_;
+	$_->stop('fast') foreach @{$self->{nodes}};
 }
 
-sub bail_out_with_logs
+sub safe_psql
 {
-	my ($self, $msg) = @_;
-	$self->dumplogs();
-	BAIL_OUT($msg);
+	my ($self, $node_off, $query) = @_;
+	my $node = $self->{nodes}->[$node_off];
+	return $node->safe_psql($node->{dbname}, $query);
 }
 
-sub teardown
+sub connstr
+{
+	my ($self, $node_off) = @_;
+	my $node = $self->{nodes}->[$node_off];
+	return $node->connstr($node->{dbname});
+}
+
+sub add_node()
 {
 	my ($self) = @_;
-	my $nodes = $self->{nodes};
 
-	foreach my $node (@$nodes)
+	push(@{$self->{nodes}}, get_new_node("node@{[$#{$self->{nodes}} + 2]}"));
+
+	# $self->{nodes}->[0]->backup("backup_for_$new_node_id");
+	# $new_node->init_from_backup($self->{nodes}->[0], "backup_for_$new_node_id");
+
+	return $#{$self->{nodes}};
+}
+
+sub backup()
+{
+	my ($self, $from, $to) = @_;
+
+	$self->{nodes}->[$from]->backup("backup_for_$to");
+	$self->{nodes}->[$to]->init_from_backup($self->{nodes}->[$from], "backup_for_$to");
+}
+
+sub await_nodes()
+{
+	my ($self, @nodenums) = @_;
+
+	foreach my $i (@nodenums)
 	{
-		$node->teardown();
-	}
-}
-
-sub psql
-{
-	my ($self, $index, @args) = @_;
-	my $node = $self->{nodes}->[$index];
-	return $node->psql(@args);
-}
-
-sub poll
-{
-	my ($self, $poller, $dbname, $pollee, $tries, $delay) = @_;
-	my $node = $self->{nodes}->[$poller];
-	for (my $i = 0; $i < $tries; $i++) {
-		my $psql_out;
-		my $pollee_plus_1 = $pollee + 1;
-		$self->psql($poller, $dbname, "select mtm.poll_node($pollee_plus_1, true);", stdout => \$psql_out);
-		if ($psql_out eq "t") {
-			return 1;
+		my $dbname = $self->{nodes}->[$i]->{dbname};
+		if (!$self->{nodes}->[$i]->poll_query_until($dbname, "select 't'"))
+		{
+			die "Timed out while waiting for mm node$i to became online";
 		}
-		my $tries_left = $tries - $i - 1;
-		note("$poller poll for $pollee failed [$tries_left tries left]");
-		sleep($delay);
+		else
+		{
+			print("Pleed node$i");
+		}
 	}
-	return 0;
 }
 
 sub pgbench()
@@ -325,10 +162,10 @@ sub pgbench_async()
 
 	my @pgbench_command = (
 		'pgbench',
-		@args,
 		-h => $self->{nodes}->[$node]->host(),
 		-p => $self->{nodes}->[$node]->port(),
-		$self->{nodes}->[$node]->{dbname},
+		$self->{nodes}->[$node]->{dbname} || 'postgres',
+		@args
 	);
 	note("running pgbench: " . join(" ", @pgbench_command));
 	my $handle = IPC::Run::start(\@pgbench_command, $in, $out);
@@ -373,68 +210,6 @@ sub is_data_identic()
 
 	note($checksum);
 	return 1;
-}
-
-sub add_node()
-{
-	my ($self, %params) = @_;
-
-	my $pgport;
-	my $connstrs;
-	my $node_id;
-
-	if (defined $params{node_id})
-	{
-		$node_id = $params{node_id};
-		$pgport = $params{port};
-		$connstrs = $self->all_connstrs();
-	}
-	else
-	{
-		$node_id = scalar(@{$self->{nodes}}) + 1;
-		$pgport = (allocate_ports('127.0.0.1', 1))[0];
-		$connstrs = $self->all_connstrs() . ", dbname=${ \$self->{nodes}->[0]->{dbname} } host=127.0.0.1 port=$pgport";
-	}
-
-	$connstrs =~ s/'//gms;
-
-	my $node = PostgresNode->get_new_node("node${node_id}x");
-
-	$self->{nodes}->[0]->backup("backup_for_$node_id");
-	# do init from backup before setting host, since init_from_backup() checks
-	# it default value
-	$node->init_from_backup($self->{nodes}->[0], "backup_for_$node_id");
-
-	$node->{_host} = '127.0.0.1';
-	$node->{_port} = $pgport;
-	$node->{port} = $pgport;
-	$node->{host} = '127.0.0.1';
-	$node->{mmconnstr} = $node->connstr($node->{dbname});
-	$node->append_conf("postgresql.conf", qq(
-		multimaster.conn_strings = '$connstrs'
-		port = $pgport
-	));
-	$node->append_conf("pg_hba.conf", qq(
-		local replication all trust
-		host replication all 127.0.0.1/32 trust
-		host replication all ::1/128 trust
-	));
-
-	push(@{$self->{nodes}}, $node);
-}
-
-sub await_nodes()
-{
-	my ($self, @nodenums) = @_;
-
-	foreach my $i (@nodenums)
-	{
-		if (!$self->{nodes}->[$i]->poll_query_until($self->{nodes}->[$i]->{dbname}, "select 't'"))
-		{
-			# sleep(3600);
-			die "Timed out while waiting for mm node to became online";
-		}
-	}
 }
 
 1;

@@ -3,111 +3,40 @@ use warnings;
 
 use Cluster;
 use TestLib;
-use Test::More tests => 3;
-use IPC::Run qw(start finish);
-use Cwd;
+use Test::More tests => 2;
 
-my $nnodes = 2;
-my $cluster = new Cluster($nnodes);
-
+my $cluster = new Cluster(2);
 $cluster->init();
-$cluster->configure();
 $cluster->start();
+$cluster->create_mm();
 
-my ($rc, $in, $out, $err);
+$cluster->safe_psql(0, q{
+	create table t (k int primary key, v int);
+	insert into t (select generate_series(0, 999), 0);
+	create table reader_log (v int);
+});
 
-$cluster->await_nodes( (0,1) );
-
-note("preparing the tables");
-if ($cluster->psql(0, 'postgres', "create table t (k int primary key, v int)"))
-{
-	$cluster->bail_out_with_logs('failed to create t');
-}
-
-if ($cluster->psql(0, 'postgres', "insert into t (select generate_series(0, 999), 0)"))
-{
-	$cluster->bail_out_with_logs('failed to fill t');
-}
-
-if ($cluster->psql(0, 'postgres', "create table reader_log (v int)"))
-{
-	$cluster->bail_out_with_logs('failed to create reader_log');
-}
-
-sub reader
-{
-	my ($node, $inref, $outref) = @_;
-
-	my $clients = 1;
-	my $jobs = 1;
-	my $seconds = 30;
-	my $tps = 10;
-	my @argv = (
-		'pgbench',
-		'-n',
-		-c => $clients,
-		-j => $jobs,
-		-T => $seconds,
-		-h => $node->host(),
-		-p => $node->port(),
-		-f => 'tests/writer.pgb',
-		-R => $tps,
-		'postgres',
-	);
-
-	note("running[" . getcwd() . "]: " . join(' ', @argv));
-
-	return start(\@argv, $inref, $outref);
-}
-
-sub writer
-{
-	my ($node, $inref, $outref) = @_;
-
-	my $clients = 5;
-	my $jobs = 1;
-	my $seconds = 30;
-	my @argv = (
-		'pgbench',
-		'-n',
-		-c => $clients,
-		-j => $jobs,
-		-T => $seconds,
-		-h => $node->host(),
-		-p => $node->port(),
-		-f => 'tests/reader.pgb',
-		'postgres',
-	);
-
-	note("running[" . getcwd() . "]: " . join(' ', @argv));
-
-	return start(\@argv, $inref, $outref);
-}
-
-note("starting benches");
-$in = '';
-$out = '';
+my $clients = 5;
+my $seconds = 30;
 my @benches = ();
-foreach my $node (@{$cluster->{nodes}})
+foreach (0..$#{$cluster->{nodes}})
 {
-	push(@benches, writer($node, \$in, \$out));
-	push(@benches, reader($node, \$in, \$out));
+	push @benches, $cluster->pgbench_async($_,
+		('-n', -T => $seconds, -c => $clients, -f => 'tests/reader.pgb'));
+	push @benches, $cluster->pgbench_async($_,
+		('-n', -T => $seconds, -c => $clients, -f => 'tests/writer.pgb', -R => 10));
 }
 
-note("finishing benches");
-foreach my $bench (@benches)
-{
-	finish($bench) || $cluster->bail_out_with_logs("pgbench exited with $?");
-}
-note($out);
+$cluster->pgbench_await($_) foreach @benches;
 
-note("checking readers' logs");
+my $out;
 
-($rc, $out, $err) = $cluster->psql(0, 'postgres', "select count(*) from reader_log where v != 0;");
+$out = $cluster->safe_psql(0,
+	"select count(*) from reader_log where v != 0");
 is($out, 0, "there is nothing except zeros in reader_log");
 
-($rc, $out, $err) = $cluster->psql(0, 'postgres', "select count(*) from reader_log where v = 0;");
+$out = $cluster->safe_psql(0,
+	"select count(*) from reader_log where v = 0");
 isnt($out, 0, "there are some zeros in reader_log");
 
-ok($cluster->stop('fast'), "cluster stops");
-1;
+$cluster->stop;

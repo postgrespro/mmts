@@ -44,7 +44,6 @@ start: temp-install
 	$(MKDIR_P) '$(CURDIR)'/tmp_check
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
-		MMPORT='6$(DEF_PGPORT)' \
 		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
 		perl run.pl --start
 
