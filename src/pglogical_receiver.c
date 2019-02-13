@@ -62,7 +62,6 @@
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
-#define STATUS_POLL_DELAY USECS_PER_SEC
 
 bool MtmIsReceiver;
 
@@ -395,53 +394,6 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 }
 
 /*
- * Determine when and how we should open replication slot.
- * During recovery we need to open only one replication slot from which node should receive all transactions.
- * Slots at other nodes should be removed.
- */
-static MtmReplicationMode
-MtmGetReplicationMode(int nodeId)
-{
-	MtmLock(LW_EXCLUSIVE);
-
-	/* Await until node is connected and both receiver and sender are in clique */
-	while (BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, nodeId - 1) ||
-			BIT_CHECK(EFFECTIVE_CONNECTIVITY_MASK, Mtm->my_node_id - 1))
-	{
-		MtmUnlock();
-		MtmSleep(STATUS_POLL_DELAY);
-		MtmLock(LW_EXCLUSIVE);
-	}
-
-	if (!Mtm->recovered)
-	{
-		/* Ok, then start recovery by luckiest walreceiver (if there is no donor node).
-		 * If this node was populated using basebackup, then donorNodeId is not zero and we should choose this node for recovery */
-		if ((Mtm->recoverySlot == 0 || Mtm->recoverySlot == nodeId))
-		{
-			/* Lock on us */
-			Mtm->recoverySlot = nodeId;
-			// MtmPollStatusOfPreparedTransactions(false);
-			ResolveAllTransactions();
-			MtmUnlock();
-			return REPLMODE_RECOVERY;
-		}
-
-		/* And force less lucky walreceivers wait until recovery is completed */
-		while (!Mtm->recovered)
-		{
-			MtmUnlock();
-			MtmSleep(STATUS_POLL_DELAY);
-			MtmLock(LW_EXCLUSIVE);
-		}
-	}
-
-	Assert(Mtm->recovered);
-	MtmUnlock();
-	return REPLMODE_RECOVERED;
-}
-
-/*
  * Setup replication session origin to include origin location in WAL and
  * update slot position.
  * Sessions are not reetrant so we have to use exclusive lock here.
@@ -538,9 +490,9 @@ pglogical_receiver_at_exit(int status, Datum arg)
 {
 	int node_id = DatumGetInt32(arg);
 	BgwPoolCancel(&Mtm->pools[node_id - 1]);
-	MtmLock(LW_EXCLUSIVE);
+	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
-	MtmUnlock();
+	LWLockRelease(MtmLock);
 }
 
 void
@@ -630,16 +582,16 @@ pglogical_receiver_main(Datum main_arg)
 		 */
 		mode = MtmGetReplicationMode(nodeId);
 
-		MtmLock(LW_EXCLUSIVE);
+		LWLockAcquire(MtmLock, LW_EXCLUSIVE);
 		Mtm->peers[nodeId - 1].receiver_pid = MyProcPid;
 		Mtm->peers[nodeId - 1].receiver_mode = mode;
-		MtmUnlock();
+		LWLockRelease(MtmLock);
 
 		// XXX: delete unnecessary modes
 		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);
 
 		// XXX: avoid that
-		count = Mtm->recoveryCount;
+		count = MtmGetRecoveryCount();
 
 		/* Establish connection to remote server */
 		conn = receiver_connect(MtmNodeById(receiver_mtm_cfg, nodeId)->conninfo);
@@ -751,7 +703,7 @@ pglogical_receiver_main(Datum main_arg)
 			}
 
 
-			if (count != Mtm->recoveryCount) {
+			if (count != MtmGetRecoveryCount()) {
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
 				goto OnError;
 			}
@@ -818,7 +770,7 @@ pglogical_receiver_main(Datum main_arg)
 					 * In recovery mode also always send reply to provide master with more precise information
 					 * about recovery progress
 					 */
-					if (replyRequested || receiver_sync_mode || Mtm->status == MTM_RECOVERY)
+					if (replyRequested || receiver_sync_mode || MtmGetCurrentStatus() == MTM_RECOVERY)
 					{
 						int64 now = feGetCurrentTimestamp();
 
@@ -1011,8 +963,8 @@ pglogical_receiver_main(Datum main_arg)
 		hash_destroy(filter_map);
 		ByteBufferReset(&buf);
 		PQfinish(conn);
-		if (Mtm->recoverySlot == nodeId)
-			Mtm->recoverySlot = 0;
+
+		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_ERROR, false);
 
 		/*
 		 * Some of the workers may stuck on lock and survive until node will come

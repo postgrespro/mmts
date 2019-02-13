@@ -851,9 +851,10 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 	DmqDestinationId dest_id;
 	MtmArbiterMessage msg;
 
-	MtmLock(LW_SHARED);
+	LWLockAcquire(MtmLock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-	MtmUnlock();
+	LWLockRelease(MtmLock);
+
 	Assert(dest_id >= 0);
 
 	MtmInitMessage(&msg, msg_code);

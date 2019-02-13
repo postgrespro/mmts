@@ -133,16 +133,6 @@ typedef enum
 	MSG_POLL_STATUS
 } MtmMessageCode;
 
-typedef enum
-{
-	MTM_DISABLED,				/* Node disabled */
-	MTM_RECOVERY,				/* Node is in recovery process */
-	MTM_RECOVERED,				/* Node is recovered by is not yet switched to
-								 * ONLINE because not all sender/receivers are
-								 * restarted */
-	MTM_ONLINE					/* Ready to receive client's queries */
-} MtmNodeStatus;
-
 typedef struct
 {
 	MtmMessageCode code;		/* Message code: MSG_PREPARE, MSG_PRECOMMIT,
@@ -184,37 +174,10 @@ typedef struct
 {
 	int			my_node_id;
 	bool		stop_new_commits;
-	bool		recovered;
 	XLogRecPtr	latestSyncpoint;
-	MtmNodeStatus status;		/* Status of this node */
-	char	   *statusReason;	/* A human-readable description of why the
-								 * current status was set */
-	int			recoverySlot;	/* NodeId of recovery slot or 0 if none */
-	LWLockPadded *locks;		/* multimaster lock tranche */
-	nodemask_t	selfConnectivityMask;
-	nodemask_t	disabledNodeMask;	/* Bitmask of disabled nodes */
-	nodemask_t	clique;			/* Bitmask of nodes that are connected and we
-								 * allowed to connect/send wal/receive wal
-								 * with them */
-	bool		refereeGrant;	/* Referee allowed us to work with half of the
-								 * nodes */
-	int			refereeWinnerId;	/* Node that won referee contest */
-	nodemask_t	stalledNodeMask;	/* Bitmask of stalled nodes (node with
-									 * dropped replication slot which makes it
-									 * not possible automatic recovery of such
-									 * node) */
-	nodemask_t	stoppedNodeMask;	/* Bitmask of stopped (permanently
-									 * disabled nodes) */
-	nodemask_t	pglogicalReceiverMask;	/* bitmask of started pglogic
-										 * receivers */
-	nodemask_t	pglogicalSenderMask;	/* bitmask of started pglogic senders */
 	bool		localTablesHashLoaded;	/* Whether data from local_tables
 										 * table is loaded in shared memory
 										 * hash table */
-	int			nAllNodes;		/* Total number of nodes */
-	int			recoveryCount;	/* Number of completed recoveries */
-	int			donorNodeId;	/* Cluster node from which this node was
-								 * populated */
 	struct {
 		MtmReplicationMode	receiver_mode;
 		pid_t				sender_pid;
@@ -222,9 +185,9 @@ typedef struct
 		int					dmq_dest_id;
 	} peers[MTM_MAX_NODES];
 	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
-} MtmState;
+} MtmShared;
 
-extern MtmState *Mtm;
+extern MtmShared *Mtm;
 
 /* XXX: to delete */
 extern int	MtmReplicationNodeId;
@@ -232,6 +195,7 @@ extern MtmCurrentTrans MtmTx;
 extern MemoryContext MtmApplyContext;
 
 /* Locks */
+extern LWLock *MtmLock;
 extern LWLock *MtmCommitBarrier;
 extern LWLock *MtmReceiverBarrier;
 extern LWLock *MtmSyncpointLock;
@@ -251,10 +215,6 @@ extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
 extern int	MtmMaxNodes;
 extern bool	MtmBreakConnection;
-
-/*  XXX! need rename: that's actually a disconnectivity mask */
-#define SELF_CONNECTIVITY_MASK  (Mtm->selfConnectivityMask)
-#define EFFECTIVE_CONNECTIVITY_MASK  ( SELF_CONNECTIVITY_MASK | Mtm->stoppedNodeMask | ~Mtm->clique )
 
 extern bool MtmTwoPhaseCommit(void);
 extern void MtmBeginTransaction(void);
@@ -277,12 +237,6 @@ extern MtmConfig *MtmReloadConfig(MtmConfig *old_cfg,
 extern MtmNode *MtmNodeById(MtmConfig *cfg, int node_id);
 
 extern void MtmStateFill(MtmConfig *cfg);
-
-extern void MtmLock(LWLockMode mode);
-extern void MtmUnlock(void);
-extern void MtmLockNode(int nodeId, LWLockMode mode);
-extern bool MtmTryLockNode(int nodeId, LWLockMode mode);
-extern void MtmUnlockNode(int nodeId);
 
 extern void MtmInitMessage(MtmArbiterMessage *msg, MtmMessageCode code);
 

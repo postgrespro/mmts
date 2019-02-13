@@ -25,6 +25,7 @@
 
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "state.h"
 
 /*
  * Definition for data in shared memory. It's not publicly visible, but used
@@ -46,6 +47,7 @@ typedef struct
 {
 	char			gid[GIDSIZE];
 	MtmTxState		state[MTM_MAX_NODES];
+	int				n_participants;
 } resolver_tx;
 
 static HTAB *gid2tx = NULL;
@@ -153,7 +155,7 @@ ResolverStart(Oid db_id, Oid user_id)
 
 
 static bool
-load_tasks(int node_id)
+load_tasks(int node_id, int n_participants)
 {
 	PreparedTransaction	pxacts;
 	int					n_xacts,
@@ -181,6 +183,8 @@ load_tasks(int node_id)
 			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
 			added_xacts++;
 
+			tx->n_participants = n_participants;
+
 			for (j = 0; j < MTM_MAX_NODES; j++)
 				tx->state[j] = MtmTxUnknown;
 
@@ -197,14 +201,13 @@ load_tasks(int node_id)
 	return true;
 }
 
-
 void
-ResolveTransactionsForNode(int node_id)
+ResolveTransactionsForNode(int node_id, int n_all_nodes)
 {
 	pid_t resolver_pid;
 
 	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-	load_tasks(node_id);
+	load_tasks(node_id, n_all_nodes);
 	resolver_pid = resolver_state->pid;
 	LWLockRelease(resolver_state->lock);
 
@@ -212,11 +215,10 @@ ResolveTransactionsForNode(int node_id)
 		kill(resolver_pid, SIGHUP);
 }
 
-
 void
-ResolveAllTransactions(void)
+ResolveAllTransactions(int n_all_nodes)
 {
-	ResolveTransactionsForNode(-1);
+	ResolveTransactionsForNode(-1, n_all_nodes);
 }
 
 char *
@@ -258,7 +260,7 @@ exists(resolver_tx *tx, MtmTxStateMask mask)
 {
 	int i;
 
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < tx->n_participants; i++)
 	{
 		if (tx->state[i] & mask)
 			return true;
@@ -273,13 +275,13 @@ majority_in(resolver_tx *tx, MtmTxStateMask mask)
 	int i;
 	int hits = 0;
 
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < tx->n_participants; i++)
 	{
 		if (tx->state[i] & mask)
 			hits++;
 	}
 
-	return (hits > Mtm->nAllNodes/2);
+	return (hits > tx->n_participants/2);
 }
 
 
@@ -391,8 +393,9 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		for (i = 0; i < mtm_cfg->n_nodes; i++)
 		{
 			int			node_id = mtm_cfg->nodes[i].node_id;
+			nodemask_t	cmask = MtmGetConnectedNodeMask();
 
-			if (!BIT_CHECK(SELF_CONNECTIVITY_MASK, node_id - 1))
+			if (BIT_CHECK(cmask, node_id - 1))
 			{
 				MtmArbiterMessage msg;
 				DmqDestinationId dest_id;
@@ -406,9 +409,10 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 						tx->gid, node_id);
 
 				// XXX: we need here to await destination
-				MtmLock(LW_SHARED);
+				LWLockAcquire(MtmLock, LW_SHARED);
 				dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-				MtmUnlock();
+				LWLockRelease(MtmLock);
+
 				Assert(dest_id >= 0);
 
 				dmq_push_buffer(dest_id, "txreq", &msg,
@@ -427,7 +431,7 @@ handle_responses(void)
 	DmqSenderId sender_id;
 	StringInfoData buffer;
 
-	while(dmq_pop_nb(&sender_id, &buffer, ~SELF_CONNECTIVITY_MASK))
+	while(dmq_pop_nb(&sender_id, &buffer, MtmGetConnectedNodeMask()))
 	{
 		int node_id;
 		MtmArbiterMessage *msg;

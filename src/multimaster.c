@@ -85,8 +85,6 @@ PG_FUNCTION_INFO_V1(mtm_after_node_create);
 PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 PG_FUNCTION_INFO_V1(mtm_join_node);
 PG_FUNCTION_INFO_V1(mtm_init_cluster);
-PG_FUNCTION_INFO_V1(mtm_node_info);
-PG_FUNCTION_INFO_V1(mtm_status);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -103,7 +101,7 @@ static void launcher_init(void);
 void launcher_main(Datum main_arg);
 void drop_node_entry(int node_id);
 
-MtmState* Mtm;
+MtmShared* Mtm;
 
 MemoryContext MtmApplyContext;
 
@@ -122,6 +120,7 @@ static TransactionManager MtmTM =
 	MtmResumeTransaction
 };
 
+LWLock *MtmLock;
 LWLock *MtmCommitBarrier;
 LWLock *MtmReceiverBarrier;
 LWLock *MtmSyncpointLock;
@@ -142,52 +141,6 @@ static int	 MtmQueueSize;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
-/*
- * -------------------------------------------
- * Synchronize access to MTM structures.
- * Using LWLock seems to be more efficient (at our benchmarks)
- * Multimaster uses trash of 2N+1 lwlocks, where N is number of nodes.
- * locks[0] is used to synchronize access to multimaster state,
- * locks[1..N] are used to provide exclusive access to replication session for each node
- * locks[N+1..2*N] are used to synchronize access to distributed lock graph at each node
- * -------------------------------------------
- */
-
-// #define DEBUG_MTM_LOCK 1
-
-#if DEBUG_MTM_LOCK
-static timestamp_t MtmLockLastReportTime;
-static timestamp_t MtmLockElapsedWaitTime;
-static timestamp_t MtmLockMaxWaitTime;
-static size_t      MtmLockHitCount;
-#endif
-
-void MtmLock(LWLockMode mode)
-{
-	LWLockAcquire((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID], mode);
-}
-
-void MtmUnlock(void)
-{
-	LWLockRelease((LWLockId)&Mtm->locks[MTM_STATE_LOCK_ID]);
-}
-
-void MtmLockNode(int nodeId, LWLockMode mode)
-{
-	Assert(nodeId > 0 && nodeId <= MtmMaxNodes*2);
-	LWLockAcquire((LWLockId)&Mtm->locks[nodeId], mode);
-}
-
-bool MtmTryLockNode(int nodeId, LWLockMode mode)
-{
-	return LWLockConditionalAcquire((LWLockId)&Mtm->locks[nodeId], mode);
-}
-
-void MtmUnlockNode(int nodeId)
-{
-	Assert(nodeId > 0 && nodeId <= MtmMaxNodes*2);
-	LWLockRelease((LWLockId)&Mtm->locks[nodeId]);
-}
 
 /*
  * -------------------------------------------
@@ -304,7 +257,7 @@ void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
 	memset(msg, '\0', sizeof(MtmArbiterMessage));
 
 	msg->code = code;
-	msg->connectivityMask = SELF_CONNECTIVITY_MASK;
+	msg->connectivityMask = MtmGetConnectedNodeMask();
 	msg->node = Mtm->my_node_id;
 }
 
@@ -313,7 +266,7 @@ void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
  * This function is called from shared memory startup hook (after completion of initialization of shared memory)
  */
 static void
-MtmStateShmemStartup()
+MtmSharedShmemStartup()
 {
 	bool found;
 	int i;
@@ -327,24 +280,11 @@ MtmStateShmemStartup()
 		SpinLockInit(&mtm_time->mutex);
 	}
 
-	Mtm = (MtmState*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmState) + sizeof(BgwPool)*(MtmMaxNodes), &found);
+	Mtm = (MtmShared*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared) + sizeof(BgwPool)*(MtmMaxNodes), &found);
 	if (!found)
 	{
-		MemSet(Mtm, 0, sizeof(MtmState));
+		MemSet(Mtm, 0, sizeof(MtmShared));
 		Mtm->stop_new_commits = false;
-		Mtm->recovered = false;
-		Mtm->status = MTM_DISABLED;
-		Mtm->recoverySlot = 0;
-		Mtm->locks = GetNamedLWLockTranche(MULTIMASTER_NAME);
-		Mtm->disabledNodeMask = (nodemask_t) -1;
-		Mtm->clique = (nodemask_t) -1;
-		Mtm->refereeGrant = false;
-		Mtm->refereeWinnerId = 0;
-		Mtm->stalledNodeMask = 0;
-		Mtm->stoppedNodeMask = 0;
-		Mtm->pglogicalReceiverMask = 0;
-		Mtm->pglogicalSenderMask = 0;
-		Mtm->recoveryCount = 0;
 		Mtm->localTablesHashLoaded = false;
 		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
@@ -361,9 +301,10 @@ MtmStateShmemStartup()
 
 	RegisterXactCallback(MtmXactCallback2, NULL);
 
-	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+1].lock);
-	MtmReceiverBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+2].lock);
-	MtmSyncpointLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[MtmMaxNodes*2+3].lock);
+	MtmLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
+	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
+	MtmReceiverBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[2].lock);
+	MtmSyncpointLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[3].lock);
 
 	TM = &MtmTM;
 	LWLockRelease(AddinShmemInitLock);
@@ -378,6 +319,7 @@ MtmShmemStartup(void)
 	MtmDeadlockDetectorShmemStartup(MtmMaxNodes);
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
+	MtmSharedShmemStartup();
 }
 
 void
@@ -573,7 +515,7 @@ _PG_init(void)
 	 * resources in mtm_shmem_startup().
 	 */
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
-	RequestNamedLWLockTranche(MULTIMASTER_NAME, 1 + MtmMaxNodes*2 + 3);
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 4);
 
 	dmq_init();
 	dmq_receiver_start_hook = MtmOnNodeConnect;
@@ -584,6 +526,8 @@ _PG_init(void)
 	MtmDDLReplicationInit();
 
 	launcher_init();
+
+	MtmStateInit();
 
 	/*
 	 * Install hooks.
@@ -646,12 +590,13 @@ MtmIsEnabled()
 	return OidIsValid(get_publication_oid(MULTIMASTER_NAME, true));
 }
 
+// XXX: delete that
 bool
 MtmAllApplyWorkersFinished()
 {
 	int i;
 
-	for (i = 0; i < Mtm->nAllNodes; i++)
+	for (i = 0; i < MtmMaxNodes; i++)
 	{
 		volatile int ntasks;
 
@@ -853,77 +798,6 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	PopActiveSnapshot();
 
 	PG_RETURN_VOID();
-}
-
-// XXX: During evaluation of (mtm.node_info(id)).* this function called
-// once each columnt for every row. So may be just rewrite to SRF.
-Datum
-mtm_node_info(PG_FUNCTION_ARGS)
-{
-	int			node_id = PG_GETARG_INT32(0);
-	TupleDesc	desc;
-	Datum		values[Natts_mtm_node_info];
-	bool		nulls[Natts_mtm_node_info] = {false};
-
-	MtmLock(LW_SHARED);
-
-	values[Anum_mtm_node_info_enabled - 1] =
-		BoolGetDatum(!BIT_CHECK(Mtm->disabledNodeMask, node_id - 1));
-	values[Anum_mtm_node_info_connected - 1] =
-		BoolGetDatum(!BIT_CHECK(Mtm->selfConnectivityMask, node_id - 1));
-
-	if (Mtm->peers[node_id - 1].sender_pid != InvalidPid)
-	{
-		values[Anum_mtm_node_info_sender_pid - 1] =
-			Int32GetDatum(Mtm->peers[node_id - 1].sender_pid);
-	}
-	else
-	{
-		nulls[Anum_mtm_node_info_sender_pid - 1] = true;
-	}
-
-	if (Mtm->peers[node_id - 1].receiver_pid != InvalidPid)
-	{
-		values[Anum_mtm_node_info_receiver_pid - 1] =
-			Int32GetDatum(Mtm->peers[node_id - 1].receiver_pid);
-		values[Anum_mtm_node_info_n_workers - 1] =
-			Int32GetDatum(Mtm->pools[node_id - 1].nWorkers);
-		values[Anum_mtm_node_info_receiver_status - 1] =
-			CStringGetTextDatum(MtmReplicationModeName[Mtm->peers[node_id - 1].receiver_mode]);
-	}
-	else
-	{
-		nulls[Anum_mtm_node_info_receiver_pid - 1] = true;
-		nulls[Anum_mtm_node_info_n_workers - 1] = true;
-		nulls[Anum_mtm_node_info_receiver_status - 1] = true;
-	}
-
-	MtmUnlock();
-
-	get_call_result_type(fcinfo, NULL, &desc);
-	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
-}
-
-Datum
-mtm_status(PG_FUNCTION_ARGS)
-{
-	TupleDesc	desc;
-	Datum		values[Natts_mtm_status];
-	bool		nulls[Natts_mtm_status] = {false};
-
-	MtmLock(LW_SHARED);
-	values[Anum_mtm_status_node_id - 1] = Int32GetDatum(Mtm->my_node_id);
-	values[Anum_mtm_status_status - 1] =
-		CStringGetTextDatum(MtmNodeStatusMnem[Mtm->status]);
-	values[Anum_mtm_status_n_nodes - 1] = Int32GetDatum(Mtm->nAllNodes);
-	values[Anum_mtm_status_n_connected - 1] =
-		Int32GetDatum(countZeroBits(Mtm->selfConnectivityMask, Mtm->nAllNodes));
-	values[Anum_mtm_status_n_enabled - 1] =
-		Int32GetDatum(countZeroBits(Mtm->disabledNodeMask, Mtm->nAllNodes));
-	MtmUnlock();
-
-	get_call_result_type(fcinfo, NULL, &desc);
-	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
 }
 
 Datum

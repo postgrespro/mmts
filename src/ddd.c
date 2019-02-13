@@ -17,6 +17,7 @@
 #include "ddd.h"
 #include "bytebuf.h"
 #include "mm.h"
+#include "state.h"
 #include "logger.h"
 
 #define LOCK_BY_INDEX(i) ((LWLockId)&ddd_shared->locks[(i)])
@@ -383,7 +384,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	MtmGraphAdd(&graph, (GlobalTransactionId*)buf.data, buf.used/sizeof(GlobalTransactionId));
 	ByteBufferFree(&buf);
 	for (i = 0; i < ddd_shared->n_nodes; i++) {
-		if (i+1 != Mtm->my_node_id && !BIT_CHECK(Mtm->disabledNodeMask, i)) {
+		if (i+1 != Mtm->my_node_id && BIT_CHECK(MtmGetEnabledNodeMask(), i)) {
 			size_t lockGraphSize;
 			void* lockGraphData;
 
@@ -439,7 +440,7 @@ MtmDetectGlobalDeadLock(PGPROC* proc)
 
 	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);
 
-	if (Mtm->status != MTM_ONLINE || !TransactionIdIsValid(pgxact->xid))
+	if (!TransactionIdIsValid(pgxact->xid))
 		return false;
 
 	return MtmDetectGlobalDeadLockForXid(pgxact->xid);

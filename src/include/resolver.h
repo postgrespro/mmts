@@ -20,8 +20,8 @@ typedef int MtmTxStateMask;
 extern void ResolverMain(Datum main_arg);
 extern void ResolverInit(void);
 extern BackgroundWorkerHandle *ResolverStart(Oid db_id, Oid user_id);
-extern void ResolveTransactionsForNode(int node_id);
-extern void ResolveAllTransactions(void);
+extern void ResolveTransactionsForNode(int node_id, int n_all_nodes);
+extern void ResolveAllTransactions(int n_all_nodes);
 extern char *MtmTxStateMnem(MtmTxState state);
 
 #endif  /* RESOLVER_H */

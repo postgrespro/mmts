@@ -776,15 +776,9 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	 * to setup all stuff in shared memory. But seems that there is no such
 	 * callback in vanilla pg and adding one will require some carefull thoughts.
 	 */
-	MtmLock(LW_EXCLUSIVE);
-	if (!BIT_CHECK(Mtm->clique, MtmReplicationNodeId-1))
-	{
-		MtmUnlock();
-		mtm_log(ERROR, "Out-of-clique node %d tries to connect",
-				 MtmReplicationNodeId);
-	}
+	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
 	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = MyProcPid;
-	MtmUnlock();
+	LWLockRelease(MtmLock);
 
 	if (hooks_data->is_recovery)
 	{
@@ -843,14 +837,14 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
 {
 	Assert(MtmReplicationNodeId >= 0);
 
-	MtmLock(LW_EXCLUSIVE);
+	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
 	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = InvalidPid;
-	if (BIT_CHECK(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1))
-	{
-		BIT_CLEAR(Mtm->pglogicalSenderMask, MtmReplicationNodeId-1);
-		MtmReplicationNodeId = -1;
-	}
-	MtmUnlock();
+	LWLockRelease(MtmLock);
+
+	MtmStateProcessNeighborEvent(MtmReplicationNodeId,
+								 MTM_NEIGHBOR_WAL_SENDER_STOP, false);
+
+	MtmReplicationNodeId = -1;
 
 	mtm_log(ProtoTraceMode, "Walsender to node %d exiting",
 			MtmReplicationNodeId);

@@ -100,6 +100,8 @@ MtmXactCallback2(XactEvent event, void *arg)
 void
 MtmBeginTransaction()
 {
+	MtmNodeStatus	node_status;
+
 	// XXX: clean MtmTx on commit and check on begin that it is clean.
 	// That should unveil probable issues with subxacts.
 
@@ -138,8 +140,10 @@ MtmBeginTransaction()
 
 	MtmDDLResetStatement();
 
+	node_status = MtmGetCurrentStatus();
+
 	/* Application name can be changed using PGAPPNAME environment variable */
-	if (Mtm->status != MTM_ONLINE
+	if (node_status != MTM_ONLINE
 		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
 		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0)
 	{
@@ -150,13 +154,13 @@ MtmBeginTransaction()
 		{
 			mtm_log(ERROR,
 					"Multimaster node is not online: current status %s",
-					MtmNodeStatusMnem[Mtm->status]);
+					MtmNodeStatusMnem[node_status]);
 		}
 		else
 		{
 			mtm_log(FATAL,
 					"Multimaster node is not online: current status %s",
-					MtmNodeStatusMnem[Mtm->status]);
+					MtmNodeStatusMnem[node_status]);
 		}
 	}
 }
@@ -216,12 +220,8 @@ MtmTwoPhaseCommit()
 
 	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
 
-	MtmLock(LW_SHARED);
-	participantsMask = ~Mtm->disabledNodeMask &
+	participantsMask = MtmGetEnabledNodeMask() &
 						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
-	if (Mtm->status != MTM_ONLINE)
-		mtm_log(ERROR, "This node became offline during current transaction");
-	MtmUnlock();
 
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)
@@ -305,24 +305,13 @@ GatherPrepares(TransactionId xid, nodemask_t participantsMask, int *failed_at)
 			 * disconnected. Let's wait when it became disabled as we can
 			 * became offline by this time.
 			 */
-			MtmLock(LW_SHARED);
-			if (BIT_CHECK(Mtm->disabledNodeMask, sender_to_node[sender_id] - 1))
+			if (!BIT_CHECK(MtmGetEnabledNodeMask(), sender_to_node[sender_id] - 1))
 			{
-				if (Mtm->status != MTM_ONLINE)
-				{
-					elog(ERROR, "our node was disabled during transaction commit");
-				}
-				else
-				{
-					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
-					mtm_log(MtmTxTrace,
-						"GatherPrepares: dropping node%d from participants of tx" XID_FMT,
-						sender_to_node[sender_id], xid);
-					prepared = false;
-					*failed_at = sender_to_node[sender_id];
-				}
+				BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+				mtm_log(MtmTxTrace,
+					"GatherPrepares: dropping node%d from participants of tx" XID_FMT,
+					sender_to_node[sender_id], xid);
 			}
-			MtmUnlock();
 		}
 	}
 
@@ -365,22 +354,13 @@ GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode 
 			 * disconnected. Let's wait when it became disabled as we can
 			 * became offline by this time.
 			 */
-			MtmLock(LW_SHARED);
-			if (BIT_CHECK(Mtm->disabledNodeMask, sender_to_node[sender_id] - 1))
+			if (!BIT_CHECK(MtmGetEnabledNodeMask(), sender_to_node[sender_id] - 1))
 			{
-				if (Mtm->status != MTM_ONLINE)
-				{
-					elog(ERROR, "our node was disabled during transaction commit");
-				}
-				else
-				{
-					BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
-					mtm_log(MtmTxTrace,
-						"GatherPrecommit: dropping node%d from participants of tx" XID_FMT,
-						sender_to_node[sender_id], xid);
-				}
+				BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+				mtm_log(MtmTxTrace,
+					"GatherPrecommit: dropping node%d from participants of tx" XID_FMT,
+					sender_to_node[sender_id], xid);
 			}
-			MtmUnlock();
 		}
 	}
 
