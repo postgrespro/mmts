@@ -1013,6 +1013,19 @@ MtmGetEnabledNodeMask()
 	return enabled;
 }
 
+/* Compatibility with scheduler */
+nodemask_t
+MtmGetDisabledNodeMask()
+{
+	nodemask_t disabled;
+
+	LWLockAcquire(MtmStateLock, LW_SHARED);
+	disabled = ~mtm_state->enabled_mask;
+	LWLockRelease(MtmStateLock);
+
+	return disabled;
+}
+
 int
 MtmGetRecoveryCount()
 {

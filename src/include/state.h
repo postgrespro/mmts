@@ -61,4 +61,6 @@ extern nodemask_t MtmGetConnectedNodeMask(void);
 extern nodemask_t MtmGetEnabledNodeMask(void);
 extern int MtmGetRecoveryCount(void);
 
+extern nodemask_t MtmGetDisabledNodeMask(void);
+
 #endif
