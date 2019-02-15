@@ -242,4 +242,6 @@ extern void MtmInitMessage(MtmArbiterMessage *msg, MtmMessageCode code);
 
 extern bool MtmIsEnabled(void);
 
+extern void MtmToggleReplication(void);
+
 #endif							/* MULTIMASTER_H */

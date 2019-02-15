@@ -28,6 +28,8 @@
 #include "state.h"
 #include "syncpoint.h"
 
+static bool	force_in_bgworker;
+
 static bool	subchange_cb_registered;
 static bool	config_valid;
 // XXX: change dmq api and avoid that
@@ -70,7 +72,7 @@ MtmXactCallback2(XactEvent event, void *arg)
 	 * backends with multimaster enabled.
 	 */
 	if (IsAnyAutoVacuumProcess() || !IsNormalProcessingMode() ||
-		am_walsender || IsBackgroundWorker)
+		am_walsender || (IsBackgroundWorker && !force_in_bgworker))
 	{
 		return;
 	}
@@ -366,3 +368,14 @@ GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode 
 
 	// XXX: assert that majority has responded
 }
+
+/*
+ * Allow replication in bgworker.
+ * Needed for scheduler.
+ */
+void
+MtmToggleReplication(void)
+{
+	force_in_bgworker = true;
+}
+
