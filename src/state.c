@@ -500,6 +500,11 @@ void MtmOnNodeConnect(char *node_name)
 	else
 		mtm_log(MtmStateMessage, "[STATE] Node %i: connected", node_id);
 
+	/* do not hold lock for mtm.cluster_nodes */
+	ResourceOwnerRelease(TopTransactionResourceOwner,
+						RESOURCE_RELEASE_LOCKS,
+						true, true);
+
 	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
 
 	BIT_SET(mtm_state->connected_mask, node_id - 1);

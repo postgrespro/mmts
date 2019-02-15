@@ -1000,6 +1000,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	/* setup queues with backends */
 	seg = dsm_create(dmq_toc_size(), 0);
+	dsm_pin_mapping(seg);
 	toc = shm_toc_create(DMQ_MQ_MAGIC, dsm_segment_address(seg),
 						 dmq_toc_size());
 	mq_handles = palloc(MaxBackends*sizeof(shm_mq_handle *));
