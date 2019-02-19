@@ -953,31 +953,14 @@ MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 			TargetEntry *tle = (TargetEntry *) lfirst(tlist);
 			if (tle->expr && IsA(tle->expr, FuncExpr))
 			{
-				Oid func_oid = ((FuncExpr*)tle->expr)->funcid;
-				if (!hash_search(MtmRemoteFunctions, &func_oid, HASH_FIND, NULL))
+				Oid func_oid = ((FuncExpr*) tle->expr)->funcid;
+
+				if (hash_search(MtmRemoteFunctions, &func_oid, HASH_FIND, NULL))
 				{
-					Form_pg_proc funcform;
-					bool is_sec_def;
-					HeapTuple func_tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(func_oid));
-					if (!HeapTupleIsValid(func_tuple))
-						elog(ERROR, "cache lookup failed for function %u", func_oid);
-					funcform = (Form_pg_proc) GETSTRUCT(func_tuple);
-					is_sec_def = funcform->prosecdef;
-					ReleaseSysCache(func_tuple);
-					if (!is_sec_def)
-					{
-						continue;
-					}
+					MtmProcessDDLCommand(queryDesc->sourceText, true);
+					MtmDDLStatement = queryDesc;
+					break;
 				}
-				/*
-				 * Execute security defined functions or functions marked as remote at replicated nodes.
-				 * Them are executed as DDL statements.
-				 * All data modifications done inside this function are not replicated.
-				 * As a result generated content can vary at different nodes.
-				 */
-				MtmProcessDDLCommand(queryDesc->sourceText, true);
-				MtmDDLStatement = queryDesc;
-				break;
 			}
 		}
 	}
@@ -1009,6 +992,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 							RelationGetIndexList(rel);
 						}
 						if (rel->rd_replidindex == InvalidOid) {
+							// XXX
 							MtmMakeRelationLocal(RelationGetRelid(rel));
 							continue;
 						}
