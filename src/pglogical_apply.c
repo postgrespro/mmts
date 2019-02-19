@@ -1112,8 +1112,11 @@ process_remote_insert(StringInfo s, Relation rel)
 										  estate, false, NULL, NIL);
 
 				/* AFTER ROW INSERT Triggers */
-				ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
-									recheckIndexes, NULL);
+				if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
+				{
+					ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
+										 recheckIndexes, NULL);
+				}
 
 				list_free(recheckIndexes);
 			}
@@ -1184,8 +1187,11 @@ process_remote_insert(StringInfo s, Relation rel)
 		UserTableUpdateOpenIndexes(estate, newslot);
 
 		/* AFTER ROW INSERT Triggers */
-		ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
+		if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
+		{
+			ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
 							NIL, NULL);
+		}
 	}
 	ExecCloseIndices(estate->es_result_relation_info);
 	if (ActiveSnapshotSet())
@@ -1391,8 +1397,11 @@ process_remote_delete(StringInfo s, Relation rel)
 		simple_heap_delete(rel, &oldslot->tts_tuple->t_self);
 
 		/* AFTER ROW DELETE Triggers */
-		ExecARDeleteTriggers(estate, estate->es_result_relation_info,
+		if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
+		{
+			ExecARDeleteTriggers(estate, estate->es_result_relation_info,
 							 &oldslot->tts_tuple->t_self, NULL, NULL);
+		}
 	}
 	else
 	{
