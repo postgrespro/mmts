@@ -30,6 +30,7 @@ sub init
 	{
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', q{
+			unix_socket_directories = ''
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
 

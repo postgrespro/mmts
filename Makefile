@@ -7,20 +7,16 @@ src/pglogical_relid_map.o src/ddd.o src/bkb.o src/spill.o src/state.o \
 src/resolver.o src/ddl.o src/syncpoint.o
 MODULE_big = multimaster
 
-ifdef USE_PGXS
-PG_CPPFLAGS += -I$(CURDIR)/src/include
-else
-PG_CPPFLAGS += -I$(top_srcdir)/$(subdir)/src/include
-endif
-
 PG_CPPFLAGS += -I$(libpq_srcdir)
 SHLIB_LINK = $(libpq)
 
 ifdef USE_PGXS
+PG_CPPFLAGS += -I$(CURDIR)/src/include
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
+PG_CPPFLAGS += -I$(top_srcdir)/$(subdir)/src/include
 subdir = contrib/mmts
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
@@ -54,7 +50,7 @@ stop:
 		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
 		perl run.pl --stop
 
-regress: submake-regress
+regress-pg: submake-regress
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
 	$(with_temp_install) \
 	PGPORT='6$(DEF_PGPORT)' \
@@ -65,3 +61,14 @@ regress: submake-regress
 	--use-existing \
 	--schedule=serial_schedule \
 	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress
+
+run-regress:
+	$(with_temp_install) \
+	PGPORT='6$(DEF_PGPORT)' \
+	PGHOST='127.0.0.1' \
+	$(top_builddir)/src/test/regress/pg_regress \
+	--use-existing \
+	--bindir= \
+	$(pg_regress_locale_flags) multimaster
+
+regress: | start run-regress stop
