@@ -48,7 +48,9 @@
 #include "catalog/indexing.h"
 #include "utils/hsearch.h"
 #include "commands/defrem.h"
+#include "replication/message.h"
 #include "utils/syscache.h"
+#include "utils/pg_lsn.h"
 
 #include "multimaster.h"
 #include "ddd.h"
@@ -895,15 +897,6 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 */
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		replorigin_create(origin_name);
-
-		/*
-		 * We need to be sure that latest syncpoint will happens after slot
-		 * creation, so that new basebackuped node will be able to resume
-		 * replication.
-		 * As this is done in trigger, we can be sure that syncpoint will
-		 * be completed everywhere before returning control to user.
-		 */
-		MaybeLogSyncpoint(true);
 	}
 
 	PG_RETURN_VOID();
@@ -968,24 +961,19 @@ mtm_join_node(PG_FUNCTION_ARGS)
 {
 	int			rc;
 	int			new_node_id = PG_GETARG_INT32(0);
-	int			backup_node_id = 0;
+	XLogRecPtr	end_lsn = PG_GETARG_LSN(1);
 	char	   *query;
 	char	   *mtm_nodes;
 	char	   *conninfo;
 	PGconn	   *conn;
 	PGresult   *res;
+	MtmConfig  *cfg = MtmLoadConfig();
+	XLogRecPtr	curr_lsn;
+	StringInfoData syncpoints_query;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
 	PushActiveSnapshot(GetTransactionSnapshot());
-
-	/* get conninfo of this node */
-	query = psprintf("select conninfo from " MTM_NODES " where id = %d",
-					 new_node_id);
-	rc = SPI_execute(query, true, 0);
-	if (rc != SPI_OK_SELECT || SPI_processed != 1)
-		mtm_log(ERROR, "Con't load node%d conninfo", backup_node_id);
-	conninfo = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
 
 	/* serialize our mtm.cluster_nodes table into string */
 	query = psprintf("select array_agg((n.id, n.conninfo, n.id = %d, 'f')::" MTM_NODES ") "
@@ -995,81 +983,93 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		mtm_log(ERROR, "Failed to load node list");
 	mtm_nodes = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
 
-	/*
-	 * Prepare node for joining cluster.
-	 */
-
+	/* connect to a new node */
+	conninfo = MtmNodeById(cfg, new_node_id)->conninfo;
 	conn = PQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
+		char	   *msg = pchomp(PQerrorMessage(conn));
 		PQfinish(conn);
-		mtm_log(ERROR, "Could not connect to a node '%s'", conninfo);
+		mtm_log(ERROR, "Could not connect to a node '%s': %s", conninfo, msg);
 	}
 
-	/* was this node basebackuped from another node? */
-	res = PQexec(conn, "select id from " MTM_NODES " where is_self = 't'");
-	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
-		PQnfields(res) != 1)
-	{
-		PQclear(res);
-		PQfinish(conn);
-		mtm_log(ERROR, "Failed to discover backup source node on '%s' %d %d",
-				conninfo, PQresultStatus(res), PQnfields(res));
-	}
-	else if (PQntuples(res) == 1)
-	{
-		backup_node_id = 1;
-	}
-	else if (PQntuples(res) != 0)
-	{
-		PQclear(res);
-		PQfinish(conn);
-		mtm_log(ERROR, "Found several is_self = 't' nodes on '%s', refusing to proceed",
-				conninfo);
-	}
-	PQclear(res);
-
-	/* clean pre-basebackup version of mtm.cluster_nodes */
-	res = PQexec(conn, "delete from " MTM_NODES);
+	/* save info about basebackup */
+	res = PQexec(conn, psprintf("insert into mtm.config values('basebackup', "
+				"'{\"node_id\": %d,\"end_lsn\": " UINT64_FORMAT "}')",
+				cfg->my_node_id, end_lsn));
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
+		char	   *msg = pchomp(PQerrorMessage(conn));
 		PQclear(res);
 		PQfinish(conn);
-		mtm_log(ERROR, "Can't clean old mtm.cluster_nodes on '%s'", conninfo);
+		mtm_log(ERROR, "Can't fill mtm.config on '%s': %s", conninfo, msg);
 	}
 	PQclear(res);
 
-	/* and replace with a adjusted version */
+	res = PQexec(conn, psprintf("insert into mtm.syncpoints values "
+				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint)",
+				cfg->my_node_id, end_lsn));
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		char	   *msg = pchomp(PQerrorMessage(conn));
+		PQclear(res);
+		PQfinish(conn);
+		mtm_log(ERROR, "Can't fill mtm.syncpoints on '%s': %s", conninfo, msg);
+	}
+	PQclear(res);
+
+	/*
+	 * Create syncpoints for all our peers so that new node can safely start
+	 * recovered replication connections.
+	 */
+	LWLockAcquire(MtmReceiverBarrier, LW_EXCLUSIVE);
+	curr_lsn = GetXLogWriteRecPtr();
+	LWLockRelease(MtmReceiverBarrier);
+
+	/* as we going to write that lsn on a new node, let's sync it */
+	XLogFlush(curr_lsn);
+
+	for (int i = 0; i < cfg->n_nodes; i++)
+	{
+		char	   *ro_name;
+		RepOriginId	ro_id;
+		XLogRecPtr	olsn;
+		char	   *msg;
+
+		if (cfg->nodes[i].node_id == new_node_id)
+			continue;
+
+		ro_name = psprintf(MULTIMASTER_SLOT_PATTERN, cfg->nodes[i].node_id);
+		ro_id = replorigin_by_name(ro_name, false);
+		olsn = replorigin_get_progress(ro_id, false);
+
+		msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
+					   cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
+
+		replorigin_session_origin = cfg->nodes[i].origin_id;
+		LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+		replorigin_session_origin = InvalidRepOriginId;
+	}
+	char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
+	LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+
+	/* fill MTM_NODES with a adjusted list of nodes */
 	query = psprintf("insert into " MTM_NODES
 					 " select * from unnest($$%s$$::" MTM_NODES "[]);",
 					 mtm_nodes);
 	res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
+		char	   *msg = pchomp(PQerrorMessage(conn));
 		PQclear(res);
 		PQfinish(conn);
-		mtm_log(ERROR, "Failed to insert new mtm.cluster_nodes on '%s'", conninfo);
+		mtm_log(ERROR, "Failed to insert new mtm.cluster_nodes on '%s': %s",
+				conninfo, msg);
 	}
 	PQclear(res);
 
-	if (backup_node_id > 0)
-	{
-		/* and create syncpoint for backup origin node */
-		query = psprintf("insert into mtm.syncpoints values "
-						"(%d, pg_current_wal_lsn(), pg_current_wal_lsn())",
-						backup_node_id);
-		res = PQexec(conn, query);
-		if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		{
-			PQclear(res);
-			PQfinish(conn);
-			mtm_log(ERROR, "Failed to create syncpoint on '%s'", conninfo);
-		}
-		PQclear(res);
-	}
-
+	pfree(cfg);
 	PQfinish(conn);
-
 	if (SPI_finish() != SPI_OK_FINISH)
 		mtm_log(ERROR, "could not finish SPI");
 	PopActiveSnapshot();
@@ -1089,9 +1089,8 @@ MtmLoadConfig()
 	int			rc;
 	int			i;
 	bool		inside_tx = IsTransactionState();
-	TupleDesc	tupdesc;
 
-	cfg = (MtmConfig *) MemoryContextAlloc(TopMemoryContext,
+	cfg = (MtmConfig *) MemoryContextAllocZero(TopMemoryContext,
 										   sizeof(MtmConfig));
 
 	if (!inside_tx)
@@ -1109,13 +1108,13 @@ MtmLoadConfig()
 		mtm_log(ERROR, "Failed to load saved nodes");
 
 	Assert(SPI_processed <= MtmMaxNodes);
-	tupdesc	= SPI_tuptable->tupdesc;
 
 	cfg->n_nodes = 0;
 	cfg->my_node_id = 0;
 
 	for (i = 0; i < SPI_processed; i++)
 	{
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
 		HeapTuple	tup = SPI_tuptable->vals[i];
 		bool		isnull;
 		int			node_id;
@@ -1166,9 +1165,33 @@ MtmLoadConfig()
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		origin_id = replorigin_by_name(origin_name, true);
 
-		Assert(origin_id != InvalidRepOriginId || MtmIsMonitorWorker);
+		// Assert(origin_id != InvalidRepOriginId || MtmIsMonitorWorker);
 
 		cfg->nodes[i].origin_id = origin_id;
+	}
+
+	/* load basebackup info if any */
+	rc = SPI_execute("select (value->>'node_id')::int, (value->>'end_lsn')::bigint"
+					 " from mtm.config where key='basebackup';", true, 0);
+	if (rc < 0 || rc != SPI_OK_SELECT)
+	{
+		mtm_log(ERROR, "Failed to check basebackup key");
+	}
+	else if (SPI_processed > 0)
+	{
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+		HeapTuple	tup = SPI_tuptable->vals[0];
+		bool		isnull;
+
+		Assert(SPI_processed == 1);
+
+		cfg->backup_node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
+		Assert(!isnull);
+		Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT4OID);
+
+		cfg->backup_end_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 2, &isnull));
+		Assert(!isnull);
+		Assert(TupleDescAttr(tupdesc, 1)->atttypid == INT8OID);
 	}
 
 	SPI_finish();
@@ -1218,6 +1241,18 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	 */
 	if (node_add_cb)
 	{
+		/*
+		 * After a basebackup we should first run receiver from backup
+		 * source node to start commiting prepared transaction to be able
+		 * to finish logical slot creation (which wait for all currently
+		 * running transactions to finish).
+		 */
+		if (new_cfg->backup_node_id > 0)
+		{
+			node_add_cb(new_cfg->backup_node_id, new_cfg, arg);
+			bms_del_member(created, new_cfg->backup_node_id);
+		}
+
 		node_id = -1;
 		while ((node_id = bms_next_member(created, node_id)) >= 0)
 			node_add_cb(node_id, new_cfg, arg);
@@ -1237,6 +1272,7 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 }
 
 /* Helper to find node with specified id in cfg->nodes */
+// XXX: add missing ok
 MtmNode *
 MtmNodeById(MtmConfig *cfg, int node_id)
 {

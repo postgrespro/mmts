@@ -1460,7 +1460,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		receiver_mtm_cfg = MtmLoadConfig();
 
 		if (receiver_mtm_cfg->my_node_id == 0 ||
-			MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL)
+			MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL) //XXX
 			proc_exit(0);
 
 		receiver_mtm_cfg_valid = true;
@@ -1560,7 +1560,32 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 			}
 			case 'Z':
 			{
+				int			rc;
+
 				MtmStateProcessEvent(MTM_RECOVERY_FINISH2, false);
+				Assert(!IsTransactionState());
+
+				if (receiver_mtm_cfg->backup_node_id > 0)
+				{
+					StartTransactionCommand();
+
+					if (SPI_connect() != SPI_OK_CONNECT)
+						mtm_log(ERROR, "could not connect using SPI");
+					PushActiveSnapshot(GetTransactionSnapshot());
+
+					rc = SPI_execute("delete from mtm.config where key='basebackup'", false, 0);
+					if (rc != SPI_OK_INSERT)
+						mtm_log(ERROR, "Failed to load node list");
+
+					if (SPI_finish() != SPI_OK_FINISH)
+						mtm_log(ERROR, "could not finish SPI");
+					PopActiveSnapshot();
+
+					CommitTransactionCommand();
+
+					receiver_mtm_cfg_valid = false;
+				}
+
 				inside_transaction = false;
 				break;
 			}

@@ -148,14 +148,14 @@ MtmStateFill(MtmConfig *cfg)
 
 	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
 
+	mtm_state->recovery_slot = cfg->backup_node_id;
+	BIT_SET(mtm_state->connected_mask, cfg->my_node_id - 1);
+
+	/* re-create configured_mask */
 	mtm_state->configured_mask = 0;
 	BIT_SET(mtm_state->configured_mask, cfg->my_node_id - 1);
 	for (i = 0; i < cfg->n_nodes; i++)
-	{
 		BIT_SET(mtm_state->configured_mask, cfg->nodes[i].node_id - 1);
-	}
-
-	BIT_SET(mtm_state->connected_mask, cfg->my_node_id - 1);
 
 	LWLockRelease(MtmStateLock);
 }
@@ -1275,6 +1275,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 			   *recovery_slot,
 			   *dmq_my_name,
 			   *dmq_node_name;
+	MemoryContext old_context;
 
 	/*
 	 * Transaction is needed for logical slot and replication origin creation.
@@ -1298,7 +1299,48 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		if (!slot_exists(slot))
 			mtm_log(ERROR, "can't find replication slot for node%d", node_id);
 	}
-	else
+
+	if (!MtmNodeById(new_cfg, node_id)->init_done)
+	{
+		/*
+		 * Create recovery slot to hold WAL files that we may need during
+		 * recovery.
+		 */
+		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
+		ReplicationSlotReserveWal();
+		/* Write this slot to disk */
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
+		ReplicationSlotRelease();
+	}
+
+	/* Add dmq destination */
+	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
+							   MtmHeartbeatSendTimeout);
+
+	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	Mtm->peers[node_id - 1].dmq_dest_id = dest;
+	LWLockRelease(MtmLock);
+
+	/* Attach receiver so we can collect tx requests */
+	sender_id = dmq_attach_receiver(dmq_node_name, node_id - 1);
+	sender_to_node[sender_id] = node_id;
+
+	/*
+	 * Finally start receiver.
+	 * bgw handle should be allocated in TopMcxt.
+	 *
+	 * Start receiver before logical slot creation, as during start after a
+	 * basebackup logical stot creation will wait for all in-progress
+	 * transactions to finish (including prepared ones). And to finish them
+	 * we need to start receiver.
+	 */
+	old_context = MemoryContextSwitchTo(TopMemoryContext);
+	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
+											  GetUserId(), MyProcPid);
+	MemoryContextSwitchTo(old_context);
+
+	if (!MtmNodeById(new_cfg, node_id)->init_done)
 	{
 		char	   *query;
 		int			rc;
@@ -1313,17 +1355,6 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		DecodingContextFindStartpoint(ctx);
 		FreeDecodingContext(ctx);
 		ReplicationSlotPersist();
-		ReplicationSlotRelease();
-
-		/*
-		 * Create recovery slot to hold WAL files that we may need during
-		 * recovery.
-		 */
-		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
-		ReplicationSlotReserveWal();
-		/* Write this slot to disk */
-		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
 		ReplicationSlotRelease();
 
 		/*
@@ -1345,26 +1376,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		PopActiveSnapshot();
 	}
 
-	/* Add dmq destination */
-	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
-							   MtmHeartbeatSendTimeout);
-
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
-	Mtm->peers[node_id - 1].dmq_dest_id = dest;
-	LWLockRelease(MtmLock);
-
-	/* Attach receiver so we can collect tx requests */
-	sender_id = dmq_attach_receiver(dmq_node_name, node_id - 1);
-	sender_to_node[sender_id] = node_id;
-
 	CommitTransactionCommand();
-
-	/*
-	 * Finally start receiver.
-	 * Do that after commit, so bgw handle will be allocated in TopMcxt.
-	 */
-	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
-											  GetUserId(), MyProcPid);
 
 	mtm_log(NodeMgmt, "Attached node%d", node_id);
 }
@@ -1489,14 +1501,25 @@ MtmMonitor(Datum arg)
 			mtm_log(ERROR, "could not connect using SPI");
 		PushActiveSnapshot(GetTransactionSnapshot());
 
-		rc = SPI_execute("delete from " MTM_NODES " where is_self = 'f'",
-						 false, 0);
+		rc = SPI_execute("select pg_replication_origin_drop(name) from "
+						 "(select 'mtm_slot_' || id as name from " MTM_NODES " where is_self = 'f') names;",
+							false, 0);
+		if (rc < 0 || rc != SPI_OK_SELECT)
+			mtm_log(ERROR, "Failed to clean up replication origins after a basebackup");
+
+		rc = SPI_execute("delete from " MTM_NODES, false, 0);
 		if (rc < 0 || rc != SPI_OK_DELETE)
 			mtm_log(ERROR, "Failed to clean up nodes after a basebackup");
+
+		rc = SPI_execute("delete from mtm.syncpoints", false, 0);
+		if (rc < 0 || rc != SPI_OK_DELETE)
+			mtm_log(ERROR, "Failed to clean up syncpoints after a basebackup");
 
 		SPI_finish();
 		PopActiveSnapshot();
 		CommitTransactionCommand();
+
+		proc_exit(0);
 	}
 
 	/*

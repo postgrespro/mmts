@@ -28,9 +28,10 @@ sub init
 
 	foreach my $node (@$nodes)
 	{
+		# $node->{_host} = '127.0.0.1';
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', q{
-			unix_socket_directories = ''
+			# unix_socket_directories = ''
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
 
@@ -114,18 +115,44 @@ sub add_node()
 
 	push(@{$self->{nodes}}, get_new_node("node@{[$#{$self->{nodes}} + 2]}"));
 
-	# $self->{nodes}->[0]->backup("backup_for_$new_node_id");
-	# $new_node->init_from_backup($self->{nodes}->[0], "backup_for_$new_node_id");
-
 	return $#{$self->{nodes}};
 }
 
-sub backup()
+sub command_output
 {
-	my ($self, $from, $to) = @_;
+	my ($cmd) = @_;
+	my ($stdout, $stderr);
+	print("# Running: " . join(" ", @{$cmd}) . "\n");
+	my $result = IPC::Run::run $cmd, '>', \$stdout, '2>', \$stderr;
+	ok($result, "@$cmd: exit code 0");
+	# bb writes to stderr
+	return $stderr;
+}
 
-	$self->{nodes}->[$from]->backup("backup_for_$to");
-	$self->{nodes}->[$to]->init_from_backup($self->{nodes}->[$from], "backup_for_$to");
+sub backup_and_init()
+{
+	my ($self, $from, $to, $to_mmid) = @_;
+
+	my $node = $self->{nodes}->[$from];
+	my $backup_name = "backup_for_$to";
+	my $backup_path = $node->backup_dir . '/' . $backup_name;
+	my $port        = $node->port;
+	my $name        = $node->name;
+
+	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
+	my $dumpres = command_output(['pg_basebackup', '-D', $backup_path, '-p', $port,
+		'--no-sync', '-v', '-S', "mtm_recovery_slot_$to_mmid"]);
+
+	print "# Backup finished\n";
+
+	note($dumpres);
+
+	(my $end_lsn) = $dumpres =~ /end point: (.+)/m;
+	note($end_lsn);
+
+	$self->{nodes}->[$to]->init_from_backup($node, $backup_name);
+
+	return $end_lsn;
 }
 
 sub await_nodes()
@@ -141,7 +168,7 @@ sub await_nodes()
 		}
 		else
 		{
-			print("Pleed node$i");
+			print("Polled node$i\n");
 		}
 	}
 }

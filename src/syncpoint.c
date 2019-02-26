@@ -138,7 +138,7 @@ MaybeLogSyncpoint(bool force)
 
 		/* And write it */
 		msg = psprintf(UINT64_FORMAT, min_confirmed_flush);
-		syncpoint_lsn = LogLogicalMessage("S", msg, sizeof(msg) + 1, false);
+		syncpoint_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 
 		Mtm->latestSyncpoint = syncpoint_lsn;
 
@@ -180,17 +180,20 @@ SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn, XLog
 		mtm_log(ERROR, "Failed to save syncpoint");
 
 	/* Trim old syncpoints */
-	sql = psprintf("delete from mtm.syncpoints where node_id = %d and origin_lsn < " UINT64_FORMAT,
-		node_id,
-		trim_lsn
-	);
-	rc = SPI_execute(sql, false, 0);
+	if (trim_lsn != InvalidXLogRecPtr)
+	{
+		sql = psprintf("delete from mtm.syncpoints where node_id = %d and origin_lsn < " UINT64_FORMAT,
+			node_id,
+			trim_lsn
+		);
+		rc = SPI_execute(sql, false, 0);
 
-	if (rc < 0)
-		mtm_log(ERROR, "Failed to trim syncpoints");
+		if (rc < 0)
+			mtm_log(ERROR, "Failed to trim syncpoints");
 
-	/* Advance recovery slot */
-	PhysicalConfirmReceivedLocation(trim_lsn);
+		/* Advance recovery slot */
+		PhysicalConfirmReceivedLocation(trim_lsn);
+	}
 
 	/* Finish transaction */
 	SPI_finish();
@@ -565,7 +568,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 			 * Skip record before lsn of filter_vector as we anyway going to
 			 * ignore them later.
 			 */
-			if (entry.origin_lsn < spvector[node_id - 1].origin_lsn)
+			if (entry.origin_lsn <= spvector[node_id - 1].origin_lsn)
 				continue;
 
 			Assert(entry.origin_lsn != InvalidXLogRecPtr);

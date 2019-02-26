@@ -104,7 +104,7 @@ $$
 $$
 LANGUAGE sql;
 
-CREATE OR REPLACE FUNCTION mtm.add_node(connstr text) RETURNS void AS
+CREATE OR REPLACE FUNCTION mtm.add_node(connstr text) RETURNS int AS
 $$
 DECLARE
     new_node_id int;
@@ -117,6 +117,7 @@ BEGIN
         SELECT id FROM mtm.cluster_nodes
     ) unused_ids
     RETURNING id INTO new_node_id;
+    RETURN new_node_id;
 END
 $$
 LANGUAGE plpgsql;
@@ -127,7 +128,7 @@ DELETE FROM mtm.cluster_nodes WHERE id = $1;
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION mtm.join_node(node_id int)
+CREATE FUNCTION mtm.join_node(node_id int, backup_end pg_lsn)
 RETURNS VOID
 AS 'MODULE_PATHNAME','mtm_join_node'
 LANGUAGE C;
@@ -158,6 +159,17 @@ CREATE TABLE mtm.referee_decision(
     key text primary key not null,
     node_id int
 );
+
+-- possible tuples:
+--   'basebackup' : source node_id and end lsn of basebackup
+--   XXX: move my_node_id here?
+--   XXX: move referee_decision here?
+CREATE TABLE mtm.config(
+    key text primary key not null,
+    value jsonb
+);
+
+CREATE CAST (pg_lsn AS bigint) WITHOUT FUNCTION;
 
 CREATE TABLE mtm.syncpoints(
     node_id int not null,

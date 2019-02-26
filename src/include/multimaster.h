@@ -162,8 +162,10 @@ typedef struct
 
 typedef struct
 {
-	int		n_nodes;
-	int		my_node_id;
+	int			n_nodes;
+	int			my_node_id;
+	int			backup_node_id;
+	XLogRecPtr	backup_end_lsn;
 	MtmNode	nodes[MTM_MAX_NODES];
 } MtmConfig;
 

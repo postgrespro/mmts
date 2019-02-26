@@ -559,11 +559,6 @@ pglogical_receiver_main(Datum main_arg)
 			 receiver_mtm_cfg->my_node_id, nodeId);
 	BgwPoolStart(&Mtm->pools[nodeId-1], worker_proc, db_id, user_id);
 
-	/* Acquire recovery rep slot, so we can advance it without search */
-	ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
-									nodeId),
-							true);
-
 	/* This is main loop of logical replication.
 	 * In case of errors we will try to reestablish connection.
 	 * Also reconnet is forced when node is switch to recovery mode
@@ -581,6 +576,11 @@ pglogical_receiver_main(Datum main_arg)
 		 * Slots at other nodes should be removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
+
+		/* Acquire recovery rep slot, so we can advance it without search */
+		ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
+									nodeId),
+							true);
 
 		LWLockAcquire(MtmLock, LW_EXCLUSIVE);
 		Mtm->peers[nodeId - 1].receiver_pid = MyProcPid;
@@ -613,9 +613,19 @@ pglogical_receiver_main(Datum main_arg)
 
 		if (receiver_ctx.is_recovery)
 		{
-			spvector = SyncpointGetAllLatest();
-			filter_map = RecoveryFilterLoad(-1, spvector, receiver_mtm_cfg);
-			remote_start = QueryRecoveryHorizon(conn, receiver_ctx.node_id, spvector);
+			if (receiver_mtm_cfg->backup_node_id > 0)
+			{
+				spvector = SyncpointGetAllLatest();
+				filter_map = RecoveryFilterLoad(-1, spvector, receiver_mtm_cfg);
+				remote_start = spvector[receiver_ctx.node_id - 1].origin_lsn;
+				Assert(remote_start != InvalidXLogRecPtr);
+			}
+			else
+			{
+				spvector = SyncpointGetAllLatest();
+				filter_map = RecoveryFilterLoad(-1, spvector, receiver_mtm_cfg);
+				remote_start = QueryRecoveryHorizon(conn, receiver_ctx.node_id, spvector);
+			}
 		}
 		else
 		{
@@ -636,13 +646,15 @@ pglogical_receiver_main(Datum main_arg)
 			appendStringInfo(message, "\t remote_start = %"INT64_MODIFIER"x\n", remote_start);
 
 			appendStringInfo(message, "\t syncpoint_vector (origin/local) = {");
-			for (i = 0; i < receiver_mtm_cfg->n_nodes - 1; i++)
+			for (i = 0; i < MtmMaxNodes; i++)
 			{
-				appendStringInfo(message, "%"INT64_MODIFIER"x/%"INT64_MODIFIER"x, ",
-								 spvector[i].origin_lsn, spvector[i].local_lsn);
+				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
+				{
+					appendStringInfo(message, "%d: " LSN_FMT "/" LSN_FMT ", ",
+								 i + 1, spvector[i].origin_lsn, spvector[i].local_lsn);
+				}
 			}
-			appendStringInfo(message, "%"INT64_MODIFIER"x/%"INT64_MODIFIER"x}",
-							 spvector[i].origin_lsn, spvector[i].local_lsn);
+			appendStringInfo(message, "}");
 
 			elog(MtmReceiverStart, message->data, MTM_TAG);
 		}
@@ -776,9 +788,7 @@ pglogical_receiver_main(Datum main_arg)
 
 						// MtmUpdateLsnMapping(nodeId, walEnd);
 						/* Leave if feedback is not sent properly */
-						if (!sendFeedback(conn, now, nodeId)) {
-							goto OnError;
-						}
+						sendFeedback(conn, now, nodeId);
 					}
 					continue;
 				}
@@ -963,6 +973,7 @@ pglogical_receiver_main(Datum main_arg)
 		hash_destroy(filter_map);
 		ByteBufferReset(&buf);
 		PQfinish(conn);
+		ReplicationSlotRelease();
 
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_ERROR, false);
 
