@@ -128,7 +128,7 @@ DELETE FROM mtm.cluster_nodes WHERE id = $1;
 $$
 LANGUAGE sql;
 
-CREATE FUNCTION mtm.join_node(node_id int, backup_end pg_lsn)
+CREATE FUNCTION mtm.join_node(node_id int, backup_end_lsn pg_lsn)
 RETURNS VOID
 AS 'MODULE_PATHNAME','mtm_join_node'
 LANGUAGE C;
