@@ -969,7 +969,6 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PGresult   *res;
 	MtmConfig  *cfg = MtmLoadConfig();
 	XLogRecPtr	curr_lsn;
-	StringInfoData syncpoints_query;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");

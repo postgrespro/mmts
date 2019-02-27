@@ -12,6 +12,8 @@ sub new
 	my ($class, $n_nodes) = @_;
 	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
 
+	$PostgresNode::test_pghost = "127.0.0.1";
+
 	my $self = {
 		nodes => \@nodes,
 		recv_timeout => 3
@@ -28,10 +30,10 @@ sub init
 
 	foreach my $node (@$nodes)
 	{
-		# $node->{_host} = '127.0.0.1';
+		$node->{_host} = '127.0.0.1';
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', q{
-			# unix_socket_directories = ''
+			unix_socket_directories = ''
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
 
@@ -141,7 +143,7 @@ sub backup_and_init()
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	my $dumpres = command_output(['pg_basebackup', '-D', $backup_path, '-p', $port,
-		'--no-sync', '-v', '-S', "mtm_recovery_slot_$to_mmid"]);
+		'-h', '127.0.0.1', '--no-sync', '-v', '-S', "mtm_recovery_slot_$to_mmid"]);
 
 	print "# Backup finished\n";
 

@@ -28,7 +28,16 @@ table t;
 table t;
 
 -- test CTA replication inside explain
-EXPLAIN ANALYZE create table explain_cta as select 42;
+DO $$
+BEGIN
+	EXECUTE 'EXPLAIN ANALYZE create table explain_cta as select 42 as col;';
+END$$;
+
+table explain_cta;
+
+\c :node3
+
+table explain_cta;
 
 --- test schemas
 create user user1;
