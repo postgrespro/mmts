@@ -45,10 +45,10 @@ typedef enum MtmLogTag
 	DeadlockUpdate			= LOG,
 	DeadlockSerialize		= DEBUG3,
 
-	/* ddl XXX! */
-	DMLStmtOutgoing			= DEBUG1,
-	DMLStmtIncoming			= DEBUG1,
-	DMLProcessingTrace		= DEBUG1,
+	/* ddl */
+	DDLStmtOutgoing			= DEBUG1,
+	DDLStmtIncoming			= DEBUG1,
+	DDLProcessingTrace		= DEBUG1,
 
 	/* broadcast service */
 	BroadcastNotice			= DEBUG1,

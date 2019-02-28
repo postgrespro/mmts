@@ -308,13 +308,43 @@ MtmGucSet(VariableSetStmt *stmt, const char *queryStr)
 	MemoryContextSwitchTo(oldcontext);
 }
 
+/*
+ * the bare comparison function for GUC names
+ */
+static int
+_guc_name_compare(const char *namea, const char *nameb)
+{
+	/*
+	 * The temptation to use strcasecmp() here must be resisted, because the
+	 * array ordering has to remain stable across setlocale() calls. So, build
+	 * our own with a simple ASCII-only downcasing.
+	 */
+	while (*namea && *nameb)
+	{
+		char		cha = *namea++;
+		char		chb = *nameb++;
+
+		if (cha >= 'A' && cha <= 'Z')
+			cha += 'a' - 'A';
+		if (chb >= 'A' && chb <= 'Z')
+			chb += 'a' - 'A';
+		if (cha != chb)
+			return cha - chb;
+	}
+	if (*namea)
+		return 1;				/* a is longer */
+	if (*nameb)
+		return -1;				/* b is longer */
+	return 0;
+}
+
 static int
 _var_name_cmp(const void *a, const void *b)
 {
 	const struct config_generic *confa = *(struct config_generic * const *) a;
 	const struct config_generic *confb = *(struct config_generic * const *) b;
 
-	return strcmp(confa->name, confb->name);
+	return _guc_name_compare(confa->name, confb->name);
 }
 
 static struct config_generic *
@@ -361,7 +391,9 @@ MtmGucSerialize(void)
 		appendStringInfoString(serialized_gucs, " TO ");
 
 		gconf = fing_guc_conf(cur_entry->key);
-		if (gconf && (gconf->vartype == PGC_STRING || gconf->vartype == PGC_ENUM || (gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME))))
+		if (gconf && (gconf->vartype == PGC_STRING ||
+					  gconf->vartype == PGC_ENUM ||
+					  (gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME))))
 		{
 			appendStringInfoString(serialized_gucs, "'");
 			appendStringInfoString(serialized_gucs, cur_entry->value);
@@ -379,7 +411,10 @@ MtmGucSerialize(void)
 	 * so our callback do not react on that.
 	 */
 	search_path = GetConfigOption("search_path", false, true);
-	appendStringInfo(serialized_gucs, "SET search_path TO %s; ", search_path);
+	if (strcmp(search_path, "\"\"") != 0)
+		appendStringInfo(serialized_gucs, "SET search_path TO %s; ", search_path);
+	else
+		appendStringInfo(serialized_gucs, "SET search_path TO ''; ");
 
 	return serialized_gucs->data;
 }
@@ -401,14 +436,13 @@ MtmProcessDDLCommand(char const* queryString, bool transactional)
 		queryString = psprintf("%s %s", gucCtx, queryString);
 
 		/* Transactional DDL */
-		mtm_log(DMLStmtOutgoing, "Sending DDL: %s", queryString);
+		mtm_log(DDLStmtOutgoing, "Sending DDL: %s", queryString);
 		LogLogicalMessage("D", queryString, strlen(queryString) + 1, true);
-		MtmTx.contains_ddl = true;
 	}
 	else
 	{
 		/* Concurrent DDL */
-		mtm_log(DMLStmtOutgoing, "Sending concurrent DDL: %s", queryString);
+		mtm_log(DDLStmtOutgoing, "Sending concurrent DDL: %s", queryString);
 		XLogFlush(LogLogicalMessage("C", queryString, strlen(queryString) + 1, false));
 	}
 }
@@ -525,7 +559,7 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 		MemoryContext oldMemContext = MemoryContextSwitchTo(MtmApplyContext);
 		bool		captured = false;
 
-		mtm_log(DMLProcessingTrace,
+		mtm_log(DDLProcessingTrace,
 				"MtmProcessUtilityReciever: tag=%s, context=%d, issubtrans=%d,  statement=%s",
 				CreateCommandTag(parsetree), context, IsSubTransaction(), queryString);
 
@@ -594,7 +628,7 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 		/* prevent captured statement from execution */
 		if (captured)
 		{
-			mtm_log(DMLProcessingTrace, "MtmCapturedDDL = %s", CreateCommandTag((Node *) MtmCapturedDDL));
+			mtm_log(DDLProcessingTrace, "MtmCapturedDDL = %s", CreateCommandTag((Node *) MtmCapturedDDL));
 			return;
 		}
 	}
@@ -631,7 +665,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	strncpy(stmt_string, queryString + stmt_start, stmt_len);
 	stmt_string[stmt_len] = 0;
 
-	mtm_log(DMLProcessingTrace,
+	mtm_log(DDLProcessingTrace,
 			"MtmProcessUtilitySender tag=%d, context=%d, issubtrans=%d,  statement=%s",
 			nodeTag(parsetree), context, IsSubTransaction(), stmt_string);
 
@@ -658,7 +692,6 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		}
 			/* no break */
 		case T_PlannedStmt:
-		case T_ClosePortalStmt:
 		case T_FetchStmt:
 		case T_DoStmt:
 		case T_CommentStmt:
@@ -678,6 +711,8 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_AlterSystemStmt:
 		case T_CreatedbStmt:
 		case T_DropdbStmt:
+		case T_DeclareCursorStmt:
+		case T_ClosePortalStmt:
 			skipCommand = true;
 			break;
 
@@ -864,7 +899,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 	if (!skipCommand && !MtmDDLStatement)
 	{
-		mtm_log(DMLProcessingTrace,
+		mtm_log(DDLProcessingTrace,
 				"Process DDL statement '%s', MtmTx.isReplicated=%d, MtmIsLogicalReceiver=%d",
 				stmt_string, MtmIsLogicalReceiver,
 				MtmIsLogicalReceiver);
@@ -873,7 +908,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		MtmDDLStatement = stmt_string;
 	}
 	else
-		mtm_log(DMLProcessingTrace,
+		mtm_log(DDLProcessingTrace,
 				"Skip utility statement '%s': skip=%d, insideDDL=%d",
 				stmt_string, skipCommand, MtmDDLStatement != NULL);
 
@@ -906,34 +941,41 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		if (prevMyXactAccessedTempRel)
 			MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 	}
-	if (MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL)
-	{
-		mtm_log(DMLProcessingTrace,
-				"Xact accessed temp table, stopping replication of statement '%s'",
-				stmt_string);
-		MtmTx.accessed_temp = true; /* Skip */
-	}
 
 	if (executed)
 	{
 		MtmFinishDDLCommand();
 		MtmDDLStatement = NULL;
-	}
-	if (IsA(parsetree, CreateStmt))
-	{
-		CreateStmt* create = (CreateStmt*)parsetree;
-		Oid relid = RangeVarGetRelid(create->relation, NoLock, true);
-		if (relid != InvalidOid) {
-			Oid constraint_oid;
-			Bitmapset* pk = get_primary_key_attnos(relid, true, &constraint_oid);
-			if (pk == NULL && !MtmVolksWagenMode && MtmIgnoreTablesWithoutPk) {
-				elog(WARNING,
-					 "Table %s.%s without primary will not be replicated",
-					 create->relation->schemaname ? create->relation->schemaname : "public",
-					 create->relation->relname);
-			}
+
+		if (MyXactFlags & XACT_FLAGS_ACCESSEDTEMPREL)
+		{
+			mtm_log(DDLProcessingTrace,
+					"Xact accessed temp table, stopping replication of statement '%s'",
+					stmt_string);
+			MtmTx.contains_temp_ddl = true;
+			MyXactFlags &= ~XACT_FLAGS_ACCESSEDTEMPREL;
+		}
+		else
+		{
+			MtmTx.contains_persistent_ddl = true;
 		}
 	}
+
+	// if (IsA(parsetree, CreateStmt))
+	// {
+	// 	CreateStmt* create = (CreateStmt*)parsetree;
+	// 	Oid relid = RangeVarGetRelid(create->relation, NoLock, true);
+	// 	if (relid != InvalidOid) {
+	// 		Oid constraint_oid;
+	// 		Bitmapset* pk = get_primary_key_attnos(relid, true, &constraint_oid);
+	// 		if (pk == NULL && !MtmVolksWagenMode && MtmIgnoreTablesWithoutPk) {
+	// 			elog(WARNING,
+	// 				 "Table %s.%s without primary will not be replicated",
+	// 				 create->relation->schemaname ? create->relation->schemaname : "public",
+	// 				 create->relation->relname);
+	// 		}
+	// 	}
+	// }
 }
 
 static void
@@ -1034,7 +1076,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 	LogLogicalMessage(transactional ? "D" : "C",
 					  messageBody, strlen(messageBody) + 1, transactional);
 
-	mtm_log(DMLStmtIncoming, "%d: Executing utility statement %s",
+	mtm_log(DDLStmtIncoming, "%d: Executing utility statement %s",
 			MyProcPid, messageBody);
 
 	debug_query_string = messageBody;

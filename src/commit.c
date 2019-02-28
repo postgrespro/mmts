@@ -134,10 +134,10 @@ MtmBeginTransaction()
 
 	/* Reset MtmTx */
 	MtmTx.explicit_twophase = false;
-	MtmTx.contains_ddl = false; // will be set by executor hook
+	MtmTx.contains_temp_ddl = false;
+	MtmTx.contains_persistent_ddl = false;
 	MtmTx.contains_dml = false;
 	MtmTx.gid[0] = '\0';
-	MtmTx.accessed_temp = false;
 	MtmTx.distributed = true;
 
 	MtmDDLResetStatement();
@@ -177,19 +177,14 @@ MtmTwoPhaseCommit()
 	char	stream[DMQ_NAME_MAXLEN];
 	pgid_t  gid;
 
-	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
+	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
 
 	if (!MtmTx.distributed)
 		return false;
 
-	if (MtmTx.accessed_temp)
-	{
-		if (MtmVolksWagenMode)
-			return false;
-		else
-			mtm_log(ERROR, "Transaction accessed both temporary and replicated table, can't prepare");
-	}
+	if (MtmTx.contains_temp_ddl)
+		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 
 	if (!IsTransactionBlock())
 	{
