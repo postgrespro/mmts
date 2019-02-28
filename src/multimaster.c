@@ -854,7 +854,9 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		pub_stmt->pubname = MULTIMASTER_NAME;
 		pub_stmt->for_all_tables = true;
 		pub_stmt->tables = NIL;
-		pub_stmt->options = NIL;
+		pub_stmt->options = list_make1(
+			makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
+		);
 		CreatePublication(pub_stmt);
 
 		/* liftoff */
