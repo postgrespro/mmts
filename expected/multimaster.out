@@ -2,46 +2,59 @@
 select conninfo as node1 from mtm.nodes() where id = 1 \gset
 select conninfo as node2 from mtm.nodes() where id = 2 \gset
 select conninfo as node3 from mtm.nodes() where id = 3 \gset
-
-
 -- check that implicit empty transactions works fine
 create table t (a int, b text);
 create or replace function f1() returns trigger as $$begin raise notice 'b: %', new.b; return NULL; end$$ language plpgsql;
 create trigger tr1 before insert on t for each row execute procedure f1();
 insert into t values (1, 'asdf');
+NOTICE:  b: asdf
 copy t from stdout;
-1	baz
-\.
-
-
+NOTICE:  b: baz
 -- test mixed temp table and persistent write
 \c :node1
 CREATE TEMPORARY TABLE box_temp (f1 box);
 CREATE TABLE box_persistent (f1 box);
-
 insert into box_temp values('(45,55,45,49)');
 insert into box_persistent values('(45,55,45,49)');
-
 begin;
 insert into box_temp values('(45,55,45,49)');
 insert into box_persistent values('(45,55,45,49)');
 commit;
-
+ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 table box_temp;
+       f1        
+-----------------
+ (45,55),(45,49)
+(1 row)
+
 table box_persistent;
+       f1        
+-----------------
+ (45,55),(45,49)
+(1 row)
 
 begin;
 create temporary table sp_test_t(i serial primary key);
 create table sp_test(i int primary key);
 commit;
-
+ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 create temporary table sp_test_t1(i serial primary key);
 create table sp_test1(i int primary key);
-
 \c :node2
 table box_temp;
+ERROR:  relation "box_temp" does not exist
+LINE 1: table box_temp;
+              ^
 table box_persistent;
+       f1        
+-----------------
+ (45,55),(45,49)
+(1 row)
+
 table sp_test1;
+ i 
+---
+(0 rows)
 
 \c :node1
 create table t_tempddl_mix(id int primary key);
@@ -50,12 +63,19 @@ begin;
 insert into t_tempddl_mix values(42);
 create temp table tempddl(id int);
 commit;
-
+ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 table t_tempddl_mix;
+ id 
+----
+  1
+(1 row)
 
 \c :node2
 table t_tempddl_mix;
-
+ id 
+----
+  1
+(1 row)
 
 -- test CTA replication inside explain
 \c :node1
@@ -64,10 +84,17 @@ BEGIN
 	EXECUTE 'EXPLAIN ANALYZE create table explain_cta as select 42 as col;';
 END$$;
 table explain_cta;
+ col 
+-----
+  42
+(1 row)
 
 \c :node3
 table explain_cta;
-
+ col 
+-----
+  42
+(1 row)
 
 --- test schemas
 \c :node1
@@ -76,12 +103,23 @@ create schema user1;
 alter schema user1 owner to user1;
 create table user1.test(i int primary key);
 table test;
+ERROR:  relation "test" does not exist
+LINE 1: table test;
+              ^
 table user1.test;
+ i 
+---
+(0 rows)
 
 \c :node2
 table test;
+ERROR:  relation "test" does not exist
+LINE 1: table test;
+              ^
 table user1.test;
-
+ i 
+---
+(0 rows)
 
 --- scheduler example with secdefs and triggers
 \c :node1
@@ -94,7 +132,6 @@ ALTER  TABLE aaa_copy ADD submit_time timestamp NOT NULL DEFAULT now();
 ALTER  TABLE aaa_copy ADD submitter text NOT NULL DEFAULT session_user;
 ALTER  TABLE aaa_copy ADD version_id SERIAL NOT NULL;
 ALTER  TABLE aaa_copy ADD PRIMARY KEY (id, version_id);
-
 CREATE FUNCTION add_aaa(
   aid   integer
 ) RETURNS integer AS
@@ -107,7 +144,6 @@ BEGIN
 END
 $BODY$
 LANGUAGE plpgsql SECURITY DEFINER;
-
 CREATE FUNCTION drop_aaa(
   aid   integer
 ) RETURNS integer AS
@@ -118,7 +154,6 @@ BEGIN
 END
 $BODY$
 LANGUAGE plpgsql SECURITY DEFINER;
-
 CREATE OR REPLACE FUNCTION on_aaa_update() RETURNS TRIGGER
 AS $BODY$
 DECLARE
@@ -132,7 +167,6 @@ BEGIN
   RETURN OLD;
 END
 $BODY$ LANGUAGE plpgsql;
-
 CREATE OR REPLACE FUNCTION on_aaa_delete() RETURNS TRIGGER
 AS $BODY$
 DECLARE
@@ -143,29 +177,51 @@ BEGIN
   RETURN OLD;
 END
 $BODY$ LANGUAGE plpgsql;
-
 CREATE TRIGGER aaa_update_trigger
 AFTER UPDATE OR INSERT ON aaa
   FOR EACH ROW EXECUTE PROCEDURE on_aaa_update();
-
 CREATE TRIGGER aaa_delete_trigger
 BEFORE DELETE ON aaa
   FOR EACH ROW EXECUTE PROCEDURE on_aaa_delete();
-
 select add_aaa(58);
+ add_aaa 
+---------
+      58
+(1 row)
+
 select add_aaa(5833);
+ add_aaa 
+---------
+    5833
+(1 row)
+
 select add_aaa(582);
+ add_aaa 
+---------
+     582
+(1 row)
 
 delete from aaa;
-
 table aaa;
+ id | text 
+----+------
+(0 rows)
+
 table aaa_copy;
+ id | text | submit_time | submitter | version_id 
+----+------+-------------+-----------+------------
+(0 rows)
 
 \c :node3
-
 table aaa;
-table aaa_copy;
+ id | text 
+----+------
+(0 rows)
 
+table aaa_copy;
+ id | text | submit_time | submitter | version_id 
+----+------+-------------+-----------+------------
+(0 rows)
 
 -- check our custom publications don't interfere with updates/deletes
 \c :node1
@@ -173,30 +229,45 @@ create table tbl(id int);
 insert into tbl values (42);
 update tbl set id = id * 2;
 table tbl;
+ id 
+----
+ 84
+(1 row)
 
 \c :node2
 table tbl;
+ id 
+----
+ 84
+(1 row)
+
 drop table tbl;
-
-
 -- search path checks
 \c :node1
 set search_path to '';
 create table sp_test(i int primary key);
+ERROR:  no schema has been selected to create in
+LINE 1: create table sp_test(i int primary key);
+                     ^
 create table public.sp_test(i int primary key);
 reset search_path;
 drop table sp_test;
 create table sp_test(i int primary key);
-
-
 -- portals
-
 BEGIN;
 DECLARE foo1 CURSOR WITH HOLD FOR SELECT 1;
 DECLARE foo2 CURSOR WITHOUT HOLD FOR SELECT 1;
 SELECT name FROM pg_cursors ORDER BY 1;
+ name 
+------
+ foo1
+ foo2
+(2 rows)
+
 CLOSE ALL;
 SELECT name FROM pg_cursors ORDER BY 1;
+ name 
+------
+(0 rows)
+
 COMMIT;
-
-

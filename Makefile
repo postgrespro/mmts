@@ -29,7 +29,7 @@ EXTRA_INSTALL=contrib/mmts
 
 all: multimaster.so
 
-check: temp-install
+check: | temp-install regress
 	$(prove_check)
 
 start: temp-install
