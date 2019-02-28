@@ -148,7 +148,10 @@ MtmStateFill(MtmConfig *cfg)
 
 	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
 
-	mtm_state->recovery_slot = cfg->backup_node_id;
+	// XXX: that kind of dangerous. Move to mtm-monitor?
+	if (cfg->backup_node_id != 0)
+		mtm_state->recovery_slot = cfg->backup_node_id;
+
 	BIT_SET(mtm_state->connected_mask, cfg->my_node_id - 1);
 
 	/* re-create configured_mask */
