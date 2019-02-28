@@ -479,8 +479,6 @@ create_rel_estate(Relation rel)
 static bool
 process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 {
-	TransactionId xid;
-
 	gtid->node = pq_getmsgint(s, 4);
 	gtid->xid = pq_getmsgint64(s);
 
@@ -496,8 +494,8 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	StartTransactionCommand();
 
 	/* ddd */
-	xid = GetCurrentTransactionId();
-	MtmDeadlockDetectorAddXact(xid, gtid);
+	gtid->my_xid = GetCurrentTransactionId();
+	MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
 
 	// AcceptInvalidationMessages();
 	// if (!receiver_mtm_cfg_valid)
@@ -955,17 +953,16 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			res = PrepareTransactionBlock(gid);
 			mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 
+			CommitTransactionCommand();
+
 			/*
-			 * Clean this before CommitTransactionCommand(). Otherwise we'll
-			 * have a time window where exception handler will try to call
-			 * MtmDeadlockDetectorRemoveXact() with InvalidTransactionId,
-			 * because there is already no active transaction.
+			 * Clean this after CommitTransactionCommand(), as it may throw an
+			 * error that we should propagate to the originating node.
 			 */
 			current_gtid->node = 0;
 			current_gtid->xid = InvalidTransactionId;
+			current_gtid->my_xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
-
-			CommitTransactionCommand();
 
 			if (receiver_ctx->parallel_allowed)
 			{
@@ -1614,7 +1611,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		/* handle only prepare errors here */
 		if (TransactionIdIsValid(current_gtid.xid))
 		{
-			MtmDeadlockDetectorRemoveXact(GetCurrentTransactionIdIfAny());
+			MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
 				mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
 		}

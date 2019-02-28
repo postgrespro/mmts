@@ -89,14 +89,16 @@ typedef uint64 nodemask_t;
 typedef struct
 {
 	int			node;			/* One based id of node initiating transaction */
-	TransactionId xid;			/* Transaction ID at this node */
+	TransactionId xid;			/* Transaction ID at origin node */
+	TransactionId my_xid;			/* Transaction ID at our node */
 } GlobalTransactionId;
 
 typedef struct
 {
-	bool		contains_ddl;
+	bool		contains_temp_ddl;
+	bool		contains_persistent_ddl;
 	bool		contains_dml;	/* transaction contains DML statements */
-	bool		accessed_temp;
+	// bool		accessed_temp;
 	bool		explicit_twophase;	/* user level 2PC */
 	bool		distributed;
 	pgid_t		gid;			/* global transaction identifier (only in case
