@@ -612,7 +612,7 @@ MtmAllApplyWorkersFinished()
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
 
 		if (ntasks != 0)
-			false;
+			return false;
 	}
 
 	return true;
