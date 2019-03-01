@@ -971,6 +971,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PGresult   *res;
 	MtmConfig  *cfg = MtmLoadConfig();
 	XLogRecPtr	curr_lsn;
+	int			i;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
@@ -1030,7 +1031,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	/* as we going to write that lsn on a new node, let's sync it */
 	XLogFlush(curr_lsn);
 
-	for (int i = 0; i < cfg->n_nodes; i++)
+	for (i = 0; i < cfg->n_nodes; i++)
 	{
 		char	   *ro_name;
 		RepOriginId	ro_id;
@@ -1051,8 +1052,11 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 		replorigin_session_origin = InvalidRepOriginId;
 	}
-	char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
-	LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+
+	{
+		char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
+		LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+	}
 
 	/* fill MTM_NODES with a adjusted list of nodes */
 	query = psprintf("insert into " MTM_NODES
