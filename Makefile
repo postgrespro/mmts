@@ -29,7 +29,11 @@ EXTRA_INSTALL=contrib/mmts
 
 all: multimaster.so
 
-check: | temp-install regress
+submake-regress:
+	$(MAKE) -C $(top_builddir)/src/test/regress all
+	$(MAKE) -C $(top_builddir)/src/test/regress tablespace-setup
+
+check: temp-install submake-regress
 	$(prove_check)
 
 start: temp-install
@@ -43,37 +47,12 @@ start: temp-install
 stop:
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
-		PGPORT='6$(DEF_PGPORT)' \
-		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
 		perl run.pl --stop
-
-submake-regress:
-	$(MAKE) -C $(top_builddir)/src/test/regress all
-	$(MAKE) -C $(top_builddir)/src/test/regress tablespace-setup
-
-run-regress: submake-regress
-	$(with_temp_install) \
-	PGPORT='6$(DEF_PGPORT)' \
-	PGHOST='127.0.0.1' \
-	$(top_builddir)/src/test/regress/pg_regress \
-	--use-existing \
-	--bindir= \
-	$(pg_regress_locale_flags) multimaster || export ERROR=1; \
-	\
-	cd $(srcdir) && TESTDIR='$(CURDIR)' \
-		$(with_temp_install) \
-		PGPORT='6$(DEF_PGPORT)' \
-		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
-		perl run.pl --stop; \
-	\
-	[ -z $${ERROR} ]
-
-regress: | start run-regress
 
 run-pg-regress: submake-regress
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
 	$(with_temp_install) \
-	PGPORT='6$(DEF_PGPORT)' \
+	PGPORT='65432' \
 	PGHOST='127.0.0.1' \
 	PGUSER='$(USER)' \
 	./pg_regress \

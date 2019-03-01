@@ -10,7 +10,6 @@ my $action = $ARGV[0];
 if ($action eq "--start")
 {
 	$PostgresNode::last_port_assigned = 65431;
-	$PostgresNode::test_pghost = "127.0.0.1";
 
 	my $cluster = new Cluster($n_nodes);
 	$cluster->init();
@@ -33,6 +32,3 @@ else
 {
 	die("Usage: run.pl --start/--stop\n");
 }
-
-
-

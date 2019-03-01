@@ -5,8 +5,6 @@ use Cluster;
 use TestLib;
 use Test::More tests => 6;
 
-$PostgresNode::last_port_assigned = 65431;
-
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();
