@@ -22,6 +22,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/syscache.h"
 #include "utils/inval.h"
+#include "libpq/pqformat.h"
 
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -397,26 +398,21 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 			if (BIT_CHECK(cmask, node_id - 1))
 			{
-				MtmArbiterMessage msg;
+				StringInfoData msg;
 				DmqDestinationId dest_id;
 
-				memset(&msg, '\0', sizeof(MtmArbiterMessage));
-				MtmInitMessage(&msg, MSG_POLL_REQUEST);
-				strncpy(msg.gid, tx->gid, GIDSIZE);
-
-				mtm_log(ResolverTraceTxMsg,
-						"[RESOLVER] sending request for %s to node%d",
-						tx->gid, node_id);
-
-				// XXX: we need here to await destination
 				LWLockAcquire(MtmLock, LW_SHARED);
 				dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
 				LWLockRelease(MtmLock);
-
 				Assert(dest_id >= 0);
 
-				dmq_push_buffer(dest_id, "txreq", &msg,
-								sizeof(MtmArbiterMessage));
+				initStringInfo(&msg);
+				pq_send_ascii_string(&msg, tx->gid);
+				dmq_push_buffer(dest_id, "txreq", msg.data, msg.len);
+
+				mtm_log(ResolverTraceTxMsg,
+						"[RESOLVER] sent request for %s to node%d",
+						tx->gid, node_id);
 			}
 		}
 	}
@@ -429,21 +425,20 @@ static void
 handle_responses(void)
 {
 	DmqSenderId sender_id;
-	StringInfoData buffer;
+	StringInfoData msg;
 
-	while(dmq_pop_nb(&sender_id, &buffer, MtmGetConnectedNodeMask()))
+	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask()))
 	{
-		int node_id;
-		MtmArbiterMessage *msg;
+		int			node_id;
+		const char *gid;
+		MtmTxState	state;
 
 		node_id = sender_to_node[sender_id];
-		msg = (MtmArbiterMessage *) buffer.data;
-
-		Assert(msg->node == node_id);
-		Assert(msg->code == MSG_POLL_STATUS);
+		gid = pq_getmsgrawstring(&msg);
+		state = pq_getmsgint(&msg, 4);
 
 		LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-		resolve_tx(msg->gid, node_id, msg->state);
+		resolve_tx(gid, node_id, state);
 		LWLockRelease(resolver_state->lock);
 	}
 }
@@ -506,6 +501,8 @@ ResolverMain(Datum main_arg)
 		int		rc;
 
 		CHECK_FOR_INTERRUPTS();
+
+		// XXX: add tx start/commit to free memory?
 
 		AcceptInvalidationMessages();
 		if (!config_valid)

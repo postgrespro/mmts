@@ -21,12 +21,19 @@
 #include "catalog/pg_subscription.h"
 #include "tcop/tcopprot.h"
 #include "postmaster/autovacuum.h"
+#include "libpq/pqformat.h"
 
 #include "multimaster.h"
 #include "logger.h"
 #include "ddl.h"
 #include "state.h"
 #include "syncpoint.h"
+
+typedef struct
+{
+	StringInfo	message;
+	int			node_id;
+} mtm_msg;
 
 static bool	force_in_bgworker;
 
@@ -38,10 +45,7 @@ static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
 
-static bool GatherPrepares(TransactionId xid, nodemask_t participantsMask,
-						   int *failed_at);
-static void GatherPrecommits(TransactionId xid, nodemask_t participantsMask,
-						     MtmMessageCode code);
+static void gather(uint64 participants, mtm_msg *messages, int *msg_count);
 
 static void
 pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
@@ -170,12 +174,13 @@ MtmBeginTransaction()
 bool
 MtmTwoPhaseCommit()
 {
-	nodemask_t participantsMask;
-	bool	ret;
-	int		failed_at = 0;
+	uint64		participants;
+	bool		ret;
 	TransactionId xid;
-	char	stream[DMQ_NAME_MAXLEN];
-	pgid_t  gid;
+	char		stream[DMQ_NAME_MAXLEN];
+	char		gid[GIDSIZE];
+	mtm_msg		messages[MTM_MAX_NODES];
+	int			n_messages;
 
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
@@ -206,7 +211,7 @@ MtmTwoPhaseCommit()
 	 *
 	 * It is only used during startup of WalSender(node_id) in recovered mode
 	 * to create a barrier after which all transactions doing our 3PC are
-	 * guaranted to have seen participantsMask with node_id enabled, so the
+	 * guaranted to have seen participants with node_id enabled, so the
 	 * receiver can apply them in parallel and be sure that precommit will
 	 * not happens before node_id applies prepare.
 	 *
@@ -217,8 +222,8 @@ MtmTwoPhaseCommit()
 
 	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
 
-	participantsMask = MtmGetEnabledNodeMask() &
-						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+	participants = MtmGetEnabledNodeMask() &
+					~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
 
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)
@@ -230,119 +235,62 @@ MtmTwoPhaseCommit()
 	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 	CommitTransactionCommand();
 
-	ret = GatherPrepares(xid, participantsMask, &failed_at);
-	if (!ret)
+	gather(participants, messages, &n_messages);
+	dmq_stream_unsubscribe(stream);
+
+	for (int i = 0; i < n_messages; i++)
 	{
-		dmq_stream_unsubscribe(stream);
-		FinishPreparedTransaction(gid, false, false);
-		mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-		mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
-						gid, failed_at);
+		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
+
+		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
+		if (status == MSG_ABORTED)
+		{
+			FinishPreparedTransaction(gid, false, false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+			mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
+							gid, messages[i].node_id);
+		}
 	}
+
+	dmq_stream_subscribe(gid);
 
 	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 	mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-	GatherPrecommits(xid, participantsMask, MSG_PRECOMMITTED);
+	gather(participants, messages, &n_messages);
 
 	StartTransactionCommand();
 	FinishPreparedTransaction(gid, true, false);
 	mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-	GatherPrecommits(xid, participantsMask, MSG_COMMITTED);
+	// XXX: make this conditional
+	gather(participants, messages, &n_messages);
 
 	LWLockRelease(MtmCommitBarrier);
 
-	dmq_stream_unsubscribe(stream);
-	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
+	dmq_stream_unsubscribe(gid);
+	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);
 
 	MaybeLogSyncpoint(false);
 
 	return true;
 }
 
-static bool
-GatherPrepares(TransactionId xid, nodemask_t participantsMask, int *failed_at)
-{
-	bool prepared = true;
-
-	while (participantsMask != 0)
-	{
-		bool ret;
-		DmqSenderId sender_id;
-		StringInfoData buffer;
-		MtmArbiterMessage *msg;
-
-		ret = dmq_pop(&sender_id, &buffer, participantsMask);
-
-		if (ret)
-		{
-			msg = (MtmArbiterMessage *) buffer.data;
-
-			Assert(msg->node == sender_to_node[sender_id]);
-			Assert(msg->code == MSG_PREPARED || msg->code == MSG_ABORTED);
-			Assert(msg->dxid == xid);
-			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
-
-			mtm_log(MtmTxTrace,
-				"GatherPrepares: got '%s' for tx" XID_FMT " from node%d",
-				msg->code == MSG_PREPARED ? "ok" : "failed",
-				xid, sender_to_node[sender_id]);
-
-			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
-
-			if (msg->code == MSG_ABORTED)
-			{
-				prepared = false;
-				*failed_at = msg->node;
-			}
-		}
-		else
-		{
-			/*
-			 * If queue is detached then the neignbour node is probably
-			 * disconnected. Let's wait when it became disabled as we can
-			 * became offline by this time.
-			 */
-			if (!BIT_CHECK(MtmGetEnabledNodeMask(), sender_to_node[sender_id] - 1))
-			{
-				BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
-				mtm_log(MtmTxTrace,
-					"GatherPrepares: dropping node%d from participants of tx" XID_FMT,
-					sender_to_node[sender_id], xid);
-			}
-		}
-	}
-
-	// XXX: assert that majority has responded
-
-	return prepared;
-}
-
 static void
-GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode code)
+gather(uint64 participants, mtm_msg *messages, int *msg_count)
 {
-	while (participantsMask != 0)
+	*msg_count = 0;
+	while (participants != 0)
 	{
 		bool ret;
 		DmqSenderId sender_id;
-		StringInfoData buffer;
-		MtmArbiterMessage *msg;
+		StringInfo msg = makeStringInfo();
 
-		ret = dmq_pop(&sender_id, &buffer, participantsMask);
-
+		ret = dmq_pop(&sender_id, msg, participants);
 		if (ret)
 		{
-			msg = (MtmArbiterMessage *) buffer.data;
-
-			Assert(msg->node == sender_to_node[sender_id]);
-			Assert(msg->code == code);
-			Assert(msg->dxid == xid);
-			Assert(BIT_CHECK(participantsMask, sender_to_node[sender_id] - 1));
-
-			mtm_log(MtmTxTrace,
-				"GatherPrecommits: got 'ok' for tx" XID_FMT " from node%d",
-				xid, sender_to_node[sender_id]);
-
-			BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+			messages[*msg_count].message = msg;
+			messages[*msg_count].node_id = sender_to_node[sender_id];
+			(*msg_count)++;
+			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
 		}
 		else
 		{
@@ -353,15 +301,13 @@ GatherPrecommits(TransactionId xid, nodemask_t participantsMask, MtmMessageCode 
 			 */
 			if (!BIT_CHECK(MtmGetEnabledNodeMask(), sender_to_node[sender_id] - 1))
 			{
-				BIT_CLEAR(participantsMask, sender_to_node[sender_id] - 1);
+				BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
 				mtm_log(MtmTxTrace,
-					"GatherPrecommit: dropping node%d from participants of tx" XID_FMT,
-					sender_to_node[sender_id], xid);
+					"GatherPrecommit: dropping node%d from tx participants",
+					sender_to_node[sender_id]);
 			}
 		}
 	}
-
-	// XXX: assert that majority has responded
 }
 
 /*

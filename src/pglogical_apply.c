@@ -842,12 +842,17 @@ read_rel(StringInfo s, LOCKMODE mode)
 	}
 }
 
-/* send response to coordinator after PREPARE */
+/*
+ * Send response to coordinator after PREPARE or ABORT.
+ *
+ * TransactionId is used instead of GID bacause we may switch to a chunked
+ * transaction decoding and GID will not be known in advance.
+ */
 static void
-mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
+mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 {
 	DmqDestinationId dest_id;
-	MtmArbiterMessage msg;
+	StringInfoData msg;
 
 	LWLockAcquire(MtmLock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
@@ -855,15 +860,42 @@ mtm_send_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 
 	Assert(dest_id >= 0);
 
-	MtmInitMessage(&msg, msg_code);
-	msg.dxid = xid;
-	Assert(MtmReplicationNodeId == node_id);
-	Assert(TransactionIdIsValid(xid));
+	initStringInfo(&msg);
+	pq_sendbyte(&msg, msg_code);
+	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
+					msg.data, msg.len);
 
-	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, msg.dxid),
-					&msg, sizeof(MtmArbiterMessage));
+	mtm_log(MtmApplyTrace,
+			"MtmFollowerSendReply: " XID_FMT " to node%d (dest %d)",
+			xid, node_id, dest_id);
 
-	mtm_log(MtmApplyTrace, "MtmFollowerSendReply: %s to node%d (dest %d)", msg.gid, node_id, dest_id);
+	pfree(msg.data);
+}
+
+/*
+ * Send response to coordinator after PRECOMMIT or COMMIT_PREPARED.
+ */
+static void
+mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
+{
+	DmqDestinationId dest_id;
+	StringInfoData msg;
+
+	LWLockAcquire(MtmLock, LW_SHARED);
+	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
+	LWLockRelease(MtmLock);
+
+	Assert(dest_id >= 0);
+
+	initStringInfo(&msg);
+	pq_sendbyte(&msg, msg_code);
+	dmq_push_buffer(dest_id, gid, msg.data, msg.len);
+
+	mtm_log(MtmApplyTrace,
+			"MtmFollowerSendReply: %s to node%d (dest %d)",
+			gid, node_id, dest_id);
+
+	pfree(msg.data);
 }
 
 static void
@@ -911,8 +943,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			if (receiver_ctx->parallel_allowed)
 			{
-				TransactionId origin_xid = MtmGidParseXid(gid);
-				mtm_send_reply(origin_xid, origin_node, MSG_PRECOMMITTED);
+				mtm_send_gid_reply(gid, origin_node, MSG_PRECOMMITTED);
 			}
 
 			MtmEndSession(origin_node, true);
@@ -922,15 +953,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		}
 		case PGLOGICAL_COMMIT:
 		{
-			// XXX: investigate
-			if (IsTransactionState())
-			{
-				MtmBeginSession(origin_node);
-				CommitTransactionCommand();
-				MtmEndSession(origin_node, true);
-			}
-			mtm_log(LOG, "PGLOGICAL_COMMIT ("LSN_FMT","LSN_FMT","LSN_FMT")",
-					commit_lsn, end_lsn, origin_lsn);
+			Assert(false);
 			break;
 		}
 		case PGLOGICAL_PREPARE:
@@ -939,6 +962,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			TransactionId xid = GetCurrentTransactionIdIfAny();
 
 			Assert(IsTransactionState() && TransactionIdIsValid(xid));
+			Assert(xid == current_gtid->my_xid);
 
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
@@ -955,6 +979,12 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			CommitTransactionCommand();
 
+			if (receiver_ctx->parallel_allowed)
+			{
+				mtm_send_xid_reply(current_gtid->xid, origin_node,
+								   res ? MSG_PREPARED : MSG_ABORTED);
+			}
+
 			/*
 			 * Clean this after CommitTransactionCommand(), as it may throw an
 			 * error that we should propagate to the originating node.
@@ -964,11 +994,6 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			current_gtid->my_xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
 
-			if (receiver_ctx->parallel_allowed)
-			{
-				TransactionId origin_xid = MtmGidParseXid(gid);
-				mtm_send_reply(origin_xid, origin_node, res ? MSG_PREPARED : MSG_ABORTED);
-			}
 
 			MtmEndSession(origin_node, true);
 
@@ -990,8 +1015,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			if (receiver_ctx->parallel_allowed)
 			{
-				TransactionId origin_xid = MtmGidParseXid(gid);
-				mtm_send_reply(origin_xid, origin_node, MSG_COMMITTED);
+				mtm_send_gid_reply(gid, origin_node, MSG_COMMITTED);
 			}
 
 			MtmEndSession(origin_node, true);
@@ -1609,11 +1633,11 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				current_gtid.xid);
 
 		/* handle only prepare errors here */
-		if (TransactionIdIsValid(current_gtid.xid))
+		if (TransactionIdIsValid(current_gtid.my_xid))
 		{
 			MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
-				mtm_send_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+				mtm_send_xid_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
 		}
 
 		AbortCurrentTransaction();

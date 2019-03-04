@@ -15,6 +15,7 @@
 #include "replication/logicalfuncs.h"
 #include "utils/builtins.h"
 #include "funcapi.h"
+#include "libpq/pqformat.h"
 
 #include "multimaster.h"
 #include "bkb.h"
@@ -1160,61 +1161,58 @@ static void
 check_status_requests(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
-	StringInfoData buffer;
+	StringInfoData msg;
 
-	while(dmq_pop_nb(&sender_id, &buffer, MtmGetConnectedNodeMask()))
+	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask()))
 	{
-		int sender_node_id;
-		MtmArbiterMessage *msg;
 		DmqDestinationId dest_id;
-		char *state_3pc;
+		StringInfoData response_msg;
+		int			sender_node_id;
+		char	   *state_3pc;
+		MtmTxState	state;
+		const char *gid;
 
 		sender_node_id = sender_to_node[sender_id];
-		msg = (MtmArbiterMessage *) buffer.data;
-
-		Assert(msg->node == sender_node_id);
-		Assert(msg->code == MSG_POLL_REQUEST);
+		gid = pq_getmsgrawstring(&msg);
 
 		mtm_log(StatusRequest, "got status request for %s from %d",
-				msg->gid, sender_node_id);
+				gid, sender_node_id);
 
-		state_3pc = GetLoggedPreparedXactState(msg->gid);
+		state_3pc = GetLoggedPreparedXactState(gid);
 
 		// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
 		if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxNotFound;
+			state = MtmTxNotFound;
 		else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxPrepared;
+			state = MtmTxPrepared;
 		else if (strncmp(state_3pc, "precommitted", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxPreCommited;
+			state = MtmTxPreCommited;
 		else if (strncmp(state_3pc, "preaborted", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxPreAborted;
+			state = MtmTxPreAborted;
 		else if (strncmp(state_3pc, "committed", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxCommited;
+			state = MtmTxCommited;
 		else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
-			msg->state = MtmTxAborted;
+			state = MtmTxAborted;
 		else
 			Assert(false);
 
 		mtm_log(StatusRequest, "responding to %d with %s -> %s",
-				sender_node_id, msg->gid, MtmTxStateMnem(msg->state));
+				sender_node_id, gid, MtmTxStateMnem(state));
 
 		pfree(state_3pc);
-
-		msg->code = MSG_POLL_STATUS;
-		msg->node = Mtm->my_node_id;
 
 		LWLockAcquire(MtmLock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
 		LWLockRelease(MtmLock);
 		Assert(dest_id >= 0);
 
-		// XXX: and define channels as strings too
-		dmq_push_buffer(dest_id, "txresp", msg,
-						sizeof(MtmArbiterMessage));
+		initStringInfo(&response_msg);
+		pq_send_ascii_string(&response_msg, gid);
+		pq_sendint32(&response_msg, state);
+		dmq_push_buffer(dest_id, "txresp", msg.data, msg.len);
 
-		mtm_log(StatusRequest, "responded to %d with %s -> %s, code = %d",
-				sender_node_id, msg->gid, MtmTxStateMnem(msg->state), msg->code);
+		mtm_log(StatusRequest, "responded to %d with %s -> %s",
+				sender_node_id, gid, MtmTxStateMnem(state));
 	}
 }
 
@@ -1608,6 +1606,7 @@ MtmMonitor(Datum arg)
 		if (resolver == NULL)
 			resolver = ResolverStart(db_id, user_id);
 
+		// XXX: add tx start/stop to clear mcxt?
 		check_status_requests(mtm_cfg);
 
 		rc = WaitLatch(MyLatch,

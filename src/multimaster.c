@@ -250,19 +250,6 @@ static void MtmResumeTransaction(void* ctx)
 	free(ctx);
 }
 
-
-/*
- * Initialize message
- */
-void MtmInitMessage(MtmArbiterMessage* msg, MtmMessageCode code)
-{
-	memset(msg, '\0', sizeof(MtmArbiterMessage));
-
-	msg->code = code;
-	msg->connectivityMask = MtmGetConnectedNodeMask();
-	msg->node = Mtm->my_node_id;
-}
-
 /*
  * Perform initialization of multimaster state.
  * This function is called from shared memory startup hook (after completion of initialization of shared memory)

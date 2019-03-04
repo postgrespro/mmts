@@ -123,30 +123,11 @@ typedef enum
 typedef enum
 {
 	MSG_INVALID,
-	MSG_HANDSHAKE,
 	MSG_PREPARED,
-	MSG_PRECOMMIT,
 	MSG_PRECOMMITTED,
 	MSG_COMMITTED,
-	MSG_ABORTED,
-	MSG_STATUS,
-	MSG_HEARTBEAT,
-	MSG_POLL_REQUEST,
-	MSG_POLL_STATUS
+	MSG_ABORTED
 } MtmMessageCode;
-
-typedef struct
-{
-	MtmMessageCode code;		/* Message code: MSG_PREPARE, MSG_PRECOMMIT,
-								 * MSG_COMMIT, MSG_ABORT,... */
-	MtmTxState	state;
-	int			node;			/* Sender node ID */
-	TransactionId dxid;			/* Transaction ID at destination node */
-	TransactionId sxid;			/* Transaction ID at sender node */
-	nodemask_t	connectivityMask;	/* Connectivity bitmask at the sender of
-									 * message */
-	pgid_t		gid;			/* Global transaction identifier */
-} MtmArbiterMessage;
 
 typedef struct
 {
@@ -241,8 +222,6 @@ extern MtmConfig *MtmReloadConfig(MtmConfig *old_cfg,
 extern MtmNode *MtmNodeById(MtmConfig *cfg, int node_id);
 
 extern void MtmStateFill(MtmConfig *cfg);
-
-extern void MtmInitMessage(MtmArbiterMessage *msg, MtmMessageCode code);
 
 extern bool MtmIsEnabled(void);
 

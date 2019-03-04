@@ -1475,7 +1475,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			{
 				msg->data = data;
 				msg->len = len;
-				msg->maxlen = len;
+				msg->maxlen = -1;
 				msg->cursor = 0;
 				*sender_id = i;
 
@@ -1541,7 +1541,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 		{
 			msg->data = data;
 			msg->len = len;
-			msg->maxlen = len;
+			msg->maxlen = -1;
 			msg->cursor = 0;
 			*sender_id = i;
 
