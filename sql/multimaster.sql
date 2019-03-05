@@ -200,3 +200,33 @@ SELECT name FROM pg_cursors ORDER BY 1;
 COMMIT;
 
 
+-- explicit 2pc
+
+begin;
+create table twopc_test(i int primary key);
+insert into twopc_test  values (1);
+prepare transaction 'x';
+
+begin;
+create table twopc_test2(i int primary key);
+insert into twopc_test2 values (2);
+prepare transaction 'y';
+
+rollback prepared 'y';
+commit prepared 'x';
+
+begin;
+create table twopc_test2(i int primary key);
+insert into twopc_test2 values (2);
+prepare transaction 'y';
+
+begin;
+commit prepared 'y';
+rollback;
+
+commit prepared 'y';
+
+table twopc_test;
+table twopc_test2;
+
+

@@ -97,12 +97,8 @@ typedef struct
 {
 	bool		contains_temp_ddl;
 	bool		contains_persistent_ddl;
-	bool		contains_dml;	/* transaction contains DML statements */
-	// bool		accessed_temp;
-	bool		explicit_twophase;	/* user level 2PC */
+	bool		contains_dml;
 	bool		distributed;
-	pgid_t		gid;			/* global transaction identifier (only in case
-								 * of explicit_twophase) */
 } MtmCurrentTrans;
 
 typedef struct MtmSeqPosition
@@ -201,13 +197,6 @@ extern int	MtmMaxWorkers;
 extern int	MtmMaxNodes;
 extern bool	MtmBreakConnection;
 
-extern bool MtmTwoPhaseCommit(void);
-extern void MtmBeginTransaction(void);
-
-extern void MtmXactCallback2(XactEvent event, void *arg);
-extern void MtmGenerateGid(char *gid, TransactionId xid, int node_id);
-extern int	MtmGidParseNodeId(const char *gid);
-extern TransactionId MtmGidParseXid(const char *gid);
 extern void MtmSleep(timestamp_t interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);

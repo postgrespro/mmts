@@ -67,6 +67,7 @@
 #include "ddl.h"
 #include "receiver.h"
 #include "syncpoint.h"
+#include "commit.h"
 
 typedef struct TupleData
 {
@@ -1027,10 +1028,12 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		{
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
+			MtmBeginSession(origin_node);
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, true);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 			CommitTransactionCommand();
+			MtmEndSession(origin_node, true);
 			mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
 			break;
 		}

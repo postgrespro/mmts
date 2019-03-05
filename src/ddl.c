@@ -42,6 +42,7 @@
 #include "mm.h"
 #include "ddl.h"
 #include "logger.h"
+#include "commit.h"
 
 #include "multimaster.h"
 
@@ -661,6 +662,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	int stmt_start = pstmt->stmt_location > 0 ? pstmt->stmt_location : 0;
 	int stmt_len = pstmt->stmt_len > 0 ? pstmt->stmt_len : strlen(queryString + stmt_start);
 	char *stmt_string = palloc(stmt_len + 1);
+	bool		isTopLevel = (context == PROCESS_UTILITY_TOPLEVEL);
 
 	strncpy(stmt_string, queryString + stmt_start, stmt_len);
 	stmt_string[stmt_len] = 0;
@@ -680,12 +682,24 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 					if (MtmTwoPhaseCommit())
 						return;
 					break;
+
 				case TRANS_STMT_PREPARE:
+					if (!MtmExplicitPrepare(stmt->gid))
+					{
+						/* report unsuccessful commit in completionTag */
+						if (completionTag)
+							strcpy(completionTag, "ROLLBACK");
+					}
+					return;
+
 				case TRANS_STMT_COMMIT_PREPARED:
+					MtmExplicitFinishPrepared(isTopLevel, stmt->gid, true);
+					return;
+
 				case TRANS_STMT_ROLLBACK_PREPARED:
-					MtmTx.explicit_twophase = true;
-					strncpy(MtmTx.gid, stmt->gid, GIDSIZE);
-					break;
+					MtmExplicitFinishPrepared(isTopLevel, stmt->gid, false);
+					return;
+
 				default:
 					break;
 			}

@@ -27,6 +27,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "state.h"
+#include "commit.h"
 
 /*
  * Definition for data in shared memory. It's not publicly visible, but used
@@ -175,8 +176,8 @@ load_tasks(int node_id, int n_participants)
 
 		xact_node_id = MtmGidParseNodeId(gid);
 
-		if (xact_node_id > 0 &&
-			 (node_id == -1 || node_id == xact_node_id))
+		/* user-generated 2pc || resolve all || resolve only our txes */
+		if (xact_node_id < 0 || node_id == -1 || node_id == xact_node_id)
 		{
 			int				j;
 			resolver_tx	   *tx;

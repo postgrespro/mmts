@@ -60,6 +60,7 @@
 #include "resolver.h"
 #include "logger.h"
 #include "syncpoint.h"
+#include "commit.h"
 
 #include "compat.h"
 
@@ -288,7 +289,7 @@ MtmSharedShmemStartup()
 		}
 	}
 
-	RegisterXactCallback(MtmXactCallback2, NULL);
+	RegisterXactCallback(MtmXactCallback, NULL);
 
 	MtmLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
 	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
@@ -534,34 +535,6 @@ void
 _PG_fini(void)
 {
 	shmem_startup_hook = PreviousShmemStartupHook;
-}
-
-/*
- * Genenerate global transaction identifier for two-pahse commit.
- * It should be unique for all nodes
- */
-void
-MtmGenerateGid(char *gid, TransactionId xid, int node_id)
-{
-	sprintf(gid, "MTM-%d-" XID_FMT, node_id, xid);
-	return;
-}
-
-int
-MtmGidParseNodeId(const char* gid)
-{
-	int node_id = -1;
-	sscanf(gid, "MTM-%d-%*d", &node_id);
-	return node_id;
-}
-
-TransactionId
-MtmGidParseXid(const char* gid)
-{
-	TransactionId xid = InvalidTransactionId;
-	sscanf(gid, "MTM-%*d-" XID_FMT, &xid);
-	Assert(TransactionIdIsValid(xid));
-	return xid;
 }
 
 /*

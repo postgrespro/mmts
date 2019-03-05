@@ -28,6 +28,7 @@
 #include "ddl.h"
 #include "state.h"
 #include "syncpoint.h"
+#include "commit.h"
 
 typedef struct
 {
@@ -69,7 +70,7 @@ detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 }
 
 void
-MtmXactCallback2(XactEvent event, void *arg)
+MtmXactCallback(XactEvent event, void *arg)
 {
 	/*
 	 * Perform distributed commit only for transactions in ordinary
@@ -137,11 +138,9 @@ MtmBeginTransaction()
 	}
 
 	/* Reset MtmTx */
-	MtmTx.explicit_twophase = false;
 	MtmTx.contains_temp_ddl = false;
 	MtmTx.contains_persistent_ddl = false;
 	MtmTx.contains_dml = false;
-	MtmTx.gid[0] = '\0';
 	MtmTx.distributed = true;
 
 	MtmDDLResetStatement();
@@ -169,6 +168,33 @@ MtmBeginTransaction()
 					MtmNodeStatusMnem[node_status]);
 		}
 	}
+}
+
+/*
+ * Genenerate global transaction identifier for two-pahse commit.
+ * It should be unique for all nodes
+ */
+void
+MtmGenerateGid(char *gid, TransactionId xid, int node_id)
+{
+	sprintf(gid, "MTM-%d-" XID_FMT, node_id, xid);
+	return;
+}
+
+int
+MtmGidParseNodeId(const char* gid)
+{
+	int node_id = -1;
+	sscanf(gid, "MTM-%d-%*d", &node_id);
+	return node_id;
+}
+
+TransactionId
+MtmGidParseXid(const char* gid)
+{
+	TransactionId xid = InvalidTransactionId;
+	sscanf(gid, "MTM-%*d-" XID_FMT, &xid);
+	return xid;
 }
 
 bool
@@ -291,6 +317,10 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 			messages[*msg_count].node_id = sender_to_node[sender_id];
 			(*msg_count)++;
 			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
+
+			mtm_log(MtmTxTrace,
+					"gather: got message from node%d",
+					sender_to_node[sender_id]);
 		}
 		else
 		{
@@ -307,6 +337,94 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 					sender_to_node[sender_id]);
 			}
 		}
+	}
+}
+
+bool
+MtmExplicitPrepare(char *gid)
+{
+	nodemask_t participants;
+	bool	ret;
+	TransactionId xid;
+	char	stream[DMQ_NAME_MAXLEN];
+	mtm_msg		messages[MTM_MAX_NODES];
+	int			n_messages;
+
+	xid = GetTopTransactionId();
+	sprintf(stream, "xid" XID_FMT, xid);
+	dmq_stream_subscribe(stream);
+	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
+
+	participants = MtmGetEnabledNodeMask() &
+						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+
+	ret = PrepareTransactionBlock(gid);
+	if (!ret)
+		return false;
+
+	CommitTransactionCommand();
+
+	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
+
+	gather(participants, messages, &n_messages);
+	dmq_stream_unsubscribe(stream);
+
+	for (int i = 0; i < n_messages; i++)
+	{
+		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
+
+		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
+		if (status == MSG_ABORTED)
+		{
+			
+			StartTransactionCommand();
+			FinishPreparedTransaction(gid, false, false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+			mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
+							gid, messages[i].node_id);
+		}
+	}
+
+	elog(LOG, "lololo");
+
+	StartTransactionCommand();
+
+	return true;
+}
+
+void
+MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
+{
+	nodemask_t participants;
+	mtm_msg		messages[MTM_MAX_NODES];
+	int			n_messages;
+
+	PreventInTransactionBlock(isTopLevel,
+		isCommit ? "COMMIT PREPARED" : "ROLLBACK PREPARED");
+
+	if (isCommit)
+	{
+		dmq_stream_subscribe(gid);
+
+		participants = MtmGetEnabledNodeMask() &
+						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+		gather(participants, messages, &n_messages);
+
+		FinishPreparedTransaction(gid, true, false);
+
+		// XXX: make this conditional
+		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
+		gather(participants, messages, &n_messages);
+
+		dmq_stream_unsubscribe(gid);
+	}
+	else
+	{
+		FinishPreparedTransaction(gid, false, false);
+		mtm_log(MtmTxFinish, "TXFINISH: %s abort", gid);
 	}
 }
 
