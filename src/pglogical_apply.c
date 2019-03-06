@@ -905,7 +905,6 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	uint8 		event;
 	XLogRecPtr	end_lsn;
 	XLogRecPtr	origin_lsn;
-	XLogRecPtr	commit_lsn;
 	int         origin_node;
 	char        gid[GIDSIZE];
 
@@ -916,7 +915,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	MtmReplicationNodeId = pq_getmsgbyte(in);
 
 	/* read fields */
-	commit_lsn = pq_getmsgint64(in); /* commit_lsn */
+	pq_getmsgint64(in); /* commit_lsn */
 	end_lsn = pq_getmsgint64(in); /* end_lsn */
 	replorigin_session_origin_timestamp = pq_getmsgint64(in); /* commit_time */
 
@@ -1369,7 +1368,7 @@ process_remote_delete(StringInfo s, Relation rel)
 	EState	   *estate;
 	TupleData   oldtup;
 	TupleTableSlot *oldslot;
-	Oid			idxoid;
+	Oid			idxoid = InvalidOid;
 	Relation	idxrel;
 	TupleDesc   tupDesc = RelationGetDescr(rel);
 	ScanKeyData skey[INDEX_MAX_KEYS];

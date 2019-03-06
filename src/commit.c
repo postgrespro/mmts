@@ -207,6 +207,7 @@ MtmTwoPhaseCommit()
 	char		gid[GIDSIZE];
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
+	int			i;
 
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
@@ -264,7 +265,7 @@ MtmTwoPhaseCommit()
 	gather(participants, messages, &n_messages);
 	dmq_stream_unsubscribe(stream);
 
-	for (int i = 0; i < n_messages; i++)
+	for (i = 0; i < n_messages; i++)
 	{
 		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
 
@@ -349,6 +350,7 @@ MtmExplicitPrepare(char *gid)
 	char	stream[DMQ_NAME_MAXLEN];
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
+	int			i;
 
 	xid = GetTopTransactionId();
 	sprintf(stream, "xid" XID_FMT, xid);
@@ -369,7 +371,7 @@ MtmExplicitPrepare(char *gid)
 	gather(participants, messages, &n_messages);
 	dmq_stream_unsubscribe(stream);
 
-	for (int i = 0; i < n_messages; i++)
+	for (i = 0; i < n_messages; i++)
 	{
 		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
 
