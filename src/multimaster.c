@@ -812,7 +812,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 * multimaster is configured.
 		 */
 		pub_stmt->pubname = MULTIMASTER_NAME;
-		pub_stmt->for_all_tables = true;
+		pub_stmt->for_all_tables = false;
 		pub_stmt->tables = NIL;
 		pub_stmt->options = list_make1(
 			makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
