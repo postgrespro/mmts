@@ -303,3 +303,13 @@ table twopc_test2;
  2
 (1 row)
 
+-- check ring buffer in receiver
+CREATE TABLE bmscantest (a int, b int, t text);
+-- that tx is approx 4mb and move rb tail to the center
+INSERT INTO bmscantest
+  SELECT (r%53), (r%59), 'foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo'
+  FROM generate_series(1,40000) r;
+-- that tx is approx 9mb and will not fit neither before head nor after tail
+INSERT INTO bmscantest
+  SELECT (r%53), (r%59), 'foooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo'
+  FROM generate_series(1,70000) r;

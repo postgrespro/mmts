@@ -54,7 +54,7 @@ BgwPoolMainLoop(BgwPool* pool)
 {
 	int size;
 	void* work;
-	size_t payload = sizeof(MtmReceiverContext) + sizeof(size_t);
+	int payload = INTALIGN(sizeof(MtmReceiverContext));
 	MtmReceiverContext ctx;
 	static PortalData fakePortal;
 
@@ -102,7 +102,6 @@ BgwPoolMainLoop(BgwPool* pool)
 			break;
 		}
 		size = * (int *) &pool->queue[pool->head];
-		ctx  = * (MtmReceiverContext *) &pool->queue[pool->head + sizeof(size_t)];
 
 		Assert(size < pool->size);
 		work = palloc(size);
@@ -111,19 +110,32 @@ BgwPoolMainLoop(BgwPool* pool)
 		if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
 			pool->lastPeakTime = MtmGetSystemTime();
 
-		if (pool->head + size + payload > pool->size)
+		if (pool->head + size + payload + sizeof(int) > pool->size)
 		{
-			memcpy(work, pool->queue, size);
-			pool->head = INTALIGN(size);
+			ctx = * (MtmReceiverContext *) &pool->queue;
+			memcpy(work, &pool->queue[payload], size);
+			pool->head = payload + INTALIGN(size);
 		}
 		else
 		{
-			memcpy(work, &pool->queue[pool->head + payload], size);
-			pool->head += payload + INTALIGN(size);
+			memcpy(&ctx, &pool->queue[pool->head + sizeof(int)], payload);
+			memcpy(work, &pool->queue[pool->head + sizeof(int) + payload], size);
+			pool->head += sizeof(int) + payload + INTALIGN(size);
 		}
 
-		if (pool->size == pool->head)
+		/* wrap head */
+		if (pool->head == pool->size)
 			pool->head = 0;
+
+		/*
+		 * We should reset head and tail in order to accept messages bigger
+		 * than half of buffer size.
+		 */
+		if (pool->head == pool->tail)
+		{
+			pool->head = 0;
+			pool->tail = 0;
+		}
 
 		if (pool->producerBlocked)
 		{
@@ -160,7 +172,7 @@ BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nW
 	MtmPool = pool;
 
 	pool->bgwhandles = (BackgroundWorkerHandle **) ShmemAlloc(MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
-    pool->queue = (char*)ShmemAlloc(queueSize);
+	pool->queue = (char*)ShmemAlloc(INTALIGN(queueSize));
 	if (pool->queue == NULL) { 
 		elog(PANIC, "Failed to allocate memory for background workers pool: %zd bytes requested", queueSize);
 	}
@@ -252,11 +264,12 @@ static void BgwStartExtraWorker(BgwPool* pool)
 }
 
 void
-BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
+BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 {
-	size_t payload = sizeof(MtmReceiverContext) + sizeof(size_t);
+	int payload = INTALIGN(sizeof(MtmReceiverContext));
 
-	if (size + payload > pool->size)
+	// XXX: align with spill size and assert that
+	if (size + sizeof(int) + payload > pool->size)
 	{
 		/* 
 		 * Size of work is larger than size of shared buffer: 
@@ -269,18 +282,19 @@ BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
 	SpinLockAcquire(&pool->lock);
 	while (!pool->shutdown)
 	{
-		if ((pool->head <= pool->tail && pool->size - pool->tail < size + payload && pool->head < size)
-			|| (pool->head > pool->tail && pool->head - pool->tail < size + payload))
-		{
-			if (pool->lastPeakTime == 0)
-				pool->lastPeakTime = MtmGetSystemTime();
-
-			pool->producerBlocked = true;
-			SpinLockRelease(&pool->lock);
-			PGSemaphoreLock(pool->overflow);
-			SpinLockAcquire(&pool->lock);
-		}
-		else
+		/*
+		 * If queue is not wrapped through the end of buffer (head <= tail) we can
+		 * fit message either to the end (between tail and pool->size) or to the
+		 * beginning (between queue beginning and head). In both cases we can fit
+		 * size word after the tail.
+		 * If queue is wrapped through the end of buffer (tail < head) we can fit
+		 * message only between head and tail.
+		 */
+		if ((pool->head <= pool->tail &&
+				(pool->size - pool->tail >= size + payload + sizeof(int) ||
+				 pool->head >= size + payload))
+			|| (pool->head > pool->tail &&
+				pool->head - pool->tail >= size + payload + sizeof(int)))
 		{
 			pool->pending += 1;
 
@@ -290,18 +304,24 @@ BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
 			if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
 				pool->lastPeakTime = MtmGetSystemTime();
 
-			*(int *)&pool->queue[pool->tail] = size;
-			*(MtmReceiverContext *)&pool->queue[pool->tail + sizeof(size_t)] = *ctx;
+			/*
+			 * We always have free space for size at tail, as everything is 
+			 * int-aligded and when pool->tail becomes equal to pool->size it
+			 * is switched to zero.
+			 */
+			*(int *) &pool->queue[pool->tail] = size;
 
-			if (pool->size - pool->tail >= size + payload)
+			if (pool->size - pool->tail >= payload + size + sizeof(int))
 			{
-				memcpy(&pool->queue[pool->tail + payload], work, size);
-				pool->tail += payload + INTALIGN(size);
+				memcpy(&pool->queue[pool->tail + sizeof(int)], ctx, payload);
+				memcpy(&pool->queue[pool->tail + sizeof(int) + payload], work, size);
+				pool->tail += sizeof(int) + payload + INTALIGN(size);
 			}
 			else
 			{
-				memcpy(pool->queue, work, size);
-				pool->tail = INTALIGN(size);
+				memcpy(pool->queue, ctx, payload);
+				memcpy(&pool->queue[payload], work, size);
+				pool->tail = payload + INTALIGN(size);
 			}
 
 			if (pool->tail == pool->size)
@@ -309,6 +329,16 @@ BgwPoolExecute(BgwPool* pool, void* work, size_t size, MtmReceiverContext *ctx)
 
 			PGSemaphoreUnlock(pool->available);
 			break;
+		}
+		else
+		{
+			if (pool->lastPeakTime == 0)
+				pool->lastPeakTime = MtmGetSystemTime();
+
+			pool->producerBlocked = true;
+			SpinLockRelease(&pool->lock);
+			PGSemaphoreLock(pool->overflow);
+			SpinLockAcquire(&pool->lock);
 		}
 	}
 	SpinLockRelease(&pool->lock);
