@@ -1209,7 +1209,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 		initStringInfo(&response_msg);
 		pq_send_ascii_string(&response_msg, gid);
 		pq_sendint32(&response_msg, state);
-		dmq_push_buffer(dest_id, "txresp", msg.data, msg.len);
+		dmq_push_buffer(dest_id, "txresp", response_msg.data, response_msg.len);
 
 		mtm_log(StatusRequest, "responded to %d with %s -> %s",
 				sender_node_id, gid, MtmTxStateMnem(state));
