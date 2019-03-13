@@ -572,7 +572,7 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 		{
 			case T_CreateTableSpaceStmt:
 			case T_DropTableSpaceStmt:
-			case T_VacuumStmt:
+			// case T_VacuumStmt:
 				Assert(MtmCapturedDDL == NULL);
 				MtmCapturedDDL = copyObject(parsetree);
 				captured = true;
@@ -727,6 +727,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_DropdbStmt:
 		case T_DeclareCursorStmt:
 		case T_ClosePortalStmt:
+		case T_VacuumStmt:
 			skipCommand = true;
 			break;
 
@@ -743,16 +744,6 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		{
 			skipCommand = true;
 			MtmProcessDDLCommand(stmt_string, false);
-			break;
-		}
-
-		case T_VacuumStmt:
-		{
-			skipCommand = true;
-			if (context == PROCESS_UTILITY_TOPLEVEL)
-			{
-				MtmProcessDDLCommand(stmt_string, false);
-			}
 			break;
 		}
 
@@ -1125,11 +1116,11 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 		switch (nodeTag(MtmCapturedDDL))
 		{
-			case T_VacuumStmt:
-			{
-				ExecVacuum((VacuumStmt *) MtmCapturedDDL, 1);
-				break;
-			}
+			// case T_VacuumStmt:
+			// {
+			// 	ExecVacuum((VacuumStmt *) MtmCapturedDDL, 1);
+			// 	break;
+			// }
 			case T_IndexStmt:
 			{
 				IndexStmt *indexStmt = (IndexStmt *) MtmCapturedDDL;
