@@ -83,7 +83,11 @@ class MtmClient(object):
 
         self.total = 0
         self.aggregates = [{} for e in dsns]
-        keep_trying(40, 1, self.initdb, 'self.initdb')
+        keep_trying(40, 1, self.create_extension, 'self.create_extension')
+        keep_trying(40, 1, self.await_nodes, 'self.await_nodes')
+
+        self.initdb()
+
         self.nodes_state_fields = ["id", "disabled", "disconnected", "catchUp", "slotLag",
             "avgTransDelay", "lastStatusChange", "oldestSnapshot", "SenderPid",
             "SenderStartTime ", "ReceiverPid", "ReceiverStartTime", "connStr"]
@@ -116,8 +120,6 @@ class MtmClient(object):
     def initdb(self):
         conn = psycopg2.connect(self.dsns[0])
         cur = conn.cursor()
-        # cur.execute('create extension if not exists multimaster')
-        conn.commit()
         cur.execute('drop table if exists bank_test')
         cur.execute('create table bank_test(uid int primary key, amount int)')
         cur.execute('create table insert_test(id text primary key)')
@@ -138,15 +140,38 @@ class MtmClient(object):
         cur.close()
         con.close()
 
-    def create_extension(self):
+    def await_nodes(self):
+        print("await_nodes")
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
             con.autocommit = True
             cur = con.cursor()
-            cur.execute('create extension multimaster;')
+            cur.execute('select 1')
             cur.close()
             con.close()
+
+
+    def create_extension(self):
+
+        print("create extension")
+
+        for dsn in self.dsns:
+            con = psycopg2.connect(dsn)
+            con.autocommit = True
+            cur = con.cursor()
+            cur.execute('create extension if not exists multimaster')
+            cur.close()
+            con.close()
+
+        conn = psycopg2.connect(self.dsns[0])
+        cur = conn.cursor()
+        cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
+            ("dbname=regression user=pg host=node1",
+            '"dbname=regression user=pg host=node2"'))
+        conn.commit()
+        cur.close()
+        conn.close()
 
     def is_data_identic(self):
         hashes = set()
@@ -324,13 +349,13 @@ class MtmClient(object):
             agg.isolation += 1
             print(datetime.datetime.utcnow(), 'Isolation error, total ', self.total, ' -> ', total[0], ', node ', conn_i+1)
             self.total = total[0]
-            print(self.oops)
-            yield from cur.execute('select * from pg_prepared_xacts order by prepared;')
-            pxacts = yield from cur.fetchall()
-            for pxact in pxacts:
-                for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
-                    print(pxact[i], end="\t")
-                print("\n")
+            # print(self.oops)
+            # yield from cur.execute('select * from pg_prepared_xacts order by prepared;')
+            # pxacts = yield from cur.fetchall()
+            # for pxact in pxacts:
+            #     for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
+            #         print(pxact[i], end="\t")
+            #     print("\n")
 
     def run(self):
         # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())

@@ -261,7 +261,7 @@ MtmCheckState(void)
 			break;
 
 		case MTM_RECOVERY:
-			if (mtm_state->recovered)
+			if (mtm_state->recovered || mtm_state->referee_grant)
 			{
 				MtmSetClusterStatus(MTM_RECOVERED);
 
@@ -279,7 +279,8 @@ MtmCheckState(void)
 		 * in MTM_RECOVERED state.
 		 */
 		case MTM_RECOVERED:
-			if (nReceivers == nEnabled && nSenders == nEnabled && nEnabled == nConnected - 1)
+			if ((nReceivers == nEnabled && nSenders == nEnabled && nEnabled == nConnected - 1)
+				|| mtm_state->referee_grant)
 			{
 				MtmSetClusterStatus(MTM_ONLINE);
 
@@ -605,8 +606,6 @@ MtmRefreshClusterStatus()
 	// MtmCheckState();
 	// MtmUnlock();
 
-	return;
-
 	/*
 	 * Check for referee decision when only half of nodes are visible.
 	 * Do not hold lock here, but recheck later wheter mask changed.
@@ -642,8 +641,9 @@ MtmRefreshClusterStatus()
 					if (popcount(mtm_state->connected_mask) == 1)
 					{
 						// MtmPollStatusOfPreparedTransactions(true);
-						ResolveAllTransactions(popcount(mtm_state->configured_mask));
+						ResolveForRefereeWinner(popcount(mtm_state->configured_mask));
 					}
+					mtm_state->recovered = true;
 					MtmEnableNode(Mtm->my_node_id);
 					MtmCheckState();
 				}
@@ -659,7 +659,7 @@ MtmRefreshClusterStatus()
 	 * can get refereeGrant before start of walsender, so it start in recovered mode.
 	 */
 	if (MtmRefereeConnStr && *MtmRefereeConnStr && mtm_state->referee_winner_id &&
-		popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask) &&
+		popcount(mtm_state->enabled_mask) == popcount(mtm_state->configured_mask) &&
 		MtmGetCurrentStatus() == MTM_ONLINE) /* restrict this actions only to major -> online transition */
 	{
 		if (MtmRefereeClearWinner())
@@ -669,6 +669,8 @@ MtmRefreshClusterStatus()
 			mtm_log(MtmStateMessage, "[STATE] Cleaning old referee decision");
 		}
 	}
+
+	return;
 
 	// Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
 	// return;
@@ -1143,7 +1145,7 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_restart_time = 1;
 	worker.bgw_main_arg = Int32GetDatum(0);
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
@@ -1608,6 +1610,8 @@ MtmMonitor(Datum arg)
 
 		// XXX: add tx start/stop to clear mcxt?
 		check_status_requests(mtm_cfg);
+
+		MtmRefreshClusterStatus();
 
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,

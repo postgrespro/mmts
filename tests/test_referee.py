@@ -179,6 +179,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         print('###########################')
         docker_api.containers.get('node2').start()
         self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15433")
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15432")
 
         self.client.bgrun()
         time.sleep(3)
@@ -316,6 +317,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.client.stop()
         docker_api.containers.get('node2').start()
         self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15433")
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15432")
         self.client.bgrun()
         time.sleep(3)
 

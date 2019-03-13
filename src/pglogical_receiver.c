@@ -999,7 +999,7 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_restart_time = 1;
 	worker.bgw_main_arg = Int32GetDatum(nodeId);
 	worker.bgw_notify_pid = monitor_pid;
 

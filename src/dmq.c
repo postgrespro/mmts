@@ -772,8 +772,8 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	}
 
 	mtm_log(DmqTraceIncoming,
-			"[DMQ] got message %s.%s, passing to %d", stream_name, body,
-			sub->procno);
+			"[DMQ] got message %s.%s (len=%d), passing to %d", stream_name, body,
+			body_len, sub->procno);
 
 	/* and send it */
 	res = shm_mq_send(mq_handles[sub->procno], body_len, body, false);
@@ -1546,8 +1546,8 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			*sender_id = i;
 
 			mtm_log(DmqTraceIncoming,
-					"[DMQ] dmq_pop_nb: got message %s from %s",
-					(char *) data, dmq_local.inhandles[i].name);
+					"[DMQ] dmq_pop_nb: got message %s (len=%zu) from %s",
+					(char *) data, len, dmq_local.inhandles[i].name);
 			return true;
 		}
 		else if (res == SHM_MQ_DETACHED)

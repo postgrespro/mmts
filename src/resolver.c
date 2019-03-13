@@ -132,7 +132,7 @@ ResolverStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = MULTIMASTER_BGW_RESTART_TIMEOUT;
+	worker.bgw_restart_time = 1;
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
 	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
@@ -221,6 +221,46 @@ void
 ResolveAllTransactions(int n_all_nodes)
 {
 	ResolveTransactionsForNode(-1, n_all_nodes);
+}
+
+void
+ResolveForRefereeWinner(int n_all_nodes)
+{
+	HASH_SEQ_STATUS		hash_seq;
+	resolver_tx		   *tx;
+
+	mtm_log(LOG, "ResolveForRefereeWinner");
+
+	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
+	load_tasks(-1, n_all_nodes);
+
+	hash_seq_init(&hash_seq, gid2tx);
+	while ((tx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		MtmTxState	state = tx->state[Mtm->my_node_id - 1];
+		bool		found;
+
+		if (state == MtmTxPrepared)
+		{
+			FinishPreparedTransaction(tx->gid, false, true);
+			mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", tx->gid);
+			hash_search(gid2tx, tx->gid, HASH_REMOVE, &found);
+			Assert(found);
+		}
+		else if (state == MtmTxPreCommited)
+		{
+			FinishPreparedTransaction(tx->gid, true, true);
+			mtm_log(ResolverTxFinish, "TXFINISH: %s committed", tx->gid);
+			hash_search(gid2tx, tx->gid, HASH_REMOVE, &found);
+			Assert(found);
+		}
+		else
+		{
+			Assert(false);
+		}
+	}
+
+	LWLockRelease(resolver_state->lock);
 }
 
 char *
