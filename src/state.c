@@ -71,6 +71,8 @@ struct MtmState
 
 	int			recovery_count;
 
+	LWLock	   *lock;
+
 	MtmNodeStatus status;
 } *mtm_state;
 
@@ -85,8 +87,6 @@ PG_FUNCTION_INFO_V1(mtm_node_info);
 PG_FUNCTION_INFO_V1(mtm_status);
 
 static bool mtm_state_initialized;
-
-static LWLock *MtmStateLock;
 
 void
 MtmStateInit()
@@ -105,9 +105,10 @@ MtmStateShmemStartup()
 	mtm_state = ShmemInitStruct("mtm_state", sizeof(struct MtmState), &found);
 
 	if (!found)
+	{
 		MemSet(mtm_state, '\0', sizeof(struct MtmState));
-
-	MtmStateLock = &(GetNamedLWLockTranche("mtm_state_lock")->lock);
+		mtm_state->lock = &(GetNamedLWLockTranche("mtm_state_lock")->lock);
+	}
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -147,7 +148,7 @@ MtmStateFill(MtmConfig *cfg)
 
 	Mtm->my_node_id = cfg->my_node_id;
 
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	// XXX: that kind of dangerous. Move to mtm-monitor?
 	if (cfg->backup_node_id != 0)
@@ -161,13 +162,13 @@ MtmStateFill(MtmConfig *cfg)
 	for (i = 0; i < cfg->n_nodes; i++)
 		BIT_SET(mtm_state->configured_mask, cfg->nodes[i].node_id - 1);
 
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 }
 
 static void
 MtmSetClusterStatus(MtmNodeStatus status)
 {
-	Assert(LWLockHeldByMeInMode(MtmStateLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
 	if (mtm_state->status == status)
 		return;
@@ -221,7 +222,7 @@ MtmCheckState(void)
 	int nSenders    = popcount(mtm_state->senders_mask);
 	int nConfigured = popcount(mtm_state->configured_mask);
 
-	Assert(LWLockHeldByMeInMode(MtmStateLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
 	old_status = mtm_state->status;
 
@@ -320,9 +321,9 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked)
 	Assert(node_id != Mtm->my_node_id);
 
 	if (!locked)
-		LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+		LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
-	Assert(LWLockHeldByMeInMode(MtmStateLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
 	switch(ev)
 	{
@@ -375,7 +376,7 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked)
 	MtmCheckState();
 
 	if (!locked)
-		LWLockRelease(MtmStateLock);
+		LWLockRelease(mtm_state->lock);
 }
 
 
@@ -385,9 +386,9 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 	mtm_log(MtmStateMessage, "[STATE] %s", MtmEventMnem[ev]);
 
 	if (!locked)
-		LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+		LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
-	Assert(LWLockHeldByMeInMode(MtmStateLock, LW_EXCLUSIVE));
+	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
 	switch (ev)
 	{
@@ -425,7 +426,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 	MtmCheckState();
 
 	if (!locked)
-		LWLockRelease(MtmStateLock);
+		LWLockRelease(mtm_state->lock);
 
 }
 
@@ -483,13 +484,13 @@ MtmOnNodeDisconnect(char *node_name)
 	 * do that. For example it will anyway find clique with one node.
 	 */
 
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	BIT_CLEAR(mtm_state->connected_mask, node_id - 1);
 	MtmDisableNode(node_id);
 	MtmCheckState();
 
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 }
 
 // XXXX: make that event too
@@ -510,12 +511,12 @@ void MtmOnNodeConnect(char *node_name)
 						RESOURCE_RELEASE_LOCKS,
 						true, true);
 
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	BIT_SET(mtm_state->connected_mask, node_id - 1);
 	MtmCheckState();
 
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 }
 
 /**
@@ -548,15 +549,15 @@ MtmBuildConnectivityMatrix(nodemask_t* matrix)
 MtmReplicationMode
 MtmGetReplicationMode(int nodeId)
 {
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	/* Await until node is connected and both receiver and sender are in clique */
 	while (!BIT_CHECK(mtm_state->connected_mask, nodeId - 1)) // ||
 			// !BIT_CHECK(mtm_state->connected_mask, Mtm->my_node_id - 1))
 	{
-		LWLockRelease(MtmStateLock);
+		LWLockRelease(mtm_state->lock);
 		MtmSleep(USECS_PER_SEC);
-		LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+		LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 	}
 
 	if (!mtm_state->recovered)
@@ -568,21 +569,21 @@ MtmGetReplicationMode(int nodeId)
 			/* Lock on us */
 			mtm_state->recovery_slot = nodeId;
 			ResolveAllTransactions(popcount(mtm_state->configured_mask));
-			LWLockRelease(MtmStateLock);
+			LWLockRelease(mtm_state->lock);
 			return REPLMODE_RECOVERY;
 		}
 
 		/* And force less lucky walreceivers wait until recovery is completed */
 		while (!mtm_state->recovered)
 		{
-			LWLockRelease(MtmStateLock);
+			LWLockRelease(mtm_state->lock);
 			MtmSleep(USECS_PER_SEC);
-			LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+			LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 		}
 	}
 
 	Assert(mtm_state->recovered);
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 	return REPLMODE_RECOVERED;
 }
 
@@ -631,7 +632,7 @@ MtmRefreshClusterStatus()
 				 * By the time we enter this block we can already see other nodes.
 				 * So recheck old conditions under lock.
 				 */
-				LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+				LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 				if (popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask)/2 &&
 					BIT_CHECK(mtm_state->connected_mask, winner_node_id - 1))
 				{
@@ -647,7 +648,7 @@ MtmRefreshClusterStatus()
 					MtmEnableNode(Mtm->my_node_id);
 					MtmCheckState();
 				}
-				LWLockRelease(MtmStateLock);
+				LWLockRelease(mtm_state->lock);
 			}
 		}
 	}
@@ -714,7 +715,7 @@ MtmRefreshClusterStatus()
 	 * We are using clique only to disable nodes.
 	 * So find out what node should be disabled and disable them.
 	 */
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	mtm_state->clique = newClique;
 
@@ -726,7 +727,7 @@ MtmRefreshClusterStatus()
 	 */
 	if (mtm_state->referee_grant)
 	{
-		LWLockRelease(MtmStateLock);
+		LWLockRelease(mtm_state->lock);
 		return;
 	}
 
@@ -745,7 +746,7 @@ MtmRefreshClusterStatus()
 	// }
 
 	MtmCheckState();
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 }
 
 /*
@@ -998,9 +999,9 @@ MtmNodeStatus
 MtmGetCurrentStatus()
 {
 	MtmNodeStatus status;
-	LWLockAcquire(MtmStateLock, LW_SHARED);
+	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	status = mtm_state->status;
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 	return status;
 }
 
@@ -1015,11 +1016,11 @@ MtmGetEnabledNodeMask()
 {
 	nodemask_t enabled;
 
-	LWLockAcquire(MtmStateLock, LW_SHARED);
+	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	enabled = mtm_state->enabled_mask;
 	if (mtm_state->status != MTM_ONLINE)
 		elog(ERROR, "our node was disabled");
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 
 	return enabled;
 }
@@ -1030,9 +1031,9 @@ MtmGetDisabledNodeMask()
 {
 	nodemask_t disabled;
 
-	LWLockAcquire(MtmStateLock, LW_SHARED);
+	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	disabled = ~mtm_state->enabled_mask;
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 
 	return disabled;
 }
@@ -1053,7 +1054,7 @@ mtm_node_info(PG_FUNCTION_ARGS)
 	Datum		values[Natts_mtm_node_info];
 	bool		nulls[Natts_mtm_node_info] = {false};
 
-	LWLockAcquire(MtmStateLock, LW_EXCLUSIVE);
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	values[Anum_mtm_node_info_enabled - 1] =
 		BoolGetDatum(BIT_CHECK(mtm_state->enabled_mask, node_id - 1));
@@ -1086,7 +1087,7 @@ mtm_node_info(PG_FUNCTION_ARGS)
 		nulls[Anum_mtm_node_info_receiver_status - 1] = true;
 	}
 
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 
 	get_call_result_type(fcinfo, NULL, &desc);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
@@ -1099,7 +1100,7 @@ mtm_status(PG_FUNCTION_ARGS)
 	Datum		values[Natts_mtm_status];
 	bool		nulls[Natts_mtm_status] = {false};
 
-	LWLockAcquire(MtmStateLock, LW_SHARED);
+	LWLockAcquire(mtm_state->lock, LW_SHARED);
 
 	values[Anum_mtm_status_node_id - 1] = Int32GetDatum(Mtm->my_node_id);
 	values[Anum_mtm_status_status - 1] =
@@ -1110,7 +1111,7 @@ mtm_status(PG_FUNCTION_ARGS)
 	values[Anum_mtm_status_n_enabled - 1] =
 		Int32GetDatum(popcount(mtm_state->enabled_mask));
 
-	LWLockRelease(MtmStateLock);
+	LWLockRelease(mtm_state->lock);
 
 	get_call_result_type(fcinfo, NULL, &desc);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));
@@ -1203,9 +1204,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 		pfree(state_3pc);
 
-		LWLockAcquire(MtmLock, LW_SHARED);
+		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
-		LWLockRelease(MtmLock);
+		LWLockRelease(Mtm->lock);
 		Assert(dest_id >= 0);
 
 		initStringInfo(&response_msg);
@@ -1321,9 +1322,9 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
 							   MtmHeartbeatSendTimeout);
 
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].dmq_dest_id = dest;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	/* Attach receiver so we can collect tx requests */
 	sender_id = dmq_attach_receiver(dmq_node_name, node_id - 1);
@@ -1415,9 +1416,9 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	/* do not try to connect this node by dmq */
 	dmq_destination_drop(dmq_name);
 
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].dmq_dest_id = -1;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	/*
 	 * Stop corresponding receiver.

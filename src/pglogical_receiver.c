@@ -289,7 +289,7 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 	/* parallel_allowed should never be set during recovery */
 	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
 
-	LWLockAcquire(MtmReceiverBarrier, LW_SHARED);
+	LWLockAcquire(Mtm->receiver_barrier, LW_SHARED);
 
 	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || no_pool)
 		MtmExecutor(work, size, receiver_ctx);
@@ -297,8 +297,8 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 		BgwPoolExecute(&Mtm->pools[MtmReplicationNodeId-1], work, size, receiver_ctx);
 
 	/* Our error handler can release lock */
-	if (LWLockHeldByMe(MtmReceiverBarrier))
-		LWLockRelease(MtmReceiverBarrier);
+	if (LWLockHeldByMe(Mtm->receiver_barrier))
+		LWLockRelease(Mtm->receiver_barrier);
 }
 
 /*
@@ -489,9 +489,9 @@ pglogical_receiver_at_exit(int status, Datum arg)
 {
 	int node_id = DatumGetInt32(arg);
 	BgwPoolCancel(&Mtm->pools[node_id - 1]);
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 }
 
 void
@@ -581,10 +581,10 @@ pglogical_receiver_main(Datum main_arg)
 									nodeId),
 							true);
 
-		LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+		LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 		Mtm->peers[nodeId - 1].receiver_pid = MyProcPid;
 		Mtm->peers[nodeId - 1].receiver_mode = mode;
-		LWLockRelease(MtmLock);
+		LWLockRelease(Mtm->lock);
 
 		// XXX: delete unnecessary modes
 		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);

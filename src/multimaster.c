@@ -123,11 +123,6 @@ static TransactionManager MtmTM =
 	MtmResumeTransaction
 };
 
-LWLock *MtmLock;
-LWLock *MtmCommitBarrier;
-LWLock *MtmReceiverBarrier;
-LWLock *MtmSyncpointLock;
-
 // XXX
 bool  MtmBackgroundWorker;
 int	  MtmReplicationNodeId;
@@ -278,6 +273,11 @@ MtmSharedShmemStartup()
 		Mtm->localTablesHashLoaded = false;
 		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
+		Mtm->lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
+		Mtm->commit_barrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
+		Mtm->receiver_barrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[2].lock);
+		Mtm->syncpoint_lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[3].lock);
+
 		for (i = 0; i < MtmMaxNodes; i++)
 		{
 			Mtm->peers[i].receiver_pid = InvalidPid;
@@ -290,11 +290,6 @@ MtmSharedShmemStartup()
 	}
 
 	RegisterXactCallback(MtmXactCallback, NULL);
-
-	MtmLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
-	MtmCommitBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
-	MtmReceiverBarrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[2].lock);
-	MtmSyncpointLock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[3].lock);
 
 	TM = &MtmTM;
 	LWLockRelease(AddinShmemInitLock);
@@ -984,9 +979,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	 * Create syncpoints for all our peers so that new node can safely start
 	 * recovered replication connections.
 	 */
-	LWLockAcquire(MtmReceiverBarrier, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->receiver_barrier, LW_EXCLUSIVE);
 	curr_lsn = GetXLogWriteRecPtr();
-	LWLockRelease(MtmReceiverBarrier);
+	LWLockRelease(Mtm->receiver_barrier);
 
 	/* as we going to write that lsn on a new node, let's sync it */
 	XLogFlush(curr_lsn);

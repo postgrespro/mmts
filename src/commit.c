@@ -247,7 +247,7 @@ MtmTwoPhaseCommit()
 	while (Mtm->stop_new_commits)
 		MtmSleep(USECS_PER_SEC);
 
-	LWLockAcquire(MtmCommitBarrier, LW_SHARED);
+	LWLockAcquire(Mtm->commit_barrier, LW_SHARED);
 
 	participants = MtmGetEnabledNodeMask() &
 					~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
@@ -291,7 +291,7 @@ MtmTwoPhaseCommit()
 	// XXX: make this conditional
 	gather(participants, messages, &n_messages);
 
-	LWLockRelease(MtmCommitBarrier);
+	LWLockRelease(Mtm->commit_barrier);
 
 	dmq_stream_unsubscribe(gid);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);

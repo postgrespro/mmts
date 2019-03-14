@@ -776,9 +776,9 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	 * to setup all stuff in shared memory. But seems that there is no such
 	 * callback in vanilla pg and adding one will require some carefull thoughts.
 	 */
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = MyProcPid;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	if (hooks_data->is_recovery)
 	{
@@ -815,10 +815,10 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 			char *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
 
 			Mtm->stop_new_commits = true;
-			LWLockAcquire(MtmCommitBarrier, LW_EXCLUSIVE);
+			LWLockAcquire(Mtm->commit_barrier, LW_EXCLUSIVE);
 			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
 			msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
-			LWLockRelease(MtmCommitBarrier);
+			LWLockRelease(Mtm->commit_barrier);
 			Mtm->stop_new_commits = false;
 
 			XLogFlush(msg_xptr);
@@ -837,9 +837,9 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
 {
 	Assert(MtmReplicationNodeId >= 0);
 
-	LWLockAcquire(MtmLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = InvalidPid;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	MtmStateProcessNeighborEvent(MtmReplicationNodeId,
 								 MTM_NEIGHBOR_WAL_SENDER_STOP, false);

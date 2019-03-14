@@ -92,7 +92,7 @@ MaybeLogSyncpoint(bool force)
 		GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)
 		return;
 
-	LWLockAcquire(MtmSyncpointLock, LW_EXCLUSIVE);
+	LWLockAcquire(Mtm->syncpoint_lock, LW_EXCLUSIVE);
 	if (force ||
 		GetInsertRecPtr() - Mtm->latestSyncpoint >= MULTIMASTER_SYNCPOINT_INTERVAL)
 	{
@@ -147,7 +147,7 @@ MaybeLogSyncpoint(bool force)
 			syncpoint_lsn, min_confirmed_flush
 		);
 	}
-	LWLockRelease(MtmSyncpointLock);
+	LWLockRelease(Mtm->syncpoint_lock);
 }
 
 

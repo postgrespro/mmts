@@ -477,7 +477,7 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		 */
 		if (!hooks_data->recovery_done)
 		{
-			LWLockAcquire(MtmReceiverBarrier, LW_EXCLUSIVE);
+			LWLockAcquire(Mtm->receiver_barrier, LW_EXCLUSIVE);
 			hooks_data->recovery_done = true;
 			mtm_log(ProtoTraceState, "Start building safe point to finish recovery");
 		}
@@ -488,7 +488,7 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 			data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
 			MtmOutputPluginWrite(ctx, true, true);
 
-			LWLockRelease(MtmReceiverBarrier);
+			LWLockRelease(Mtm->receiver_barrier);
 
 			/*
 			* This hook can be called mupltiple times when there is concurrent

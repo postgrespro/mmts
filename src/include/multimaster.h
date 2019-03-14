@@ -153,6 +153,11 @@ extern bool receiver_mtm_cfg_valid;
 
 typedef struct
 {
+	LWLock	   *lock;
+	LWLock	   *commit_barrier;
+	LWLock	   *receiver_barrier;
+	LWLock	   *syncpoint_lock;
+
 	int			my_node_id;
 	bool		stop_new_commits;
 	XLogRecPtr	latestSyncpoint;
@@ -176,8 +181,6 @@ extern MtmCurrentTrans MtmTx;
 extern MemoryContext MtmApplyContext;
 
 /* Locks */
-extern LWLock *MtmLock;
-extern LWLock *MtmCommitBarrier;
 extern LWLock *MtmReceiverBarrier;
 extern LWLock *MtmSyncpointLock;
 

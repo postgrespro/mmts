@@ -855,9 +855,9 @@ mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 	DmqDestinationId dest_id;
 	StringInfoData msg;
 
-	LWLockAcquire(MtmLock, LW_SHARED);
+	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	Assert(dest_id >= 0);
 
@@ -882,9 +882,9 @@ mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
 	DmqDestinationId dest_id;
 	StringInfoData msg;
 
-	LWLockAcquire(MtmLock, LW_SHARED);
+	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-	LWLockRelease(MtmLock);
+	LWLockRelease(Mtm->lock);
 
 	Assert(dest_id >= 0);
 

@@ -59,6 +59,10 @@
 #define Anum_mtm_local_tables_rel_schema 1
 #define Anum_mtm_local_tables_rel_name	 2
 
+struct DDLSharedState
+{
+	LWLock   *localtab_lock;
+} *ddl_shared;
 
 typedef struct MtmGucEntry
 {
@@ -86,7 +90,6 @@ static bool DDLApplyInProgress;
 static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
 
-static LWLock  *MtmLocalTablesMapLock;
 static HTAB	   *MtmRemoteFunctions;
 static HTAB	   *MtmLocalTables;
 
@@ -137,6 +140,7 @@ MtmDDLReplicationInit()
 {
 	Size	size = 0;
 
+	size = add_size(size, sizeof(struct DDLSharedState));
 	size = add_size(size, hash_estimate_size(MULTIMASTER_MAX_LOCAL_TABLES,
 											 sizeof(Oid)));
 	size = MAXALIGN(size);
@@ -161,14 +165,22 @@ MtmDDLReplicationInit()
 void
 MtmDDLReplicationShmemStartup(void)
 {
-	HASHCTL info;
+	HASHCTL		info;
+	bool		found;
 
 	memset(&info, 0, sizeof(info));
 	info.entrysize = info.keysize = sizeof(Oid);
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
-	MtmLocalTablesMapLock = &(GetNamedLWLockTranche("mtm-ddl"))->lock;
+	ddl_shared = ShmemInitStruct("ddl",
+								sizeof(struct DDLSharedState),
+								&found);
+
+	if (!found)
+	{
+		ddl_shared->localtab_lock = &(GetNamedLWLockTranche("mtm-ddl"))->lock;
+	}
 
 	MtmLocalTables = ShmemInitHash("MtmLocalTables",
 		MULTIMASTER_MAX_LOCAL_TABLES, MULTIMASTER_MAX_LOCAL_TABLES,
@@ -1237,9 +1249,9 @@ MtmMakeRelationLocal(Oid relid)
 {
 	if (OidIsValid(relid))
 	{
-		LWLockAcquire(MtmLocalTablesMapLock, LW_EXCLUSIVE);
+		LWLockAcquire(ddl_shared->localtab_lock, LW_EXCLUSIVE);
 		hash_search(MtmLocalTables, &relid, HASH_ENTER, NULL);
-		LWLockRelease(MtmLocalTablesMapLock);
+		LWLockRelease(ddl_shared->localtab_lock);
 	}
 }
 
@@ -1282,11 +1294,11 @@ MtmIsRelationLocal(Relation rel)
 {
 	bool found;
 
-	LWLockAcquire(MtmLocalTablesMapLock, LW_SHARED);
+	LWLockAcquire(ddl_shared->localtab_lock, LW_SHARED);
 	if (!Mtm->localTablesHashLoaded)
 	{
-		LWLockRelease(MtmLocalTablesMapLock);
-		LWLockAcquire(MtmLocalTablesMapLock, LW_EXCLUSIVE);
+		LWLockRelease(ddl_shared->localtab_lock);
+		LWLockAcquire(ddl_shared->localtab_lock, LW_EXCLUSIVE);
 		if (!Mtm->localTablesHashLoaded)
 		{
 			MtmLoadLocalTables();
@@ -1295,7 +1307,7 @@ MtmIsRelationLocal(Relation rel)
 	}
 
 	hash_search(MtmLocalTables, &RelationGetRelid(rel), HASH_FIND, &found);
-	LWLockRelease(MtmLocalTablesMapLock);
+	LWLockRelease(ddl_shared->localtab_lock);
 
 	return found;
 }

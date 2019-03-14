@@ -442,9 +442,9 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				StringInfoData msg;
 				DmqDestinationId dest_id;
 
-				LWLockAcquire(MtmLock, LW_SHARED);
+				LWLockAcquire(Mtm->lock, LW_SHARED);
 				dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-				LWLockRelease(MtmLock);
+				LWLockRelease(Mtm->lock);
 				Assert(dest_id >= 0);
 
 				initStringInfo(&msg);
