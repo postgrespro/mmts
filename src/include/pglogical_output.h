@@ -47,6 +47,7 @@ typedef struct MtmDecoderPrivate
 {
 	bool	is_recovery;
 	bool	recovery_done;
+	int		recovery_count;
 	int64	session_id;
 	MtmConfig *cfg;
 } MtmDecoderPrivate;

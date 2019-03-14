@@ -721,6 +721,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	hooks_data->recovery_done = false;
 	hooks_data->is_recovery = false;
 	hooks_data->cfg = MtmLoadConfig();
+	hooks_data->recovery_count = MtmGetRecoveryCount();
 
 	foreach(param, args->in_params)
 	{

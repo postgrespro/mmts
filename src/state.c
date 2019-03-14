@@ -394,7 +394,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 	{
 		case MTM_CLIQUE_DISABLE:
 			BIT_CLEAR(mtm_state->enabled_mask, Mtm->my_node_id - 1);
-			mtm_state->recovery_count++; /* this will restart replication connection */
+			// mtm_state->recovery_count++; /* this will restart replication connection */
 			break;
 
 		case MTM_REMOTE_DISABLE:
@@ -413,7 +413,7 @@ MtmStateProcessEvent(MtmEvent ev, bool locked)
 		case MTM_RECOVERY_FINISH2:
 			{
 				mtm_state->recovered = true;
-				mtm_state->recovery_count++; /* this will restart replication connection */
+				// mtm_state->recovery_count++; /* this will restart replication connection */
 				mtm_state->recovery_slot = 0;
 			}
 			break;

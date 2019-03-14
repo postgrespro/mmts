@@ -38,6 +38,8 @@
 
 #include "storage/ipc.h"
 
+#include "tcop/tcopprot.h"
+
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/guc.h"
@@ -53,6 +55,7 @@
 
 #include "multimaster.h"
 #include "logger.h"
+#include "state.h"
 
 extern void		_PG_output_plugin_init(OutputPluginCallbacks *cb);
 
@@ -463,6 +466,17 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 {
 	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
+
+
+	if (hooks_data->recovery_count != MtmGetRecoveryCount())
+	{
+		mtm_log(LOG, "exiting due to disabled status");
+		if (whereToSendOutput == DestRemote)
+			whereToSendOutput = DestNone;
+
+		proc_exit(0);
+		abort();					/* keep the compiler quiet */
+	}
 
 	/*
 	 * MtmOutputPluginPrepareWrite send some bytes to downstream,
