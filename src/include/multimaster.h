@@ -180,10 +180,6 @@ extern int	MtmReplicationNodeId;
 extern MtmCurrentTrans MtmTx;
 extern MemoryContext MtmApplyContext;
 
-/* Locks */
-extern LWLock *MtmReceiverBarrier;
-extern LWLock *MtmSyncpointLock;
-
 /* bgworker identities */
 extern bool MtmBackgroundWorker;
 extern bool MtmIsLogicalReceiver;
