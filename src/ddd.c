@@ -61,10 +61,11 @@ typedef struct NodeDeadlockData
 struct ddd_shared
 {
 	LWLockPadded	   *locks;
-	HTAB			   *xid2gtid;
 	int					n_nodes;
 	NodeDeadlockData	nodelocks[FLEXIBLE_ARRAY_MEMBER];
 } *ddd_shared;
+
+static HTAB			   *xid2gtid;
 
 PG_FUNCTION_INFO_V1(mtm_dump_lock_graph);
 PG_FUNCTION_INFO_V1(mtm_check_deadlock);
@@ -131,7 +132,7 @@ MtmDeadlockDetectorShmemStartup(int n_nodes)
 		}
 	}
 
-	ddd_shared->xid2gtid = ShmemInitHash("mtm-ddd-xid2gtid",
+	xid2gtid = ShmemInitHash("mtm-ddd-xid2gtid",
 		n_nodes*MaxBackends, n_nodes*MaxBackends,
 		&hash_info, HASH_ELEM | HASH_BLOBS);
 
@@ -265,7 +266,7 @@ MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid)
 	Assert(TransactionIdIsValid(xid));
 
 	LWLockAcquire(LOCK_BY_INDEX(0), LW_EXCLUSIVE);
-	entry = (xid2GtidEntry *) hash_search(ddd_shared->xid2gtid, &xid,
+	entry = (xid2GtidEntry *) hash_search(xid2gtid, &xid,
 										  HASH_ENTER, &found);
 	entry->gtid = *gtid;
 	LWLockRelease(LOCK_BY_INDEX(0));
@@ -281,7 +282,7 @@ MtmDeadlockDetectorRemoveXact(TransactionId xid)
 	Assert(TransactionIdIsValid(xid));
 
 	LWLockAcquire(LOCK_BY_INDEX(0), LW_EXCLUSIVE);
-	hash_search(ddd_shared->xid2gtid, &xid, HASH_REMOVE, &found);
+	hash_search(xid2gtid, &xid, HASH_REMOVE, &found);
 	LWLockRelease(LOCK_BY_INDEX(0));
 
 	Assert(found);
@@ -293,7 +294,7 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 	xid2GtidEntry   *entry;
 
 	LWLockAcquire(LOCK_BY_INDEX(0), LW_SHARED);
-	entry = (xid2GtidEntry *) hash_search(ddd_shared->xid2gtid, &xid,
+	entry = (xid2GtidEntry *) hash_search(xid2gtid, &xid,
 										  HASH_FIND, NULL);
 	if (entry != NULL)
 	{

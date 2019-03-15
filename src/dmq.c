@@ -103,7 +103,6 @@ struct DmqSharedState
 	DmqDestination  destinations[DMQ_MAX_DESTINATIONS];
 
 	/* receivers stuff */
-	HTAB		   *subscriptions;
 	int				n_receivers;
 	struct
 	{
@@ -116,6 +115,7 @@ struct DmqSharedState
 
 } *dmq_state;
 
+static HTAB		   *dmq_subscriptions;
 
 /* Backend-local i/o queues. */
 struct
@@ -217,7 +217,7 @@ dmq_shmem_startup_hook(void)
 		}
 	}
 
-	dmq_state->subscriptions = ShmemInitHash("dmq_stream_subscriptions",
+	dmq_subscriptions = ShmemInitHash("dmq_stream_subscriptions",
 								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
 								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
 								&hash_info,
@@ -758,7 +758,7 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	 * likely that won't show any measurable speedup.
 	 */
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
-	sub = (DmqStreamSubscription *) hash_search(dmq_state->subscriptions,
+	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions,
 												stream_name, HASH_FIND,
 												&found);
 	LWLockRelease(dmq_state->lock);
@@ -1421,7 +1421,7 @@ dmq_stream_subscribe(char *stream_name)
 	DmqStreamSubscription *sub;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	sub = (DmqStreamSubscription *) hash_search(dmq_state->subscriptions, stream_name,
+	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions, stream_name,
 												HASH_ENTER, &found);
 	if (found && sub->procno != MyProc->pgprocno)
 	{
@@ -1439,7 +1439,7 @@ dmq_stream_unsubscribe(char *stream_name)
 	bool found;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	hash_search(dmq_state->subscriptions, stream_name, HASH_REMOVE, &found);
+	hash_search(dmq_subscriptions, stream_name, HASH_REMOVE, &found);
 	LWLockRelease(dmq_state->lock);
 
 	Assert(found);
