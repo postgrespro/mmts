@@ -15,6 +15,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/syscache.h"
 #include "utils/inval.h"
+#include "utils/memutils.h"
 
 #include "bgwpool.h"
 #include "multimaster.h"
@@ -239,6 +240,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 {
 	BackgroundWorker worker;
 	BackgroundWorkerHandle* handle;
+	MemoryContext oldcontext;
 
 	if (pool->nWorkers >= MtmMaxWorkers)
 		return;
@@ -253,6 +255,9 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int) pool->nWorkers + 1);
 
 	pool->lastDynamicWorkerStartTime = MtmGetSystemTime();
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
 	if (RegisterDynamicBackgroundWorker(&worker, &handle))
 	{
 		pool->bgwhandles[pool->nWorkers++] = handle;
@@ -261,6 +266,8 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	{
 		elog(WARNING, "Failed to start dynamic background worker");
 	}
+
+	MemoryContextSwitchTo(oldcontext);
 }
 
 void
