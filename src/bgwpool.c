@@ -150,7 +150,7 @@ BgwPoolMainLoop(BgwPool* pool)
 		/* Ignore cancel that arrived before we started current command */
 		QueryCancelPending = false;
 
-		pool->executor(work, size, &ctx);
+		MtmExecutor(work, size, &ctx);
 		pfree(work);
 
 		SpinLockAcquire(&pool->lock);
@@ -168,7 +168,7 @@ BgwPoolMainLoop(BgwPool* pool)
 // XXX: this is called during _PG_init because we need to allocate queue.
 // Better to use DSM, so that can be done dynamically.
 void
-BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nWorkers)
+BgwPoolInit(BgwPool* pool, size_t queueSize, size_t nWorkers)
 {
 	MtmPool = pool;
 
@@ -177,7 +177,6 @@ BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nW
 	if (pool->queue == NULL) { 
 		elog(PANIC, "Failed to allocate memory for background workers pool: %zd bytes requested", queueSize);
 	}
-    pool->executor = executor;
 	pool->available = PGSemaphoreCreate();
 	pool->overflow = PGSemaphoreCreate();
 	PGSemaphoreReset(pool->available);
@@ -282,7 +281,7 @@ BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 		 * Size of work is larger than size of shared buffer: 
 		 * run it immediately
 		 */
-		pool->executor(work, size, ctx);
+		MtmExecutor(work, size, ctx);
 		return;
 	}
  

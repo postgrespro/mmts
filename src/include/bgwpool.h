@@ -9,8 +9,6 @@
 
 #include "receiver.h"
 
-typedef void(*BgwPoolExecutor)(void* work, size_t size, MtmReceiverContext *ctx);
-
 typedef long timestamp_t;
 
 
@@ -24,7 +22,6 @@ extern timestamp_t MtmGetCurrentTime(void);  /* adjusted current system time */
 
 typedef struct
 {
-    BgwPoolExecutor executor;
     volatile slock_t lock;
 	PGSemaphore available;
 	PGSemaphore overflow;
@@ -50,7 +47,7 @@ typedef BgwPool*(*BgwPoolConstructor)(void);
 
 extern void BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id);
 
-extern void BgwPoolInit(BgwPool* pool, BgwPoolExecutor executor, size_t queueSize, size_t nWorkers);
+extern void BgwPoolInit(BgwPool* pool, size_t queueSize, size_t nWorkers);
 
 extern void BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx);
 

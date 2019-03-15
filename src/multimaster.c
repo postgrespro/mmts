@@ -285,7 +285,7 @@ MtmSharedShmemStartup()
 			Mtm->peers[i].dmq_dest_id = -1;
 
 			// XXX: change to dsa and make it per-receiver
-			BgwPoolInit(&Mtm->pools[i], MtmExecutor, MtmQueueSize, 0);
+			BgwPoolInit(&Mtm->pools[i], MtmQueueSize, 0);
 		}
 	}
 
