@@ -692,11 +692,13 @@ pglogical_receiver_main(Datum main_arg)
 			CHECK_FOR_INTERRUPTS();
 
 			/* Wait necessary amount of time */
-			rc = WaitLatch(&MyProc->procLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   100.0,
-						   PG_WAIT_EXTENSION);
+			rc = WaitLatchOrSocket(MyLatch,
+								   WL_LATCH_SET | WL_SOCKET_READABLE |
+								   WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								   PQsocket(conn), PQisRsocket(conn),
+								   100.0, PG_WAIT_EXTENSION);
 			ResetLatch(&MyProc->procLatch);
+
 			/* Process signals */
 			if (got_sighup)
 			{
