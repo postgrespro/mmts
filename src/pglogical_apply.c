@@ -1248,7 +1248,7 @@ process_remote_update(StringInfo s, Relation rel)
 	TupleData       old_tuple;
 	TupleData       new_tuple;
 	Oid			    idxoid = InvalidOid;
-	Relation	    idxrel;
+	Relation	    idxrel = NULL;
 	TupleDesc	    tupDesc = RelationGetDescr(rel);
 	ScanKeyData     skey[INDEX_MAX_KEYS];
 	HeapTuple	    remote_tuple = NULL;
@@ -1369,7 +1369,7 @@ process_remote_delete(StringInfo s, Relation rel)
 	TupleData   oldtup;
 	TupleTableSlot *oldslot;
 	Oid			idxoid = InvalidOid;
-	Relation	idxrel;
+	Relation	idxrel = NULL;
 	TupleDesc   tupDesc = RelationGetDescr(rel);
 	ScanKeyData skey[INDEX_MAX_KEYS];
 	bool		found_old;
