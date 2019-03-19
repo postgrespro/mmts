@@ -1047,7 +1047,10 @@ MtmGetEnabledNodeMask()
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	enabled = mtm_state->enabled_mask;
 	if (mtm_state->status != MTM_ONLINE)
+	{
+		LWLockRelease(mtm_state->lock);
 		elog(ERROR, "our node was disabled");
+	}
 	LWLockRelease(mtm_state->lock);
 
 	return enabled;
