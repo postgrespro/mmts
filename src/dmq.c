@@ -136,8 +136,10 @@ static volatile sig_atomic_t got_SIGHUP = false;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
-dmq_receiver_hook_type dmq_receiver_start_hook;
-dmq_receiver_hook_type dmq_receiver_stop_hook;
+dmq_hook_type dmq_receiver_start_hook;
+dmq_hook_type dmq_receiver_stop_hook;
+dmq_hook_type dmq_sender_connect_hook;
+dmq_hook_type dmq_sender_disconnect_hook;
 
 void dmq_sender_main(Datum main_arg);
 
@@ -461,6 +463,8 @@ dmq_sender_main(Datum main_arg)
 								"[DMQ] failed to send message to %s: %s",
 								conns[conn_id].receiver_name,
 								PQerrorMessage(conns[conn_id].pgconn));
+
+						dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
 					}
 					else
 					{
@@ -577,6 +581,8 @@ dmq_sender_main(Datum main_arg)
 								"[DMQ] failed to send heartbeat to %s: %s",
 								conns[conn_id].receiver_name,
 								PQerrorMessage(conns[conn_id].pgconn));
+
+						dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
 					}
 				}
 			}
@@ -681,6 +687,8 @@ dmq_sender_main(Datum main_arg)
 						mtm_log(DmqStateFinal,
 								"[DMQ] Connected to %s",
 								conns[conn_id].receiver_name);
+
+						dmq_sender_connect_hook(conns[conn_id].receiver_name);
 					}
 					break;
 
@@ -695,6 +703,8 @@ dmq_sender_main(Datum main_arg)
 								"[DMQ] connection error with %s: %s",
 								conns[conn_id].receiver_name,
 								PQerrorMessage(conns[conn_id].pgconn));
+
+						dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
 					}
 					break;
 			}

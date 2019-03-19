@@ -29,8 +29,10 @@ extern bool dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask);
 extern void dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg);
 extern void dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *buffer, size_t len);
 
-typedef void (*dmq_receiver_hook_type) (char *);
-extern dmq_receiver_hook_type dmq_receiver_start_hook;
-extern dmq_receiver_hook_type dmq_receiver_stop_hook;
+typedef void (*dmq_hook_type) (char *);
+extern dmq_hook_type dmq_receiver_start_hook;
+extern dmq_hook_type dmq_receiver_stop_hook;
+extern dmq_hook_type dmq_sender_connect_hook;
+extern dmq_hook_type dmq_sender_disconnect_hook;
 
 #endif

@@ -505,6 +505,8 @@ _PG_init(void)
 	dmq_init();
 	dmq_receiver_start_hook = MtmOnNodeConnect;
 	dmq_receiver_stop_hook = MtmOnNodeDisconnect;
+	dmq_sender_connect_hook = MtmOnDmqSenderConnect;
+	dmq_sender_disconnect_hook = MtmOnDmqSenderDisconnect;
 
 	ResolverInit();
 

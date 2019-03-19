@@ -48,6 +48,8 @@ extern void MtmStateProcessEvent(MtmEvent ev, bool locked);
 
 extern void MtmOnNodeDisconnect(char *node_name);
 extern void MtmOnNodeConnect(char *node_name);
+extern void MtmOnDmqSenderConnect(char *node_name);
+extern void MtmOnDmqSenderDisconnect(char *node_name);
 
 extern void MtmRefreshClusterStatus(void);
 

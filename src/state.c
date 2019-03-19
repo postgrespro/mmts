@@ -58,9 +58,10 @@ struct MtmState
 {
 	nodemask_t	configured_mask;
 	nodemask_t	connected_mask;
-	nodemask_t	enabled_mask;
+	nodemask_t	dmq_senders_mask;
 	nodemask_t	receivers_mask;
 	nodemask_t	senders_mask;
+	nodemask_t	enabled_mask;
 	nodemask_t	clique;
 
 	bool		referee_grant;
@@ -155,6 +156,7 @@ MtmStateFill(MtmConfig *cfg)
 		mtm_state->recovery_slot = cfg->backup_node_id;
 
 	BIT_SET(mtm_state->connected_mask, cfg->my_node_id - 1);
+	BIT_SET(mtm_state->dmq_senders_mask, cfg->my_node_id - 1);
 
 	/* re-create configured_mask */
 	mtm_state->configured_mask = 0;
@@ -217,7 +219,7 @@ MtmCheckState(void)
 	bool isEnabledState;
 	MtmNodeStatus old_status;
 	int nEnabled    = popcount(mtm_state->enabled_mask);
-	int nConnected  = popcount(mtm_state->connected_mask);
+	int nConnected  = popcount(mtm_state->connected_mask & mtm_state->dmq_senders_mask);
 	int nReceivers  = popcount(mtm_state->receivers_mask);
 	int nSenders    = popcount(mtm_state->senders_mask);
 	int nConfigured = popcount(mtm_state->configured_mask);
@@ -227,9 +229,10 @@ MtmCheckState(void)
 	old_status = mtm_state->status;
 
 	mtm_log(MtmStateMessage,
-		"[STATE]   Status = (enabled=%s, connected=%s, clique=%s, receivers=%s, senders=%s, total=%i, referee_grant=%d)",
+		"[STATE]   Status = (enabled=%s, connected=%s, dmq_senders=%s, clique=%s, receivers=%s, senders=%s, total=%i, referee_grant=%d)",
 		maskToString(mtm_state->enabled_mask),
 		maskToString(mtm_state->connected_mask),
+		maskToString(mtm_state->dmq_senders_mask),
 		maskToString(mtm_state->clique),
 		maskToString(mtm_state->receivers_mask),
 		maskToString(mtm_state->senders_mask),
@@ -490,6 +493,31 @@ MtmOnNodeDisconnect(char *node_name)
 	MtmDisableNode(node_id);
 	MtmCheckState();
 
+	LWLockRelease(mtm_state->lock);
+}
+
+void
+MtmOnDmqSenderConnect(char *node_name)
+{
+	int			node_id;
+	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
+
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
+	BIT_SET(mtm_state->dmq_senders_mask, node_id - 1);
+	MtmCheckState();
+	LWLockRelease(mtm_state->lock);
+}
+
+void
+MtmOnDmqSenderDisconnect(char *node_name)
+{
+	int			node_id;
+	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
+
+	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
+	BIT_CLEAR(mtm_state->dmq_senders_mask, node_id - 1);
+	MtmDisableNode(node_id);
+	MtmCheckState();
 	LWLockRelease(mtm_state->lock);
 }
 
