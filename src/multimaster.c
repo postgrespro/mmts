@@ -341,7 +341,7 @@ _PG_init(void)
 		"Timeout in milliseconds of receiving heartbeat messages",
 		"If no heartbeat message is received from node within this period, it assumed to be dead",
 		&MtmHeartbeatRecvTimeout,
-		1000,
+		2000,
 		1,
 		INT_MAX,
 		PGC_BACKEND,
@@ -502,7 +502,7 @@ _PG_init(void)
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 4);
 
-	dmq_init();
+	dmq_init(MtmHeartbeatSendTimeout);
 	dmq_receiver_start_hook = MtmOnNodeConnect;
 	dmq_receiver_stop_hook = MtmOnNodeDisconnect;
 	dmq_sender_connect_hook = MtmOnDmqSenderConnect;

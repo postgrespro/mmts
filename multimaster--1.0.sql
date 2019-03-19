@@ -11,7 +11,7 @@ END
 $$;
 
 -- message queue receiver, for internal use only
-CREATE FUNCTION mtm.dmq_receiver_loop(sender_name text) RETURNS void
+CREATE FUNCTION mtm.dmq_receiver_loop(sender_name text, recv_timeout int) RETURNS void
 AS 'MODULE_PATHNAME','dmq_receiver_loop'
 LANGUAGE C;
 

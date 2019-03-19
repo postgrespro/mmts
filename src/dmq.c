@@ -78,7 +78,7 @@ typedef struct {
 	char			sender_name[DMQ_NAME_MAXLEN];
 	char			receiver_name[DMQ_NAME_MAXLEN];
 	char			connstr[DMQ_CONNSTR_MAX_LEN];
-	int				ping_period;
+	int				recv_timeout;
 	PGconn		   *pgconn;
 	DmqConnState	state;
 	int				pos;
@@ -240,7 +240,7 @@ dmq_shmem_size(void)
 }
 
 void
-dmq_init(void)
+dmq_init(int send_timeout)
 {
 	BackgroundWorker worker;
 
@@ -258,7 +258,7 @@ dmq_init(void)
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 5;
 	worker.bgw_notify_pid = 0;
-	worker.bgw_main_arg = 0;
+	worker.bgw_main_arg = send_timeout;
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "dmq_sender_main");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-dmq-sender");
@@ -271,14 +271,6 @@ dmq_init(void)
 
 	// on_proc_exit(dmq_at_exit, 0);
 }
-
-// void _PG_init(void);
-
-// void
-// _PG_init(void)
-// {
-// 	dmq_init();
-// }
 
 static Size
 dmq_toc_size()
@@ -347,6 +339,7 @@ dmq_sender_main(Datum main_arg)
 	shm_mq_handle **mq_handles;
 	WaitEventSet   *set;
 	DmqDestination	conns[DMQ_MAX_DESTINATIONS];
+	int		heartbeat_send_timeout = DatumGetInt32(main_arg);
 
 	double	prev_timer_at = dmq_now();
 
@@ -508,7 +501,7 @@ dmq_sender_main(Datum main_arg)
 		 * Otherwise we can stuck with timer_event forever.
 		 */
 		now_millisec = dmq_now();
-		if (now_millisec - prev_timer_at > 250)
+		if (now_millisec - prev_timer_at > heartbeat_send_timeout)
 		{
 			prev_timer_at = now_millisec;
 			timer_event = true;
@@ -635,8 +628,8 @@ dmq_sender_main(Datum main_arg)
 					else if (status == PGRES_POLLING_OK)
 					{
 						char *sender_name = conns[conn_id].sender_name;
-						char *query = psprintf("select mtm.dmq_receiver_loop('%s')",
-											   sender_name);
+						char *query = psprintf("select mtm.dmq_receiver_loop('%s', %d)",
+											   sender_name, conns[conn_id].recv_timeout);
 
 						conns[conn_id].state = Negotiating;
 						ModifyWaitEvent(set, event.pos, WL_SOCKET_READABLE, NULL);
@@ -1001,9 +994,11 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	char			   *proc_name;
 	int					i;
 	int					receiver_id = -1;
+	int					recv_timeout;
 	double				last_message_at = dmq_now();
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
+	recv_timeout = PG_GETARG_INT32(1);
 
 	proc_name = psprintf("mtm-dmq-receiver %s", sender_name);
 	set_ps_display(proc_name, true);
@@ -1142,7 +1137,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		// XXX: is it enough?
 		CHECK_FOR_INTERRUPTS();
 
-		if (dmq_now() - last_message_at > 2000)
+		if (dmq_now() - last_message_at > recv_timeout)
 		{
 			mtm_log(ERROR, "[DMQ] exit receiver due to heatbeat timeout");
 		}
@@ -1573,7 +1568,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 
 DmqDestinationId
 dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
-					int ping_period)
+					int recv_timeout)
 {
 	DmqDestinationId dest_id;
 	pid_t sender_pid;
@@ -1587,7 +1582,7 @@ dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
 			strncpy(dest->sender_name, sender_name, DMQ_NAME_MAXLEN);
 			strncpy(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN);
 			strncpy(dest->connstr, connstr, DMQ_CONNSTR_MAX_LEN);
-			dest->ping_period = ping_period;
+			dest->recv_timeout = recv_timeout;
 			dest->active = true;
 			break;
 		}

@@ -44,6 +44,9 @@ sub init
 			max_wal_senders = 6
 			max_replication_slots = 12
 			wal_sender_timeout = 0
+
+			multimaster.heartbeat_send_timeout = 100
+			multimaster.heartbeat_recv_timeout = 5000
 		});
 	}
 }

@@ -9,7 +9,7 @@ typedef int8 DmqSenderId;
 
 #define DMQ_NAME_MAXLEN 32
 
-extern void dmq_init(void);
+extern void dmq_init(int send_timeout);
 
 extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,
 											char *receiver_name, int ping_period);
