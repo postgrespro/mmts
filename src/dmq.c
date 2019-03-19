@@ -1139,7 +1139,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 		if (dmq_now() - last_message_at > recv_timeout)
 		{
-			mtm_log(ERROR, "[DMQ] exit receiver due to heatbeat timeout");
+			mtm_log(FATAL, "[DMQ] exit receiver due to heatbeat timeout");
 		}
 
 	}
