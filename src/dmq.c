@@ -1325,9 +1325,10 @@ dmq_reattach_shm_mq(int handle_id)
 
 	dmq_local.inhandles[handle_id].dsm_seg = dsm_attach(receiver_dsm);
 	if (dmq_local.inhandles[handle_id].dsm_seg == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("unable to map dynamic shared memory segment")));
+	{
+		mtm_log(DmqTraceShmMq, "unable to map dynamic shared memory segment");
+		return false;
+	}
 
 	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 
