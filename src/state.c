@@ -1177,7 +1177,7 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
+	worker.bgw_restart_time = BGW_NEVER_RESTART; /* or we can start several receivers */
 	worker.bgw_main_arg = Int32GetDatum(0);
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
