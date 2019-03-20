@@ -1598,7 +1598,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 
 					rc = SPI_execute("delete from mtm.config where key='basebackup'", false, 0);
 					if (rc != SPI_OK_DELETE)
-						mtm_log(ERROR, "Failed to load node list");
+						mtm_log(ERROR, "Failed to clean basebackup info");
 
 					if (SPI_finish() != SPI_OK_FINISH)
 						mtm_log(ERROR, "could not finish SPI");
