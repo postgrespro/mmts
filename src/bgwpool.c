@@ -73,6 +73,11 @@ BgwPoolMainLoop(BgwPool* pool)
 	pqsignal(SIGTERM, BgwShutdownHandler);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
+	// XXX: probably we should add static variable that signalizes that
+	// we are between pool->active += 1 and pool->active -= 1, so if
+	// we face an ERROR outside of PG_TRY we can decrement pool->active
+	// from on_shem_exit_hook
+
 	BackgroundWorkerUnblockSignals();
 	BackgroundWorkerInitializeConnectionByOid(pool->db_id, pool->user_id, 0);
 	ActivePortal = &fakePortal;

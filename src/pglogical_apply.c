@@ -1473,6 +1473,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
 
+	PG_TRY();
 
 	AcceptInvalidationMessages();
 	if (!receiver_mtm_cfg_valid)
@@ -1494,7 +1495,6 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 	ResetAllOptions();
 	CommitTransactionCommand();
 
-    PG_TRY();
     {    
 		bool inside_transaction = true;
         do { 
