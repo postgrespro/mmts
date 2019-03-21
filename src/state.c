@@ -1036,7 +1036,7 @@ MtmGetCurrentStatus()
 nodemask_t
 MtmGetConnectedNodeMask()
 {
-	return mtm_state->connected_mask;
+	return mtm_state->connected_mask & mtm_state->dmq_senders_mask;
 }
 
 nodemask_t
@@ -1582,6 +1582,10 @@ MtmMonitor(Datum arg)
 
 	dmq_stream_subscribe("txreq");
 
+	/* Launch resolver */
+	Assert(resolver == NULL);
+	resolver = ResolverStart(db_id, user_id);
+
 	for (;;)
 	{
 		int rc;
@@ -1634,11 +1638,6 @@ MtmMonitor(Datum arg)
 
 			config_valid = true;
 		}
-
-		/* Launch resolver after we added dmq destinations */
-		// XXX: that's because of current use of Mtm->peers[].dmq_dest_id
-		if (resolver == NULL)
-			resolver = ResolverStart(db_id, user_id);
 
 		// XXX: add tx start/stop to clear mcxt?
 		check_status_requests(mtm_cfg);

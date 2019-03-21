@@ -88,6 +88,8 @@ class MtmClient(object):
 
         self.initdb()
 
+        print('initialized')
+
         self.nodes_state_fields = ["id", "disabled", "disconnected", "catchUp", "slotLag",
             "avgTransDelay", "lastStatusChange", "oldestSnapshot", "SenderPid",
             "SenderStartTime ", "ReceiverPid", "ReceiverStartTime", "connStr"]
@@ -168,7 +170,7 @@ class MtmClient(object):
         cur = conn.cursor()
         cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
             ("dbname=regression user=pg host=node1",
-            '"dbname=regression user=pg host=node2"'))
+            '"dbname=regression user=pg host=node2", "dbname=regression user=pg host=node3"'))
         conn.commit()
         cur.close()
         conn.close()
