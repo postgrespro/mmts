@@ -1274,6 +1274,8 @@ dmq_reattach_shm_mq(int handle_id)
 	dsm_handle receiver_dsm;
 	int i;
 
+	dsm_segment *new_segmap;
+
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
@@ -1310,6 +1312,14 @@ dmq_reattach_shm_mq(int handle_id)
 			dmq_local.inhandles[handle_id].name,
 			receiver_dsm);
 
+	/* try to attch new segment before destroying old ones */
+	new_segmap = dsm_attach(receiver_dsm);
+	if (new_segmap == NULL)
+	{
+		mtm_log(DmqTraceShmMq, "unable to map dynamic shared memory segment");
+		return false;
+	}
+
 	if (dmq_local.inhandles[handle_id].dsm_seg)
 	{
 		if (dmq_local.inhandles[handle_id].mqh)
@@ -1323,13 +1333,7 @@ dmq_reattach_shm_mq(int handle_id)
 		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
 	}
 
-	dmq_local.inhandles[handle_id].dsm_seg = dsm_attach(receiver_dsm);
-	if (dmq_local.inhandles[handle_id].dsm_seg == NULL)
-	{
-		mtm_log(DmqTraceShmMq, "unable to map dynamic shared memory segment");
-		return false;
-	}
-
+	dmq_local.inhandles[handle_id].dsm_seg = new_segmap;
 	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 
 	toc = shm_toc_attach(DMQ_MQ_MAGIC,
