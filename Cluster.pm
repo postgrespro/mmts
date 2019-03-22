@@ -28,6 +28,9 @@ sub init
 	my ($self) = @_;
 	my $nodes = $self->{nodes};
 
+	# use port range different to ordinary TAP tests
+	$PostgresNode::last_port_assigned = int(rand() * 16384) + 32767;
+
 	foreach my $node (@$nodes)
 	{
 		$node->{_host} = '127.0.0.1';
