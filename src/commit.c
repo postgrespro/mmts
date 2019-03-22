@@ -22,6 +22,8 @@
 #include "tcop/tcopprot.h"
 #include "postmaster/autovacuum.h"
 #include "libpq/pqformat.h"
+#include "pgstat.h"
+#include "storage/ipc.h"
 
 #include "multimaster.h"
 #include "logger.h"
@@ -32,7 +34,7 @@
 
 typedef struct
 {
-	StringInfo	message;
+	StringInfoData	message;
 	int			node_id;
 } mtm_msg;
 
@@ -267,7 +269,7 @@ MtmTwoPhaseCommit()
 
 	for (i = 0; i < n_messages; i++)
 	{
-		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
+		MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
 
 		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
 		if (status == MSG_ABORTED)
@@ -307,11 +309,13 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 	*msg_count = 0;
 	while (participants != 0)
 	{
-		bool ret;
-		DmqSenderId sender_id;
-		StringInfo msg = makeStringInfo();
+		bool		ret;
+		DmqSenderId	sender_id;
+		StringInfoData	msg;
+		int			rc;
+		bool		wait;
 
-		ret = dmq_pop(&sender_id, msg, participants);
+		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
 			messages[*msg_count].message = msg;
@@ -323,7 +327,7 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 					"gather: got message from node%d",
 					sender_to_node[sender_id]);
 		}
-		else
+		else if (sender_id >= 0)
 		{
 			/*
 			 * If queue is detached then the neignbour node is probably
@@ -337,6 +341,19 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 					"GatherPrecommit: dropping node%d from tx participants",
 					sender_to_node[sender_id]);
 			}
+		}
+
+		if (wait)
+		{
+			// XXX cache that
+			rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 100.0,
+						PG_WAIT_EXTENSION);
+
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
+
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
 		}
 	}
 }
@@ -373,7 +390,7 @@ MtmExplicitPrepare(char *gid)
 
 	for (i = 0; i < n_messages; i++)
 	{
-		MtmMessageCode status = pq_getmsgbyte(messages[i].message);
+		MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
 
 		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
 		if (status == MSG_ABORTED)

@@ -1196,8 +1196,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
 	StringInfoData msg;
+	bool		wait;
 
-	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask()))
+	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		DmqDestinationId dest_id;
 		StringInfoData response_msg;

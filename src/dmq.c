@@ -1529,10 +1529,13 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 }
 
 bool
-dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
+dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 {
 	shm_mq_result res;
 	int i;
+
+	*wait = true;
+	*sender_id = -1;
 
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
@@ -1553,7 +1556,9 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			msg->len = len;
 			msg->maxlen = -1;
 			msg->cursor = 0;
+
 			*sender_id = i;
+			*wait = false;
 
 			mtm_log(DmqTraceIncoming,
 					"[DMQ] dmq_pop_nb: got message %s (len=%zu) from %s",
@@ -1562,8 +1567,11 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 		}
 		else if (res == SHM_MQ_DETACHED)
 		{
-			if (!dmq_reattach_shm_mq(i))
-				mtm_log(WARNING, "[DMQ] dmq_pop_nb: failed to reattach");
+			*sender_id = i;
+
+			if (dmq_reattach_shm_mq(i))
+				*wait = false;
+
 			return false;
 		}
 	}
