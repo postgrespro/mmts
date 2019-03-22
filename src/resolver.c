@@ -302,7 +302,7 @@ exists(resolver_tx *tx, MtmTxStateMask mask)
 {
 	int i;
 
-	for (i = 0; i < tx->n_participants; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (tx->state[i] & mask)
 			return true;
@@ -317,7 +317,7 @@ majority_in(resolver_tx *tx, MtmTxStateMask mask)
 	int i;
 	int hits = 0;
 
-	for (i = 0; i < tx->n_participants; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (tx->state[i] & mask)
 			hits++;
