@@ -196,17 +196,19 @@ MtmSetClusterStatus(MtmNodeStatus status)
 	 */
 	if (status == MTM_ONLINE)
 	{
-		int saved_winner_node_id = MtmRefereeReadSaved();
-		if (!mtm_state->referee_grant && saved_winner_node_id > 0)
-		{
-			/*
-			 * We booted after being with refereeGrant,
-			 * but now have ordinary majority.
-			 */
-			// MtmPollStatusOfPreparedTransactions(true);
-			ResolveAllTransactions(popcount(mtm_state->configured_mask));
-			mtm_state->referee_winner_id = saved_winner_node_id;
-		}
+		// XXX: don't access any tables during state switch
+		//
+		// int saved_winner_node_id = MtmRefereeReadSaved();
+		// if (!mtm_state->referee_grant && saved_winner_node_id > 0)
+		// {
+		// 	/*
+		// 	 * We booted after being with refereeGrant,
+		// 	 * but now have ordinary majority.
+		// 	 */
+		// 	// MtmPollStatusOfPreparedTransactions(true);
+		// 	ResolveAllTransactions(popcount(mtm_state->configured_mask));
+		// 	mtm_state->referee_winner_id = saved_winner_node_id;
+		// }
 		MtmEnableNode(Mtm->my_node_id);
 	}
 
