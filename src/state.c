@@ -71,6 +71,7 @@ struct MtmState
 	int			recovery_slot;
 
 	int			recovery_count;
+	int			node_recovery_count[MTM_MAX_NODES];
 
 	LWLock	   *lock;
 
@@ -449,6 +450,7 @@ MtmDisableNode(int node_id)
 	mtm_log(MtmStateMessage, "[STATE] Node %i: disabled", node_id);
 
 	BIT_CLEAR(mtm_state->enabled_mask, node_id - 1);
+	mtm_state->node_recovery_count[node_id - 1] += 1;
 
 	// XXX my_node_id
 	if (mtm_state->status == MTM_ONLINE)
@@ -1075,6 +1077,18 @@ int
 MtmGetRecoveryCount()
 {
 	return mtm_state->recovery_count;
+}
+
+int
+MtmGetNodeDisableCount(int node_id)
+{
+	int count;
+
+	LWLockAcquire(mtm_state->lock, LW_SHARED);
+	count = mtm_state->node_recovery_count[node_id - 1];
+	LWLockRelease(mtm_state->lock);
+
+	return count;
 }
 
 // XXX: During evaluation of (mtm.node_info(id)).* this function called

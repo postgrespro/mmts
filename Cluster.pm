@@ -16,7 +16,7 @@ sub new
 
 	my $self = {
 		nodes => \@nodes,
-		recv_timeout => 3
+		recv_timeout => 6
 	};
 
 	bless $self, $class;

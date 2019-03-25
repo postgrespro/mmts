@@ -564,7 +564,8 @@ pglogical_receiver_main(Datum main_arg)
 	 */
 	for(;;)
 	{
-		int	 count;
+		int			count,
+					counterpart_disable_count;
 		XLogRecPtr		remote_start = InvalidXLogRecPtr;
 		Syncpoint	   *spvector = NULL;
 		HTAB		   *filter_map = NULL;
@@ -586,11 +587,8 @@ pglogical_receiver_main(Datum main_arg)
 		Mtm->peers[nodeId - 1].receiver_mode = mode;
 		LWLockRelease(Mtm->lock);
 
-		// XXX: delete unnecessary modes
-		Assert(mode == REPLMODE_RECOVERY || mode == REPLMODE_RECOVERED);
-
-		// XXX: avoid that
 		count = MtmGetRecoveryCount();
+		counterpart_disable_count = MtmGetNodeDisableCount(nodeId);
 
 		/* Establish connection to remote server */
 		conn = receiver_connect(MtmNodeById(receiver_mtm_cfg, nodeId)->conninfo);
@@ -715,9 +713,14 @@ pglogical_receiver_main(Datum main_arg)
 				proc_exit(1);
 			}
 
-
 			if (count != MtmGetRecoveryCount()) {
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
+				goto OnError;
+			}
+
+			if (counterpart_disable_count != MtmGetNodeDisableCount(nodeId))
+			{
+				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because counterpart was disabled", worker_proc)));
 				goto OnError;
 			}
 
