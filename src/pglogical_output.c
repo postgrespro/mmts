@@ -478,6 +478,17 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		abort();					/* keep the compiler quiet */
 	}
 
+
+	if (hooks_data->counterpart_disable_count != MtmGetNodeDisableCount(MtmReplicationNodeId))
+	{
+		mtm_log(LOG, "exiting due to disabled counterpart");
+		if (whereToSendOutput == DestRemote)
+			whereToSendOutput = DestNone;
+
+		proc_exit(0);
+		abort();					/* keep the compiler quiet */
+	}
+
 	/*
 	 * MtmOutputPluginPrepareWrite send some bytes to downstream,
 	 * so we must avoid calling it in normal (non-recovery) situation.
