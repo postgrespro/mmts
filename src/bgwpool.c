@@ -49,7 +49,6 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 	receiver_mtm_cfg_valid = false;
 }
 
-
 static void
 BgwPoolMainLoop(BgwPool* pool)
 {
@@ -68,10 +67,10 @@ BgwPoolMainLoop(BgwPool* pool)
 	MtmIsLogicalReceiver = true;
 	MtmPool = pool;
 
-	pqsignal(SIGINT, StatementCancelHandler);
+	pqsignal(SIGINT, ApplyCancelHandler);
 	pqsignal(SIGQUIT, BgwShutdownHandler);
 	pqsignal(SIGTERM, BgwShutdownHandler);
-	pqsignal(SIGHUP, PostgresSigHupHandler);
+	pqsignal(SIGHUP, ApplyCancelHandler);
 
 	// XXX: probably we should add static variable that signalizes that
 	// we are between pool->active += 1 and pool->active -= 1, so if
@@ -105,6 +104,7 @@ BgwPoolMainLoop(BgwPool* pool)
 		if (pool->shutdown)
 		{
 			PGSemaphoreUnlock(pool->available);
+			SpinLockRelease(&pool->lock);
 			break;
 		}
 		size = * (int *) &pool->queue[pool->head];
@@ -113,6 +113,7 @@ BgwPoolMainLoop(BgwPool* pool)
 		work = palloc(size);
 		pool->pending -= 1;
 		pool->active += 1;
+
 		if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
 			pool->lastPeakTime = MtmGetSystemTime();
 
@@ -152,9 +153,6 @@ BgwPoolMainLoop(BgwPool* pool)
 
 		SpinLockRelease(&pool->lock);
 
-		/* Ignore cancel that arrived before we started current command */
-		QueryCancelPending = false;
-
 		MtmExecutor(work, size, &ctx);
 		pfree(work);
 
@@ -166,7 +164,6 @@ BgwPoolMainLoop(BgwPool* pool)
 		ConditionVariableBroadcast(&pool->syncpoint_cv);
 	}
 
-	SpinLockRelease(&pool->lock);
 	mtm_log(BgwPoolEvent, "Shutdown background worker %d", MyProcPid);
 }
 

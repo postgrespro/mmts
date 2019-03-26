@@ -76,6 +76,7 @@ typedef struct TupleData
 	bool		changed[MaxTupleAttributeNumber];
 } TupleData;
 
+static bool query_cancel_allowed;
 
 static Relation read_rel(StringInfo s, LOCKMODE mode);
 static void read_tuple_parts(StringInfo s, Relation rel, TupleData *tup);
@@ -121,6 +122,25 @@ MtmHandleApplyError(void)
 	FreeErrorData(edata);
 }
 
+void
+ApplyCancelHandler(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+
+	/*
+	 * Don't joggle the elbow of proc_exit
+	 */
+	if (!proc_exit_inprogress && query_cancel_allowed)
+	{
+		InterruptPending = true;
+		QueryCancelPending = true;
+	}
+
+	/* If we're still here, waken anything waiting on the process latch */
+	SetLatch(MyLatch);
+
+	errno = save_errno;
+}
 
 bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
 {
@@ -482,6 +502,10 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 {
 	gtid->node = pq_getmsgint(s, 4);
 	gtid->xid = pq_getmsgint64(s);
+
+	InterruptPending = false;
+	QueryCancelPending = false;
+	query_cancel_allowed = true;
 
 	// XXX: get rid of MtmReplicationNodeId
 	MtmReplicationNodeId = gtid->node;
@@ -929,6 +953,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	{
 		case PGLOGICAL_PRECOMMIT_PREPARED:
 		{
+			Assert(!query_cancel_allowed);
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MtmBeginSession(origin_node);
 
@@ -979,6 +1004,10 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			CommitTransactionCommand();
 
+			InterruptPending = false;
+			QueryCancelPending = false;
+			query_cancel_allowed = false;
+
 			if (receiver_ctx->parallel_allowed)
 			{
 				mtm_send_xid_reply(current_gtid->xid, origin_node,
@@ -1005,6 +1034,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		}
 		case PGLOGICAL_COMMIT_PREPARED:
 		{
+			Assert(!query_cancel_allowed);
 			pq_getmsgint64(in); /* csn */
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			StartTransactionCommand();
@@ -1621,6 +1651,7 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     }
     PG_CATCH();
     {
+		query_cancel_allowed = false;
 
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		MtmHandleApplyError();
