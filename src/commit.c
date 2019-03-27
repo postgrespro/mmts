@@ -327,19 +327,25 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 					"gather: got message from node%d",
 					sender_to_node[sender_id]);
 		}
-		else if (sender_id >= 0)
+		else
 		{
 			/*
 			 * If queue is detached then the neignbour node is probably
 			 * disconnected. Let's wait when it became disabled as we can
 			 * became offline by this time.
 			 */
-			if (!BIT_CHECK(MtmGetEnabledNodeMask(), sender_to_node[sender_id] - 1))
+			int			i;
+			nodemask_t	enabled = MtmGetEnabledNodeMask();
+
+			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
-				BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
-				mtm_log(MtmTxTrace,
-					"GatherPrecommit: dropping node%d from tx participants",
-					sender_to_node[sender_id]);
+				if (BIT_CHECK(participants, i) && !BIT_CHECK(enabled, i))
+				{
+					BIT_CLEAR(participants, i);
+					mtm_log(MtmTxTrace,
+						"GatherPrecommit: dropping node%d from tx participants",
+						i + 1);
+				}
 			}
 		}
 
