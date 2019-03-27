@@ -676,6 +676,7 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Active;
 						DeleteWaitEvent(set, event.pos);
+						PQsetnonblocking(conns[conn_id].pgconn, 1);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] Connected to %s",
