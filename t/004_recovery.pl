@@ -34,6 +34,7 @@ $cluster->await_nodes( (0,1) );
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
 $cluster->pgbench(1, ('-n','-N', -T => '4') );
 
+$cluster->await_nodes( (0,1) ); # just in case we've faced random timeout before
 $hash0 = $cluster->safe_psql(0, $hash_query);
 $hash1 = $cluster->safe_psql(1, $hash_query);
 is($hash0, $hash1, "Check that hash is the same before recovery");
