@@ -36,6 +36,8 @@
 #include "utils/typcache.h"
 #include "utils/snapmgr.h"
 
+#include "storage/ipc.h"
+
 #include "replication/message.h"
 
 #include "pglogical_relid_map.h"
@@ -723,6 +725,14 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	hooks_data->cfg = MtmLoadConfig();
 	hooks_data->recovery_count = MtmGetRecoveryCount();
 	hooks_data->counterpart_disable_count = MtmGetNodeDisableCount(MtmReplicationNodeId);
+
+	if (!BIT_CHECK(MtmGetConnectedNodeMask(), MtmReplicationNodeId - 1))
+	{
+		mtm_log(LOG, "exiting as dmq connection is not yet fully established");
+
+		proc_exit(0);
+		abort();					/* keep the compiler quiet */
+	}
 
 	foreach(param, args->in_params)
 	{
