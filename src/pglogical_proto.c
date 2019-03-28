@@ -157,6 +157,7 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	MtmIsFilteredTxn = false;
+	DDLInProgress = false;
 
 	pq_sendbyte(out, 'B');		/* BEGIN */
 	pq_sendint(out, hooks_data->cfg->my_node_id, 4);
