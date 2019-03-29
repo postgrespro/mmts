@@ -597,7 +597,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		if (origin_node == Mtm->my_node_id)
 			return;
 
-		local_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+		local_lsn = GetXLogInsertRecPtr();
 	}
 	else
 	{
