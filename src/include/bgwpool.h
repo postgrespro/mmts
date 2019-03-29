@@ -9,16 +9,10 @@
 
 #include "receiver.h"
 
-typedef long timestamp_t;
-
-
 #define MAX_DBNAME_LEN 30
 #define MAX_DBUSER_LEN 30
 #define MAX_NAME_LEN 30
 #define MULTIMASTER_BGW_RESTART_TIMEOUT BGW_NEVER_RESTART /* seconds */
-
-extern timestamp_t MtmGetSystemTime(void);   /* non-adjusted current system time */
-extern timestamp_t MtmGetCurrentTime(void);  /* adjusted current system time */
 
 typedef struct
 {
@@ -32,8 +26,7 @@ typedef struct
     size_t active;
     size_t pending;
 	size_t nWorkers;
-	time_t lastPeakTime;
-	timestamp_t lastDynamicWorkerStartTime;
+	TimestampTz lastDynamicWorkerStartTime;
     bool   producerBlocked;
 	bool   shutdown;
 	char   poolName[MAX_NAME_LEN];
@@ -52,8 +45,6 @@ extern void BgwPoolInit(BgwPool* pool, size_t queueSize, size_t nWorkers);
 extern void BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx);
 
 extern size_t BgwPoolGetQueueSize(BgwPool* pool);
-
-extern timestamp_t BgwGetLastPeekTime(BgwPool* pool);
 
 extern void BgwPoolStop(BgwPool* pool);
 

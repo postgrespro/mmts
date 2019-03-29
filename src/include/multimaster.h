@@ -196,7 +196,7 @@ extern int	MtmMaxWorkers;
 extern int	MtmMaxNodes;
 extern bool	MtmBreakConnection;
 
-extern void MtmSleep(timestamp_t interval);
+extern void MtmSleep(int64 interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);
 extern MtmConfig *MtmLoadConfig(void);

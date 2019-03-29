@@ -4,37 +4,15 @@
  * Multimaster based on logical replication
  *
  */
-// XXX: evict that
-#include <unistd.h>
-#include <sys/time.h>
-#include <time.h>
-
 #include "postgres.h"
+
 #include "access/xtm.h"
-#include "access/clog.h"
-#include "access/transam.h"
-#include "access/twophase.h"
-#include "access/relscan.h"
-#include "common/username.h"
-#include "catalog/namespace.h"
 #include "nodes/makefuncs.h"
-#include "postmaster/autovacuum.h"
-#include "postmaster/postmaster.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
 #include "replication/logical.h"
-#include "replication/walsender.h"
 #include "storage/ipc.h"
-#include "utils/guc.h"
 #include "utils/builtins.h"
-#include "funcapi.h"
-#include "fmgr.h"
-#include "miscadmin.h"
-#include "pgstat.h"
-#include "parser/parse_node.h"
-#include "commands/extension.h"
-#include "catalog/pg_class.h"
-#include "commands/tablecmds.h"
 #include "commands/publicationcmds.h"
 #include "commands/subscriptioncmds.h"
 #include "executor/spi.h"
@@ -42,24 +20,20 @@
 #include "tcop/tcopprot.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_publication.h"
-#include "utils/syscache.h"
-#include "catalog/objectaddress.h"
 #include "utils/rel.h"
-#include "catalog/indexing.h"
-#include "utils/hsearch.h"
 #include "commands/defrem.h"
 #include "replication/message.h"
-#include "utils/syscache.h"
 #include "utils/pg_lsn.h"
+#include "replication/walreceiver.h"
+#include "funcapi.h"
+#include "miscadmin.h"
+#include "pgstat.h"
 
 #include "multimaster.h"
 #include "ddd.h"
 #include "ddl.h"
 #include "state.h"
-#include "receiver.h"
-#include "resolver.h"
 #include "logger.h"
-#include "syncpoint.h"
 #include "commit.h"
 
 #include "compat.h"
@@ -165,25 +139,18 @@ MtmGetIncreasingTimestamp()
 	return now;
 }
 
-timestamp_t MtmGetSystemTime(void)
+void MtmSleep(int64 usec)
 {
-	struct timeval tv;
-	gettimeofday(&tv, NULL);
-	return (timestamp_t)tv.tv_sec*USECS_PER_SEC + tv.tv_usec;
-}
-
-void MtmSleep(timestamp_t usec)
-{
-	timestamp_t waketm = MtmGetSystemTime() + usec;
+	TimestampTz waketm = GetCurrentTimestamp() + usec;
 
 	for (;;)
 	{
 		int rc;
-		timestamp_t sleepfor;
+		TimestampTz sleepfor;
 
 		CHECK_FOR_INTERRUPTS();
 
-		sleepfor = waketm - MtmGetSystemTime();
+		sleepfor = waketm - GetCurrentTimestamp();
 		if (sleepfor < 0)
 			break;
 

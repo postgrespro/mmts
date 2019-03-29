@@ -114,9 +114,6 @@ BgwPoolMainLoop(BgwPool* pool)
 		pool->pending -= 1;
 		pool->active += 1;
 
-		if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
-			pool->lastPeakTime = MtmGetSystemTime();
-
 		if (pool->head + size + payload + sizeof(int) > pool->size)
 		{
 			ctx = * (MtmReceiverContext *) &pool->queue;
@@ -148,7 +145,6 @@ BgwPoolMainLoop(BgwPool* pool)
 		{
 			pool->producerBlocked = false;
 			PGSemaphoreUnlock(pool->overflow);
-			pool->lastPeakTime = 0;
 		}
 
 		SpinLockRelease(&pool->lock);
@@ -158,7 +154,6 @@ BgwPoolMainLoop(BgwPool* pool)
 
 		SpinLockAcquire(&pool->lock);
 		pool->active -= 1;
-		pool->lastPeakTime = 0;
 		SpinLockRelease(&pool->lock);
 
 		ConditionVariableBroadcast(&pool->syncpoint_cv);
@@ -193,13 +188,7 @@ BgwPoolInit(BgwPool* pool, size_t queueSize, size_t nWorkers)
     pool->active = 0;
     pool->pending = 0;
 	pool->nWorkers = nWorkers;
-	pool->lastPeakTime = 0;
 	pool->lastDynamicWorkerStartTime = 0;
-}
- 
-timestamp_t BgwGetLastPeekTime(BgwPool* pool)
-{
-	return pool->lastPeakTime;
 }
 
 void BgwPoolDynamicWorkerMainLoop(Datum arg)
@@ -220,7 +209,6 @@ BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
 	pool->tail = 0;
 	pool->active = 0;
 	pool->pending = 0;
-	pool->lastPeakTime = 0;
 	pool->lastDynamicWorkerStartTime = 0;
 
 	PGSemaphoreReset(pool->available);
@@ -255,7 +243,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int) pool->nWorkers + 1);
 
-	pool->lastDynamicWorkerStartTime = MtmGetSystemTime();
+	pool->lastDynamicWorkerStartTime = GetCurrentTimestamp();
 
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 
@@ -309,9 +297,6 @@ BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 			if (pool->active + pool->pending > pool->nWorkers)
 				BgwStartExtraWorker(pool);
 
-			if (pool->lastPeakTime == 0 && pool->active == pool->nWorkers && pool->pending != 0)
-				pool->lastPeakTime = MtmGetSystemTime();
-
 			/*
 			 * We always have free space for size at tail, as everything is 
 			 * int-aligded and when pool->tail becomes equal to pool->size it
@@ -340,9 +325,6 @@ BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 		}
 		else
 		{
-			if (pool->lastPeakTime == 0)
-				pool->lastPeakTime = MtmGetSystemTime();
-
 			pool->producerBlocked = true;
 			SpinLockRelease(&pool->lock);
 			PGSemaphoreLock(pool->overflow);
