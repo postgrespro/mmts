@@ -790,6 +790,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	{
 		CreateSubscriptionStmt *cs_stmt = makeNode(CreateSubscriptionStmt);
 		char	   *origin_name;
+		int			saved_client_min_messages = client_min_messages;
+		int			saved_log_min_messages = log_min_messages;
 
 		Assert(!conninfo_isnull);
 
@@ -809,8 +811,16 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 			makeDefElem("connect", (Node *) makeString("false"), -1),
 			makeDefElem("enabled", (Node *) makeString("false"), -1)
 		);
-		// XXX: stupid warning
+
+		/* supress unecessary and scary warning ('tables were not subscribed ..') */
+		client_min_messages = ERROR;
+		log_min_messages = ERROR;
+
 		CreateSubscription(cs_stmt, true);
+
+		/* restore log_level's */
+		client_min_messages = saved_client_min_messages;
+		log_min_messages = saved_log_min_messages;
 
 		/*
 		 * Create origin for this neighbour.
