@@ -1229,6 +1229,17 @@ check_status_requests(MtmConfig *mtm_cfg)
 		mtm_log(StatusRequest, "got status request for %s from %d",
 				gid, sender_node_id);
 
+		/*
+		 * During recovery we may answer with preliminary "notfound" message
+		 * that woul cause erroneus abort of transaction beeing asked about.
+		 */
+		if (MtmGetCurrentStatus() < MTM_RECOVERED)
+		{
+			mtm_log(StatusRequest,
+					"skipping status request as node is not recovered yet");
+			continue;
+		}
+
 		state_3pc = GetLoggedPreparedXactState(gid);
 
 		// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
