@@ -1000,7 +1000,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 			/* PREPARE itself */
 			res = PrepareTransactionBlock(gid);
-			mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
+			mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid="XID_FMT")", gid, xid);
 
 			CommitTransactionCommand();
 
