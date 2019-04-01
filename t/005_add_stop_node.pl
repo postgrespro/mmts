@@ -56,6 +56,7 @@ my $pgb1= $cluster->pgbench_async(0, ('-N', '-n', -T => '3600', -c => '2') );
 my $pgb2= $cluster->pgbench_async(1, ('-N', '-n', -T => '3600', -c => '2') );
 
 my $new_node_off = $cluster->add_node();
+my $sock = $cluster->hold_socket($new_node_off);
 my $connstr = $cluster->connstr($new_node_off);
 my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node('$connstr')");
 
@@ -65,6 +66,7 @@ is($new_node_off, 3, "sparse id assignment");
 $cluster->pgbench(0, ('-N', '-n', -t => '100') );
 
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
+$cluster->release_socket($sock);
 $cluster->{nodes}->[$new_node_off]->start;
 $cluster->await_nodes( (3,0,1,2) );
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");

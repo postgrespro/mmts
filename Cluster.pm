@@ -6,6 +6,7 @@ use TestLib;
 use Test::More;
 use Cwd;
 use IPC::Run;
+use Socket;
 
 sub new
 {
@@ -247,5 +248,32 @@ sub is_data_identic()
 	note($checksum);
 	return 1;
 }
+
+sub hold_socket()
+{
+	my ($self, $node_off) = @_;
+	my $node = $self->{nodes}->[$node_off];
+	my $iaddr = inet_aton('127.0.0.1');
+	my $paddr = sockaddr_in($node->{_port}, $iaddr);
+	my $proto = getprotobyname("tcp");
+
+	socket(my $sock, PF_INET, SOCK_STREAM, $proto)
+		or die "socket failed: $!";
+
+	# As in postmaster, don't use SO_REUSEADDR on Windows
+	setsockopt($sock, SOL_SOCKET, SO_REUSEADDR, pack("l", 1))
+		unless $TestLib::windows_os;
+	(bind($sock, $paddr) && listen($sock, SOMAXCONN))
+		or die "socket bind and listen failed: $!";
+
+	return $sock;
+}
+
+sub release_socket()
+{
+	my ($self, $sock) = @_;
+	close($sock);
+}
+
 
 1;
