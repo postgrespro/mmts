@@ -671,7 +671,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		{
 			int64 session_id = 0;
 
-			mtm_log(MtmApplyMessage, "Executing parallel-safe message from %d: %s",
+			mtm_log(MtmApplyMessage, "Processing parallel-safe message from %d: %s",
 					receiver_ctx->node_id, messageBody);
 
 			sscanf(messageBody, INT64_FORMAT, &session_id);
@@ -685,6 +685,9 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 				Assert(!receiver_ctx->parallel_allowed);
 				Assert(receiver_ctx->node_id > 0);
 				Assert(receiver_ctx->node_id == MtmReplicationNodeId);
+
+				mtm_log(MtmApplyMessage, "Executing parallel-safe message from %d: %s",
+					receiver_ctx->node_id, messageBody);
 
 				receiver_ctx->parallel_allowed = true;
 				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
