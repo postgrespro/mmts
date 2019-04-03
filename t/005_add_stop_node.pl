@@ -19,6 +19,8 @@ foreach (0..$#{$cluster->{nodes}})
 {
     my $node = $cluster->{nodes}->[$_];
 
+    $node->{dbname} = 'postgres';
+
     note($cluster->connstr($_));
 
     $cluster->safe_psql($_, qq{
@@ -56,9 +58,10 @@ my $pgb1= $cluster->pgbench_async(0, ('-N', '-n', -T => '3600', -c => '2') );
 my $pgb2= $cluster->pgbench_async(1, ('-N', '-n', -T => '3600', -c => '2') );
 
 my $new_node_off = $cluster->add_node();
+$cluster->{nodes}->[$new_node_off]->{dbname} = 'postgres';
 my $sock = $cluster->hold_socket($new_node_off);
 my $connstr = $cluster->connstr($new_node_off);
-my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node('$connstr')");
+my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node(\$\$$connstr\$\$)");
 
 is($new_node_id, 1, "sparse id assignment");
 is($new_node_off, 3, "sparse id assignment");
@@ -81,7 +84,7 @@ $cluster->pgbench(3, ('-N', '-n', -t => '100') );
 
 is($cluster->is_data_identic( (0,1,2,3) ), 1, "add basebackuped node");
 
-my $bb_keycount = $cluster->safe_psql(0, q{
+my $bb_keycount = $cluster->safe_psql(3, q{
     select count(*) from mtm.config where key='basebackup'
 });
 
