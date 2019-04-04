@@ -18,8 +18,12 @@ $cluster->start();
 foreach (0..$#{$cluster->{nodes}})
 {
     my $node = $cluster->{nodes}->[$_];
-
     $node->{dbname} = 'postgres';
+}
+
+foreach (0..$#{$cluster->{nodes}})
+{
+    my $node = $cluster->{nodes}->[$_];
 
     note($cluster->connstr($_));
 
