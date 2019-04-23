@@ -26,8 +26,8 @@ typedef enum MtmLogTag
 	DmqStateFinal			= LOG,
 	DmqTraceOutgoing		= DEBUG2,
 	DmqTraceIncoming		= DEBUG2,
-	DmqTraceShmMq			= LOG,
-	DmqPqTiming				= LOG,
+	DmqTraceShmMq			= DEBUG1,
+	DmqPqTiming				= DEBUG2,
 
 	/* resolver */
 	ResolverTasks			= LOG,
@@ -37,12 +37,12 @@ typedef enum MtmLogTag
 	/* status worker */
 	StatusRequest			= LOG,
 
-	/* ddd */
+	/* pool */
 	BgwPoolEvent			= LOG,
 
 	/* ddd */
 	DeadlockCheck			= LOG,
-	DeadlockUpdate			= LOG,
+	DeadlockUpdate			= DEBUG1,
 	DeadlockSerialize		= DEBUG3,
 
 	/* ddl */
@@ -57,13 +57,13 @@ typedef enum MtmLogTag
 	ProtoTraceFilter		= DEBUG1,
 	ProtoTraceSender		= DEBUG2,
 	ProtoTraceMode			= LOG,
-	ProtoTraceMessage		= LOG,
+	ProtoTraceMessage		= DEBUG1,
 	ProtoTraceState			= LOG,
 
 	/* receiver */
 	MtmReceiverStart		= LOG,
 	MtmReceiverFilter		= LOG,
-	MtmApplyMessage			= LOG,
+	MtmApplyMessage			= DEBUG1,
 	MtmApplyTrace			= DEBUG2,
 	MtmApplyError			= LOG,
 	MtmApplyBgwFinish		= LOG,
