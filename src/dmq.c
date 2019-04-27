@@ -1063,7 +1063,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	pq_startmsgread();
 
-	ModifyWaitEvent(FeBeWaitSet, 0, WL_SOCKET_READABLE, NULL);
+	ModifyWaitEvent(MyProcPort->pqcomm_waitset, 0, WL_SOCKET_READABLE, NULL);
 
 	if (dmq_receiver_start_hook)
 		dmq_receiver_start_hook(sender_name);
@@ -1120,7 +1120,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 			break;
 		}
 
-		nevents = WaitEventSetWait(FeBeWaitSet, 250, &event, 1,
+		nevents = WaitEventSetWait(MyProcPort->pqcomm_waitset, 250, &event, 1,
 								   WAIT_EVENT_CLIENT_READ);
 
 		if (nevents > 0 && event.events & WL_LATCH_SET)
