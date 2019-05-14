@@ -410,8 +410,6 @@ MtmExplicitPrepare(char *gid)
 		}
 	}
 
-	elog(LOG, "lololo");
-
 	StartTransactionCommand();
 
 	return true;
