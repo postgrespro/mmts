@@ -1,3 +1,8 @@
+# based on
+# "Distributed snapshot isolation: global transactions pay globally,
+# local transactions pay locally"
+# by Binnig et al cross-phenomenon.
+
 use strict;
 use warnings;
 

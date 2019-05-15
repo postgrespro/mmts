@@ -16,6 +16,7 @@ if ($action eq "--start")
 	$cluster->start();
 	$cluster->create_mm('regression');
 
+	# prevent PostgresNode.pm from shutting down nodes on exit in END {}
 	@PostgresNode::all_nodes = ();
 }
 elsif ($action eq "--stop")

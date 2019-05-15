@@ -1,3 +1,5 @@
+# run sql/multimaster.sql tests
+
 use Cluster;
 # use TestLib;
 use Test::More tests => 1;

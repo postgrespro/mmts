@@ -11,7 +11,8 @@ $cluster->start();
 $cluster->create_mm();
 
 ########################################################
-# Check data integrity before and after recovery
+# Check data integrity before and after recovery of single node.
+# Easy variant: sequential pgbenches, recovery without concurrent load.
 ########################################################
 
 my $hash0; my $hash1; my $hash2; my $oldhash;

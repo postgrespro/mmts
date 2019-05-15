@@ -1,12 +1,30 @@
+# simple deadlock test
+
 use strict;
 use warnings;
 
 use Cluster;
 use TestLib;
-use Test::More tests => 2;
 
+# Test whether we have DBD::pg...
 use DBI;
-use DBD::Pg ':async';
+my $dbdpg_rc = eval
+{
+  require DBD::Pg;
+  DBD::Pg->import(':async');
+  1;
+};
+
+# And tell Test::More to skip the test entirely if not
+require Test::More;
+if (not $dbdpg_rc)
+{
+	Test::More->import(skip_all => 'DBD::pg is not available');
+}
+else
+{
+	Test::More->import(tests => 1);
+}
 
 sub query_row
 {
@@ -29,7 +47,10 @@ sub query_exec
 sub query_exec_async
 {
 	my ($dbi, $sql) = @_;
-	my $rv = $dbi->do($sql, {pg_async => PG_ASYNC}) || die;
+	# Since we are not importing DBD::Pg at compilation time, we can't use
+	# constants from it.
+	my $DBD_PG_PG_ASYNC = 1;
+	my $rv = $dbi->do($sql, {pg_async => $DBD_PG_PG_ASYNC}) || die;
 	diag("query_exec_async('$sql')\n");
 	return $rv;
 }
@@ -37,16 +58,16 @@ sub query_exec_async
 my $cluster = new Cluster(2);
 
 $cluster->init();
-$cluster->configure();
 $cluster->start();
+$cluster->create_mm('regression');
 
 my ($rc, $out, $err);
 sleep(10);
 
-$cluster->psql(0, 'postgres', "create table t(k int primary key, v text)");
-$cluster->psql(0, 'postgres', "insert into t values (1, 'hello'), (2, 'world')");
+$cluster->safe_psql(0, "create table t(k int primary key, v text)");
+$cluster->safe_psql(0, "insert into t values (1, 'hello'), (2, 'world')");
 
-my @conns = map { DBI->connect('DBI:Pg:' . $_->connstr()) } @{$cluster->{nodes}};
+my @conns = map { DBI->connect('DBI:Pg:' . $cluster->connstr($_)) } 0..1;
 
 query_exec($conns[0], "begin");
 query_exec($conns[1], "begin");
@@ -93,5 +114,4 @@ else
 
 query_row($conns[0], "select * from t where k = 1");
 
-ok($cluster->stop('fast'), "cluster stops");
-1;
+$cluster->stop('fast');

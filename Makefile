@@ -33,7 +33,7 @@ submake-regress:
 	$(MAKE) -C $(top_builddir)/src/test/regress all
 	$(MAKE) -C $(top_builddir)/src/test/regress tablespace-setup
 
-PROVE_TESTS=t/0000_precommit.pl t/000_regress.pl t/000_truncate.pl t/001_basic_recovery.pl
+PROVE_TESTS=t/0000_precommit.pl t/000_regress.pl t/000_truncate.pl t/000_deadlock.pl t/001_basic_recovery.pl
 check: temp-install submake-regress
 	$(prove_check)
 

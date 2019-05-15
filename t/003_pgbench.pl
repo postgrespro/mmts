@@ -1,3 +1,6 @@
+# Kinda bank test: on each node multiple clients transfer money from one acc to
+# another, another bunch of clients make sure sum is constant always.
+
 use strict;
 use warnings;
 

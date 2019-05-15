@@ -1,11 +1,17 @@
 CURPATH=`pwd`
 USER=`whoami`
 BASEDIR=$CURPATH/../..
-export PATH=$BASEDIR/tmp_install/usr/local/pgsql/bin/:$PATH
+export PREFIX=$(grep -o -e '^prefix=.*' ../../config.log | sed -e 's/prefix=//' | tr -d "'")
+if [ -z "${PREFIX}" ]; then
+    echo "Couldn't get --prefix from config.log. Probably ./configure is not run?"
+    exit 1
+fi
+export TMPINSTALL_PATH="${BASEDIR}/tmp_install/${PREFIX}"
+export PATH=$TMPINSTALL_PATH/bin/:$PATH
 export DESTDIR=$BASEDIR/tmp_install
 export PGHOST=127.0.0.1
-export LD_LIBRARY_PATH=$BASEDIR/tmp_install/usr/local/pgsql/lib/:$LD_LIBRARY_PATH
-export DYLD_LIBRARY_PATH=$BASEDIR/tmp_install/usr/local/pgsql/lib/:$DYLD_LIBRARY_PATH
+export LD_LIBRARY_PATH=$TMPINSTALL_PATH/lib/:$LD_LIBRARY_PATH
+export DYLD_LIBRARY_PATH=$TMPINSTALL_PATH/lib/:$DYLD_LIBRARY_PATH
 
 n_nodes=3
 ulimit -c unlimited
@@ -13,6 +19,7 @@ pkill -9 postgres
 
 # cd $BASEDIR
 # make install
+make temp-install
 
 cd $BASEDIR/contrib/mmts
 make clean && make install
@@ -40,7 +47,7 @@ rm -rf tmp_check *.log
 conn_str=""
 sep=""
 for ((i=1;i<=n_nodes;i++))
-do    
+do
     port=$((5431 + i))
     arbiter_port=$((7000 + i))
     conn_str="$conn_str${sep} dbname=$USER host=127.0.0.1 port=$port sslmode=disable"
