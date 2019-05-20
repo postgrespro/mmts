@@ -378,7 +378,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	ByteBufferAlloc(&buf);
 	EnumerateLocks(MtmSerializeLock, &buf);
 
-	// Assert(replorigin_session_origin == InvalidRepOriginId);
+	Assert(replorigin_session_origin == InvalidRepOriginId);
 	XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
 
 	MtmGraphInit(&graph);
@@ -438,13 +438,19 @@ bool
 MtmDetectGlobalDeadLock(PGPROC* proc)
 {
 	PGXACT* pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
+	bool		found;
+	RepOriginId	saved_origin_id = replorigin_session_origin;
 
 	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);
 
 	if (!TransactionIdIsValid(pgxact->xid))
 		return false;
 
-	return MtmDetectGlobalDeadLockForXid(pgxact->xid);
+	replorigin_session_origin = InvalidRepOriginId;
+	found = MtmDetectGlobalDeadLockForXid(pgxact->xid);
+	replorigin_session_origin = saved_origin_id;
+
+	return found;
 }
 
 
