@@ -236,14 +236,14 @@ MtmSharedShmemStartup()
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmShared));
-		Mtm->stop_new_commits = false;
 		Mtm->localTablesHashLoaded = false;
 		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
 		Mtm->lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
-		Mtm->commit_barrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
-		Mtm->receiver_barrier = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[2].lock);
-		Mtm->syncpoint_lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[3].lock);
+		Mtm->syncpoint_lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
+
+		ConditionVariableInit(&Mtm->commit_barrier_cv);
+		ConditionVariableInit(&Mtm->receiver_barrier_cv);
 
 		for (i = 0; i < MtmMaxNodes; i++)
 		{
@@ -467,7 +467,7 @@ _PG_init(void)
 	 * resources in mtm_shmem_startup().
 	 */
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
-	RequestNamedLWLockTranche(MULTIMASTER_NAME, 4);
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
 
 	dmq_init(MtmHeartbeatSendTimeout);
 	dmq_receiver_start_hook = MtmOnNodeConnect;
@@ -958,39 +958,91 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	 * Create syncpoints for all our peers so that new node can safely start
 	 * recovered replication connections.
 	 */
-	LWLockAcquire(Mtm->receiver_barrier, LW_EXCLUSIVE);
-	curr_lsn = GetXLogWriteRecPtr();
-	LWLockRelease(Mtm->receiver_barrier);
+
+	/* Hold all receivers */
+	for (i = 0; i < cfg->n_nodes; i++)
+	{
+		int			node_id = cfg->nodes[i].node_id;
+
+		if (node_id == cfg->my_node_id)
+			continue;
+
+		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		Mtm->pools[node_id-1].n_holders += 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+	}
+
+	/* Await for workers finish and create syncpoints */
+	PG_TRY();
+	{
+
+		while (!MtmAllApplyWorkersFinished())
+			MtmSleep(USECS_PER_SEC/10);
+
+		curr_lsn = GetXLogWriteRecPtr();
+
+		for (i = 0; i < cfg->n_nodes; i++)
+		{
+			char	   *ro_name;
+			RepOriginId	ro_id;
+			XLogRecPtr	olsn;
+			char	   *msg;
+
+			if (cfg->nodes[i].node_id == new_node_id)
+				continue;
+
+			ro_name = psprintf(MULTIMASTER_SLOT_PATTERN, cfg->nodes[i].node_id);
+			ro_id = replorigin_by_name(ro_name, false);
+			olsn = replorigin_get_progress(ro_id, false);
+
+			msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
+						cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
+
+			replorigin_session_origin = cfg->nodes[i].origin_id;
+			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+			replorigin_session_origin = InvalidRepOriginId;
+		}
+
+		{
+			char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
+			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
+		}
+
+	}
+	PG_CATCH();
+	{
+		for (i = 0; i < cfg->n_nodes; i++)
+		{
+			int			node_id = cfg->nodes[i].node_id;
+
+			if (node_id == cfg->my_node_id)
+				continue;
+
+			SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+			Mtm->pools[node_id-1].n_holders -= 1;
+			SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		}
+		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* release receiver holds */
+	for (i = 0; i < cfg->n_nodes; i++)
+	{
+		int			node_id = cfg->nodes[i].node_id;
+
+		if (node_id == cfg->my_node_id)
+			continue;
+
+		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		Mtm->pools[node_id-1].n_holders -= 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+	}
+	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 
 	/* as we going to write that lsn on a new node, let's sync it */
 	XLogFlush(curr_lsn);
-
-	for (i = 0; i < cfg->n_nodes; i++)
-	{
-		char	   *ro_name;
-		RepOriginId	ro_id;
-		XLogRecPtr	olsn;
-		char	   *msg;
-
-		if (cfg->nodes[i].node_id == new_node_id)
-			continue;
-
-		ro_name = psprintf(MULTIMASTER_SLOT_PATTERN, cfg->nodes[i].node_id);
-		ro_id = replorigin_by_name(ro_name, false);
-		olsn = replorigin_get_progress(ro_id, false);
-
-		msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
-					   cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
-
-		replorigin_session_origin = cfg->nodes[i].origin_id;
-		LogLogicalMessage("S", msg, strlen(msg) + 1, false);
-		replorigin_session_origin = InvalidRepOriginId;
-	}
-
-	{
-		char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
-		LogLogicalMessage("S", msg, strlen(msg) + 1, false);
-	}
 
 	/* fill MTM_NODES with a adjusted list of nodes */
 	query = psprintf("insert into " MTM_NODES

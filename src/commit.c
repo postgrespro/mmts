@@ -210,6 +210,7 @@ MtmTwoPhaseCommit()
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
+	bool		committers_incremented = false;
 
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
@@ -246,54 +247,89 @@ MtmTwoPhaseCommit()
 	 *
 	 * See also comments at the end of MtmReplicationStartupHook().
 	 */
-	while (Mtm->stop_new_commits)
-		MtmSleep(USECS_PER_SEC);
-
-	LWLockAcquire(Mtm->commit_barrier, LW_SHARED);
-
-	participants = MtmGetEnabledNodeMask() &
-					~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
-
-	ret = PrepareTransactionBlock(gid);
-	if (!ret)
+	PG_TRY();
 	{
-		if (!MtmVolksWagenMode)
-			mtm_log(WARNING, "Failed to prepare transaction %s", gid);
-		return true;
-	}
-	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
-	CommitTransactionCommand();
-
-	gather(participants, messages, &n_messages);
-	dmq_stream_unsubscribe(stream);
-
-	for (i = 0; i < n_messages; i++)
-	{
-		MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
-
-		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
-		if (status == MSG_ABORTED)
+		for (;;)
 		{
-			FinishPreparedTransaction(gid, false, false);
-			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-			mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
-							gid, messages[i].node_id);
+			SpinLockAcquire(&Mtm->cb_lock);
+			if (Mtm->n_commit_holders == 0)
+			{
+				Mtm->n_committers += 1;
+				committers_incremented = true;
+			}
+			SpinLockRelease(&Mtm->cb_lock);
+
+			if (committers_incremented)
+				break;
+
+			ConditionVariableSleep(&Mtm->commit_barrier_cv, PG_WAIT_EXTENSION);
 		}
+		ConditionVariableCancelSleep();
+
+		participants = MtmGetEnabledNodeMask() &
+						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+
+		ret = PrepareTransactionBlock(gid);
+		if (!ret)
+		{
+			if (!MtmVolksWagenMode)
+				mtm_log(WARNING, "Failed to prepare transaction %s", gid);
+			return true;
+		}
+		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
+		CommitTransactionCommand();
+
+		gather(participants, messages, &n_messages);
+		dmq_stream_unsubscribe(stream);
+
+		for (i = 0; i < n_messages; i++)
+		{
+			MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
+
+			Assert(status == MSG_PREPARED || status == MSG_ABORTED);
+			if (status == MSG_ABORTED)
+			{
+				FinishPreparedTransaction(gid, false, false);
+				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						errmsg("[multimaster] failed to prepare transaction %s at node %d due to concurrent update",
+								gid, messages[i].node_id)));
+			}
+		}
+
+		dmq_stream_subscribe(gid);
+
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+		gather(participants, messages, &n_messages);
+
+		StartTransactionCommand();
+		FinishPreparedTransaction(gid, true, false);
+		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
+		// XXX: make this conditional
+		gather(participants, messages, &n_messages);
+
 	}
+	PG_CATCH();
+	{
+		if (committers_incremented)
+		{
+			SpinLockAcquire(&Mtm->cb_lock);
+			Mtm->n_committers -= 1;
+			SpinLockRelease(&Mtm->cb_lock);
+			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
+		}
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
-	dmq_stream_subscribe(gid);
-
-	SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
-	mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-	gather(participants, messages, &n_messages);
-
-	StartTransactionCommand();
-	FinishPreparedTransaction(gid, true, false);
-	mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-	// XXX: make this conditional
-	gather(participants, messages, &n_messages);
-
-	LWLockRelease(Mtm->commit_barrier);
+	Assert(committers_incremented);
+	SpinLockAcquire(&Mtm->cb_lock);
+	Mtm->n_committers -= 1;
+	SpinLockRelease(&Mtm->cb_lock);
+	ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 
 	dmq_stream_unsubscribe(gid);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);

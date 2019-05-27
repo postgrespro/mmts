@@ -289,16 +289,12 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 	/* parallel_allowed should never be set during recovery */
 	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
 
-	LWLockAcquire(Mtm->receiver_barrier, LW_SHARED);
 
 	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || no_pool)
 		MtmExecutor(work, size, receiver_ctx);
 	else
 		BgwPoolExecute(&Mtm->pools[MtmReplicationNodeId-1], work, size, receiver_ctx);
 
-	/* Our error handler can release lock */
-	if (LWLockHeldByMe(Mtm->receiver_barrier))
-		LWLockRelease(Mtm->receiver_barrier);
 }
 
 /*

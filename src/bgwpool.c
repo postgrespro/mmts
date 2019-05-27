@@ -1,6 +1,7 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
 #include "storage/s_lock.h"
@@ -101,6 +102,14 @@ BgwPoolMainLoop(BgwPool* pool)
 
 		// XXX: change to LWLock
 		SpinLockAcquire(&pool->lock);
+
+		while (pool->n_holders > 0 && !pool->shutdown)
+		{
+			SpinLockRelease(&pool->lock);
+			ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
+			SpinLockAcquire(&pool->lock);
+		}
+
 		if (pool->shutdown)
 		{
 			PGSemaphoreUnlock(pool->available);
@@ -148,6 +157,8 @@ BgwPoolMainLoop(BgwPool* pool)
 		}
 
 		SpinLockRelease(&pool->lock);
+
+		ConditionVariableCancelSleep();
 
 		MtmExecutor(work, size, &ctx);
 		pfree(work);

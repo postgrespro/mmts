@@ -2,6 +2,8 @@
 
 #include "miscadmin.h"
 
+#include "pgstat.h"
+
 #include "pglogical_output.h"
 #include "replication/origin.h"
 
@@ -827,12 +829,44 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 			XLogRecPtr msg_xptr;
 			char *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
 
-			Mtm->stop_new_commits = true;
-			LWLockAcquire(Mtm->commit_barrier, LW_EXCLUSIVE);
-			MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
-			msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
-			LWLockRelease(Mtm->commit_barrier);
-			Mtm->stop_new_commits = false;
+			SpinLockAcquire(&Mtm->cb_lock);
+			Mtm->n_commit_holders += 1;
+			SpinLockRelease(&Mtm->cb_lock);
+
+			PG_TRY();
+			{
+				for (;;)
+				{
+					bool done = false;
+					SpinLockAcquire(&Mtm->cb_lock);
+					if (Mtm->n_committers == 0)
+						done = true;
+					SpinLockRelease(&Mtm->cb_lock);
+
+					if (done)
+						break;
+
+					ConditionVariableSleep(&Mtm->commit_barrier_cv, PG_WAIT_EXTENSION);
+				}
+				ConditionVariableCancelSleep();
+
+				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
+				msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
+			}
+			PG_CATCH();
+			{
+				SpinLockAcquire(&Mtm->cb_lock);
+				Mtm->n_commit_holders -= 1;
+				SpinLockRelease(&Mtm->cb_lock);
+				ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+
+			SpinLockAcquire(&Mtm->cb_lock);
+			Mtm->n_commit_holders -= 1;
+			SpinLockRelease(&Mtm->cb_lock);
+			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 
 			XLogFlush(msg_xptr);
 		}

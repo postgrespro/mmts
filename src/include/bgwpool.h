@@ -20,6 +20,7 @@ typedef struct
 	PGSemaphore available;
 	PGSemaphore overflow;
 	ConditionVariable syncpoint_cv;
+	int		n_holders;
     size_t head;
     size_t tail;
     size_t size;

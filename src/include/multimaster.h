@@ -154,16 +154,21 @@ extern bool receiver_mtm_cfg_valid;
 typedef struct
 {
 	LWLock	   *lock;
-	LWLock	   *commit_barrier;
-	LWLock	   *receiver_barrier;
 	LWLock	   *syncpoint_lock;
 
 	int			my_node_id;
-	bool		stop_new_commits;
 	XLogRecPtr	latestSyncpoint;
 	bool		localTablesHashLoaded;	/* Whether data from local_tables
 										 * table is loaded in shared memory
 										 * hash table */
+
+	volatile slock_t cb_lock;
+	int n_committers;
+	int n_commit_holders;
+	ConditionVariable commit_barrier_cv;
+
+	ConditionVariable receiver_barrier_cv;
+
 	struct {
 		MtmReplicationMode	receiver_mode;
 		pid_t				sender_pid;
