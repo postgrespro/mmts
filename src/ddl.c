@@ -124,10 +124,9 @@ static void MtmGucUpdate(const char *key, char *value);
 static void MtmInitializeRemoteFunctionsMap(void);
 static char *MtmGucSerialize(void);
 static void MtmMakeRelationLocal(Oid relid);
-static void AdjustCreateSequence(List *options);
+static List *AdjustCreateSequence(List *options);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
-
 
 /*****************************************************************************
  *
@@ -628,7 +627,7 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 			{
 				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
 				if (!MtmVolksWagenMode)
-					AdjustCreateSequence(stmt->options);
+					stmt->options = AdjustCreateSequence(stmt->options);
 				break;
 			}
 
@@ -747,7 +746,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		{
 			CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
 			if (!MtmVolksWagenMode)
-				AdjustCreateSequence(stmt->options);
+				stmt->options = AdjustCreateSequence(stmt->options);
 			break;
 		}
 
@@ -1413,14 +1412,14 @@ MtmSeqNextvalHook(Oid seqid, int64 next)
 	}
 }
 
-static void
+static List *
 AdjustCreateSequence(List *options)
 {
 	bool has_increment = false, has_start = false;
 	ListCell   *option;
 
 	if (!MtmIsEnabled())
-		return;
+		return options;
 
 	foreach(option, options)
 	{
@@ -1442,6 +1441,8 @@ AdjustCreateSequence(List *options)
 		DefElem *defel = makeDefElem("start", (Node *) makeInteger(Mtm->my_node_id), -1);
 		options = lappend(options, defel);
 	}
+
+	return options;
 }
 
 /*****************************************************************************
