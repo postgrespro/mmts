@@ -551,26 +551,26 @@ void MtmOnNodeConnect(char *node_name)
 	LWLockRelease(mtm_state->lock);
 }
 
-/**
- * Build internode connectivity mask. 1 - means that node is disconnected.
- */
-static void
-MtmBuildConnectivityMatrix(nodemask_t* matrix)
-{
-	int i, j, n = MTM_MAX_NODES;
+// /**
+//  * Build internode connectivity mask. 1 - means that node is disconnected.
+//  */
+// static void
+// MtmBuildConnectivityMatrix(nodemask_t* matrix)
+// {
+// 	int i, j, n = MTM_MAX_NODES;
 
-	// for (i = 0; i < n; i++)
-	// 	matrix[i] = Mtm->nodes[i].connectivityMask;
+// 	// for (i = 0; i < n; i++)
+// 	// 	matrix[i] = Mtm->nodes[i].connectivityMask;
 
-	/* make matrix symmetric: required for Bron–Kerbosch algorithm */
-	for (i = 0; i < n; i++) {
-		for (j = 0; j < i; j++) {
-			matrix[i] |= ((matrix[j] >> i) & 1) << j;
-			matrix[j] |= ((matrix[i] >> j) & 1) << i;
-		}
-		matrix[i] &= ~((nodemask_t)1 << i);
-	}
-}
+// 	/* make matrix symmetric: required for Bron–Kerbosch algorithm */
+// 	for (i = 0; i < n; i++) {
+// 		for (j = 0; j < i; j++) {
+// 			matrix[i] |= ((matrix[j] >> i) & 1) << j;
+// 			matrix[j] |= ((matrix[i] >> j) & 1) << i;
+// 		}
+// 		matrix[i] &= ~((nodemask_t)1 << i);
+// 	}
+// }
 
 
 /*
@@ -626,10 +626,10 @@ MtmGetReplicationMode(int nodeId)
 void
 MtmRefreshClusterStatus()
 {
-	nodemask_t newClique, oldClique;
-	nodemask_t matrix[MTM_MAX_NODES];
-	nodemask_t trivialClique = mtm_state->connected_mask;
-	int cliqueSize;
+	// nodemask_t newClique, oldClique;
+	// nodemask_t matrix[MTM_MAX_NODES];
+	// nodemask_t trivialClique = mtm_state->connected_mask;
+	// int cliqueSize;
 
 	/*
 	 * Periodical check that we are still in RECOVERED state.
@@ -705,80 +705,80 @@ MtmRefreshClusterStatus()
 
 	return;
 
-	// Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
-	// return;
+	// // Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
+	// // return;
 
-	/*
-	 * Check for clique.
-	 */
-	MtmBuildConnectivityMatrix(matrix);
-	newClique = MtmFindMaxClique(matrix, MTM_MAX_NODES, &cliqueSize);
+	// /*
+	//  * Check for clique.
+	//  */
+	// MtmBuildConnectivityMatrix(matrix);
+	// newClique = MtmFindMaxClique(matrix, MTM_MAX_NODES, &cliqueSize);
 
-	if (newClique == mtm_state->clique)
-		return;
+	// if (newClique == mtm_state->clique)
+	// 	return;
 
-	mtm_log(MtmStateMessage, "[STATE] Old clique: %s", maskToString(mtm_state->clique));
+	// mtm_log(MtmStateMessage, "[STATE] Old clique: %s", maskToString(mtm_state->clique));
 
-	/*
-	 * Otherwise make sure that all nodes have a chance to replicate their connectivity
-	 * mask and we have the "consistent" picture. Obviously we can not get true consistent
-	 * snapshot, but at least try to wait heartbeat send timeout is expired and
-	 * connectivity graph is stabilized.
-	 */
-	do {
-		oldClique = newClique;
-		/*
-		 * Double timeout to consider the worst case when heartbeat receive interval is added
-		 * with refresh cluster status interval.
-		 */
-		MtmSleep(1000L*(MtmHeartbeatRecvTimeout)*2);
-		MtmBuildConnectivityMatrix(matrix);
-		newClique = MtmFindMaxClique(matrix, MTM_MAX_NODES, &cliqueSize);
-	} while (newClique != oldClique);
+	// /*
+	//  * Otherwise make sure that all nodes have a chance to replicate their connectivity
+	//  * mask and we have the "consistent" picture. Obviously we can not get true consistent
+	//  * snapshot, but at least try to wait heartbeat send timeout is expired and
+	//  * connectivity graph is stabilized.
+	//  */
+	// do {
+	// 	oldClique = newClique;
+	// 	/*
+	// 	 * Double timeout to consider the worst case when heartbeat receive interval is added
+	// 	 * with refresh cluster status interval.
+	// 	 */
+	// 	MtmSleep(1000L*(MtmHeartbeatRecvTimeout)*2);
+	// 	MtmBuildConnectivityMatrix(matrix);
+	// 	newClique = MtmFindMaxClique(matrix, MTM_MAX_NODES, &cliqueSize);
+	// } while (newClique != oldClique);
 
-	mtm_log(MtmStateMessage, "[STATE] New clique: %s", maskToString(oldClique));
+	// mtm_log(MtmStateMessage, "[STATE] New clique: %s", maskToString(oldClique));
 
-	if (newClique != trivialClique)
-	{
-		mtm_log(MtmStateMessage, "[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique)); // XXXX some false-positives, fixme
-	}
-
-	/*
-	 * We are using clique only to disable nodes.
-	 * So find out what node should be disabled and disable them.
-	 */
-	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
-
-	mtm_state->clique = newClique;
-
-	/*
-	 * Do not perform any action based on clique with referee grant,
-	 * because we can disable ourself.
-	 * But we also need to maintain actual clique not disable ourselves
-	 * when neighbour node will come back and we erase refereeGrant.
-	 */
-	if (mtm_state->referee_grant)
-	{
-		LWLockRelease(mtm_state->lock);
-		return;
-	}
-
-	// for (i = 0; i < Mtm->nAllNodes; i++)
+	// if (newClique != trivialClique)
 	// {
-	// 	bool old_status = BIT_CHECK(Mtm->disabledNodeMask, i);
-	// 	bool new_status = BIT_CHECK(~newClique, i);
-
-	// 	if (new_status && new_status != old_status)
-	// 	{
-	// 		if ( i+1 == Mtm->my_node_id )
-	// 			MtmStateProcessEvent(MTM_CLIQUE_DISABLE, true);
-	// 		else
-	// 			MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
-	// 	}
+	// 	mtm_log(MtmStateMessage, "[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique)); // XXXX some false-positives, fixme
 	// }
 
-	MtmCheckState();
-	LWLockRelease(mtm_state->lock);
+	// /*
+	//  * We are using clique only to disable nodes.
+	//  * So find out what node should be disabled and disable them.
+	//  */
+	// LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
+
+	// mtm_state->clique = newClique;
+
+	// /*
+	//  * Do not perform any action based on clique with referee grant,
+	//  * because we can disable ourself.
+	//  * But we also need to maintain actual clique not disable ourselves
+	//  * when neighbour node will come back and we erase refereeGrant.
+	//  */
+	// if (mtm_state->referee_grant)
+	// {
+	// 	LWLockRelease(mtm_state->lock);
+	// 	return;
+	// }
+
+	// // for (i = 0; i < Mtm->nAllNodes; i++)
+	// // {
+	// // 	bool old_status = BIT_CHECK(Mtm->disabledNodeMask, i);
+	// // 	bool new_status = BIT_CHECK(~newClique, i);
+
+	// // 	if (new_status && new_status != old_status)
+	// // 	{
+	// // 		if ( i+1 == Mtm->my_node_id )
+	// // 			MtmStateProcessEvent(MTM_CLIQUE_DISABLE, true);
+	// // 		else
+	// // 			MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
+	// // 	}
+	// // }
+
+	// MtmCheckState();
+	// LWLockRelease(mtm_state->lock);
 }
 
 /*
