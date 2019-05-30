@@ -48,11 +48,10 @@ static void findMaximumIndependentSet(NodeList* cur, NodeList* result, nodemask_
 		int cnt = 0;
 		int pos = -1;
 		
-		for (j = ne; j < ce; j++) { 
+		for (j = ne; j < ce && cnt < minnod; j++)
+		{
 			if (BIT_CHECK(graph[p], oldSet[j])) {
-				if (++cnt == minnod) { 
-					break;
-				}
+				cnt++;
 				pos = j;
 			}
 		}
@@ -70,6 +69,9 @@ static void findMaximumIndependentSet(NodeList* cur, NodeList* result, nodemask_
 	
 
     for (k = minnod + nod; k >= 1; k--) {
+
+		Assert(s >= 0);
+
         sel = oldSet[s];
 		oldSet[s] = oldSet[ne];
 		oldSet[ne] = sel;
