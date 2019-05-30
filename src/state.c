@@ -1542,11 +1542,14 @@ MtmMonitor(Datum arg)
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
 	 */
-	while ((mtm_cfg = MtmLoadConfig()) && mtm_cfg->n_nodes == 0)
+	mtm_cfg = MtmLoadConfig();
+	while (mtm_cfg->n_nodes == 0)
 	{
 		pfree(mtm_cfg);
 		MtmSleep(USECS_PER_SEC);
+		mtm_cfg = MtmLoadConfig();
 	}
+	Assert(mtm_cfg);
 
 	/*
 	 * Ok, we are starting from a basebackup. Delete neighbors from

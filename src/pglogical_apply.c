@@ -1550,14 +1550,17 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
                 break;
                 /* INSERT */
             case 'I':
+				Assert(rel);
 			    process_remote_insert(&s, rel);
                 break;
                 /* UPDATE */
             case 'U':
+				Assert(rel);
                 process_remote_update(&s, rel);
                 break;
                 /* DELETE */
             case 'D':
+				Assert(rel);
                 process_remote_delete(&s, rel);
                 break;
             case 'R':

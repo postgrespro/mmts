@@ -556,6 +556,7 @@ ResolverMain(Datum main_arg)
 
 			config_valid = true;
 		}
+		Assert(mtm_cfg);
 
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)
