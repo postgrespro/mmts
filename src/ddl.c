@@ -17,6 +17,7 @@
 #include "utils/syscache.h"
 #include "executor/executor.h"
 #include "catalog/pg_proc.h"
+#include "commands/partition.h"
 #include "parser/parse_type.h"
 #include "parser/parse_func.h"
 #include "commands/sequence.h"
@@ -601,6 +602,18 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 				break;
 			}
 
+			case T_PartitionStmt:
+			{
+				PartitionStmt *stmt = (PartitionStmt *) parsetree;
+				if (stmt->concurrent)
+				{
+					Assert(MtmCapturedDDL == NULL);
+					MtmCapturedDDL = (Node *) copyObject(stmt);
+					captured = true;
+				}
+				break;
+			}
+
 			case T_DropStmt:
 			{
 				DropStmt *stmt = (DropStmt *) parsetree;
@@ -866,6 +879,17 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				MtmProcessDDLCommand(stmt_string, false);
 				skipCommand = true;
 				pg_usleep(USECS_PER_SEC); /* XXX */
+			}
+			break;
+		}
+
+		case T_PartitionStmt:
+		{
+			PartitionStmt *stmt = (PartitionStmt *) parsetree;
+			if (stmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
+			{
+				MtmProcessDDLCommand(stmt_string, false);
+				skipCommand = true;
 			}
 			break;
 		}
@@ -1156,6 +1180,19 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 				break;
 			}
+
+			case T_PartitionStmt:
+				{
+					Oid		relid;
+					PartitionStmt *pstmt = (PartitionStmt *) MtmCapturedDDL;
+
+					relid = RangeVarGetRelid(pstmt->relation, NoLock, false);
+					create_partitions(pstmt->partSpec,
+									  relid,
+									  pstmt->concurrent ? PDT_CONCURRENT : PDT_REGULAR);
+				}
+				break;
+
 			case T_DropStmt:
 				RemoveObjects((DropStmt *) MtmCapturedDDL);
 				break;
