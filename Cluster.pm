@@ -41,7 +41,7 @@ sub init
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
 
-			shared_preload_libraries = 'multimaster'
+			shared_preload_libraries = 'multimaster, pg_pathman'
 
 			max_prepared_transactions = 250
 			max_worker_processes = 170

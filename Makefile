@@ -25,7 +25,7 @@ endif
 
 .PHONY: all
 
-EXTRA_INSTALL=contrib/mmts
+EXTRA_INSTALL=contrib/pg_pathman
 
 all: multimaster.so
 
@@ -62,4 +62,18 @@ run-pg-regress: submake-regress
 	--schedule=serial_schedule \
 	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress
 
+run-pathman-regress:
+	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
+	$(with_temp_install) \
+	PGPORT='65432' \
+	PGHOST='127.0.0.1' \
+	PGUSER='$(USER)' \
+	./pg_regress \
+	--bindir='' \
+	--use-existing \
+	--temp-config=$(CURDIR)/$(top_builddir)/contrib/test_partition/pg_pathman.add \
+	--inputdir=$(CURDIR)/$(top_builddir)/contrib/test_partition/ \
+	partition
+
 pg-regress: | start run-pg-regress
+pathman-regress: | start run-pathman-regress
