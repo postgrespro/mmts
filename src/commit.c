@@ -39,9 +39,7 @@ typedef struct
 } mtm_msg;
 
 static bool	force_in_bgworker;
-
 static bool	committers_incremented;
-
 static bool	init_done;
 static bool	config_valid;
 // XXX: change dmq api and avoid that
@@ -56,6 +54,13 @@ static void
 pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
 	config_valid = false;
+}
+
+static void
+proc_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	/* Force RemoteFunction reload */
+	MtmSetRemoteFunction(NULL, NULL);
 }
 
 static void
@@ -135,6 +140,7 @@ MtmBeginTransaction()
 		return;
 	}
 
+
 	if (!init_done)
 	{
 		/* Keep us informed about subscription changes. */
@@ -144,7 +150,9 @@ MtmBeginTransaction()
 		CacheRegisterSyscacheCallback(PUBLICATIONOID,
 								  pubsub_change_cb,
 								  (Datum) 0);
-
+		CacheRegisterSyscacheCallback(PROCOID,
+								  proc_change_cb,
+								  (Datum) 0);
 		on_shmem_exit(backend_at_exit, (Datum) 0);
 		init_done = true;
 	}

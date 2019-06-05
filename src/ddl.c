@@ -38,6 +38,7 @@
 #include "commands/vacuum.h"
 #include "utils/inval.h"
 #include "replication/origin.h"
+#include "catalog/pg_authid.h"
 #include "miscadmin.h"
 
 #include "mm.h"
@@ -1372,20 +1373,6 @@ MtmInitializeRemoteFunctionsMap()
 	FuncCandidateList clist;
 	Oid			save_userid;
 	int			save_sec_context;
-	Oid			mtm_nsp_oid,
-				mtm_owner_oid;
-	HeapTuple	nsp_tuple;
-	Form_pg_namespace mtm_namespace_tuple;
-
-
-	/* get mtm namespace owner */
-	mtm_nsp_oid = get_namespace_oid(MULTIMASTER_SCHEMA_NAME, false);
-	nsp_tuple = SearchSysCache1(NAMESPACEOID, ObjectIdGetDatum(mtm_nsp_oid));
-	if (!HeapTupleIsValid(nsp_tuple))
-		elog(ERROR, "cache lookup failed for namespace %s", MULTIMASTER_SCHEMA_NAME);
-	mtm_namespace_tuple = (Form_pg_namespace) GETSTRUCT(nsp_tuple);
-	mtm_owner_oid = mtm_namespace_tuple->nspowner;
-	ReleaseSysCache(nsp_tuple);
 
 	for (p = MtmRemoteFunctionsList; (q = strchr(p, ',')) != NULL; p = q + 1, n_funcs++);
 
@@ -1402,7 +1389,7 @@ MtmInitializeRemoteFunctionsMap()
 	 * mtm schema.
 	 */
 	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	SetUserIdAndSecContext(mtm_owner_oid,
+	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID,
 						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
 	p = pstrdup(MtmRemoteFunctionsList);
@@ -1413,9 +1400,9 @@ MtmInitializeRemoteFunctionsMap()
 		}
 		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
 		if (clist == NULL) {
-			mtm_log(WARNING, "Failed to lookup function %s", p);
+			mtm_log(DEBUG1, "Can't resolve function '%s', postponing that", p);
 		} else if (clist->next != NULL) {
-			elog(ERROR, "Ambigious function %s", p);
+			mtm_log(NOTICE, "multimaster.remote_functions: ambigious function '%s'", p);
 		} else {
 			hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 		}
