@@ -438,7 +438,7 @@ _PG_init(void)
 		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
 		NULL,
 		&MtmRemoteFunctionsList,
-		"lo_create,lo_unlink",
+		"lo_create,lo_unlink,create_single_range_partition,drop_partitions",
 		PGC_USERSET, /* context */
 		GUC_LIST_INPUT, /* flags */
 		NULL,		 /* GucStringCheckHook check_hook */

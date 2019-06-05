@@ -40,7 +40,7 @@ typedef struct
 
 static bool	force_in_bgworker;
 
-static bool	subchange_cb_registered;
+static bool	syscache_cb_registered;
 static bool	config_valid;
 // XXX: change dmq api and avoid that
 static int	sender_to_node[MTM_MAX_NODES];
@@ -54,6 +54,13 @@ static void
 pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
 	config_valid = false;
+}
+
+static void
+proc_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	/* Force RemoteFunction reload */
+	MtmSetRemoteFunction(NULL, NULL);
 }
 
 static void
@@ -120,7 +127,7 @@ MtmBeginTransaction()
 		return;
 	}
 
-	if (!subchange_cb_registered)
+	if (!syscache_cb_registered)
 	{
 		/* Keep us informed about subscription changes. */
 		CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
@@ -129,7 +136,10 @@ MtmBeginTransaction()
 		CacheRegisterSyscacheCallback(PUBLICATIONOID,
 								  pubsub_change_cb,
 								  (Datum) 0);
-		subchange_cb_registered = true;
+		CacheRegisterSyscacheCallback(PROCOID,
+								  proc_change_cb,
+								  (Datum) 0);
+		syscache_cb_registered = true;
 	}
 
 	AcceptInvalidationMessages();
