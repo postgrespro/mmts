@@ -1256,7 +1256,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 		else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
 			state = MtmTxAborted;
 		else
+		{
 			Assert(false);
+		}
 
 		mtm_log(StatusRequest, "responding to %d with %s -> %s",
 				sender_node_id, gid, MtmTxStateMnem(state));
@@ -1525,7 +1527,7 @@ MtmMonitor(Datum arg)
 
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
-	
+
 	MtmBackgroundWorker = true;
 	MtmIsMonitorWorker = true;
 
@@ -1538,7 +1540,7 @@ MtmMonitor(Datum arg)
 	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
 	/*
-	 * During init_node() our worker is started from transaction that created
+	 * During mtm_init_cluster() our worker is started from transaction that created
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
 	 */

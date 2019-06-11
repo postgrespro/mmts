@@ -797,7 +797,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 
 		/*
 		 * Dummy subscription. It is used by launcher to start workers in databases
-		 * where multimaster is configured (pg_publication is shared catalog
+		 * where multimaster is configured (pg_subscription is shared catalog
 		 * relation, so launcher can find it from postgres database). Also our
 		 * workers and backends are subscribed to cache invalidations of
 		 * pg_publication, so that can know aboun node creating/deletion.
@@ -1328,7 +1328,7 @@ launcher_main(Datum main_arg)
 	already_started = hash_create("already_started", 16, &hash_info,
 								  HASH_ELEM | HASH_BLOBS);
 
-	/* Connect to a postgres database */
+	/* Connect to NULL db to access shared catalogs */
 	BackgroundWorkerInitializeConnection(NULL, NULL, 0);
 
 	/*
@@ -1367,6 +1367,3 @@ launcher_main(Datum main_arg)
 
 	CommitTransactionCommand();
 }
-
-
-
