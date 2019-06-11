@@ -71,8 +71,8 @@ run-pathman-regress:
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--temp-config=$(CURDIR)/$(top_builddir)/contrib/test_partition/pg_pathman.add \
-	--inputdir=$(CURDIR)/$(top_builddir)/contrib/test_partition/ \
+	--temp-config=$(top_srcdir)/contrib/test_partition/pg_pathman.add \
+	--inputdir=$(top_srcdir)/contrib/test_partition/ \
 	partition
 
 pg-regress: | start run-pg-regress
