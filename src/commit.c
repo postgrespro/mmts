@@ -40,7 +40,9 @@ typedef struct
 
 static bool	force_in_bgworker;
 
-static bool	subchange_cb_registered;
+static bool	committers_incremented;
+
+static bool	init_done;
 static bool	config_valid;
 // XXX: change dmq api and avoid that
 static int	sender_to_node[MTM_MAX_NODES];
@@ -106,6 +108,19 @@ MtmXactCallback(XactEvent event, void *arg)
 
 }
 
+static void
+backend_at_exit(int status, Datum arg)
+{
+	if (committers_incremented)
+	{
+		SpinLockAcquire(&Mtm->cb_lock);
+		Mtm->n_committers -= 1;
+		SpinLockRelease(&Mtm->cb_lock);
+		committers_incremented = false;
+		ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
+	}
+}
+
 void
 MtmBeginTransaction()
 {
@@ -120,7 +135,7 @@ MtmBeginTransaction()
 		return;
 	}
 
-	if (!subchange_cb_registered)
+	if (!init_done)
 	{
 		/* Keep us informed about subscription changes. */
 		CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
@@ -129,7 +144,9 @@ MtmBeginTransaction()
 		CacheRegisterSyscacheCallback(PUBLICATIONOID,
 								  pubsub_change_cb,
 								  (Datum) 0);
-		subchange_cb_registered = true;
+
+		on_shmem_exit(backend_at_exit, (Datum) 0);
+		init_done = true;
 	}
 
 	AcceptInvalidationMessages();
@@ -210,7 +227,6 @@ MtmTwoPhaseCommit()
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
-	bool		committers_incremented = false;
 
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
@@ -319,6 +335,7 @@ MtmTwoPhaseCommit()
 			SpinLockAcquire(&Mtm->cb_lock);
 			Mtm->n_committers -= 1;
 			SpinLockRelease(&Mtm->cb_lock);
+			committers_incremented = false;
 			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 		}
 		PG_RE_THROW();
@@ -329,6 +346,7 @@ MtmTwoPhaseCommit()
 	SpinLockAcquire(&Mtm->cb_lock);
 	Mtm->n_committers -= 1;
 	SpinLockRelease(&Mtm->cb_lock);
+	committers_incremented = false;
 	ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 
 	dmq_stream_unsubscribe(gid);
