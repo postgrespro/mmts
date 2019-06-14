@@ -17,6 +17,7 @@
 
 #include "access/twophase.h"
 #include "postmaster/bgworker.h"
+#include "replication/origin.h"
 #include "storage/latch.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
@@ -49,6 +50,7 @@ typedef struct
 {
 	char			gid[GIDSIZE];
 	MtmTxState		state[MTM_MAX_NODES];
+	int				xact_node_id;
 	int				n_participants;
 } resolver_tx;
 
@@ -61,6 +63,7 @@ static bool		config_valid;
 /* Auxiliary stuff for bgworker lifecycle */
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
+static MtmConfig  *mtm_cfg = NULL;
 
 /*****************************************************************************
  *
@@ -186,6 +189,7 @@ load_tasks(int node_id, int n_participants)
 			added_xacts++;
 
 			tx->n_participants = n_participants;
+			tx->xact_node_id = xact_node_id;
 
 			for (j = 0; j < MTM_MAX_NODES; j++)
 				tx->state[j] = MtmTxUnknown;
@@ -365,7 +369,23 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 
 	/* XXX: missing ok because we call this concurrently with logrep recovery */
 
-	/* XXX: set replication session to avoid sending it everywhere */
+	/*
+	 * Set origin replication session, so we don't send this abort to all
+	 * peers.
+	 *
+	 * Otherwise we can scatter our abort to a different node (say node_A)
+	 * before it actually recevies prepare from a node expiriencing failure
+	 * (say node_B).
+	 * If then failed node become online and also receives our abort before
+	 * aborting tx itself, node_A will finally receive prepare, but won't
+	 * receive abort from node_B since it was originated on other node.
+	 * So this prepare on node_A will stuck indefinitely.
+	 */
+	if (tx->xact_node_id != Mtm->my_node_id)
+	{
+		replorigin_session_origin = MtmNodeById(mtm_cfg, tx->xact_node_id)->origin_id;
+		replorigin_session_setup(replorigin_session_origin);
+	}
 
 	if (exists(tx, MtmTxAborted | MtmTxNotFound))
 	{
@@ -408,6 +428,12 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
 		return;
+	}
+
+	if (tx->xact_node_id != Mtm->my_node_id)
+	{
+		replorigin_session_origin = InvalidRepOriginId;
+		replorigin_session_reset();
 	}
 
 }
@@ -512,7 +538,6 @@ ResolverMain(Datum main_arg)
 	bool		send_requests = true;
 	Oid			db_id,
 				user_id;
-	MtmConfig  *mtm_cfg = NULL;
 
 	/* init this worker */
 	pqsignal(SIGHUP, PostgresSigHupHandler);
