@@ -2,6 +2,10 @@ import unittest
 import time
 import datetime
 import psycopg2
+import random
+import os
+
+from .failure_injector import *
 
 TEST_WARMING_TIME = 3
 TEST_DURATION = 10
@@ -9,6 +13,9 @@ TEST_MAX_RECOVERY_TIME = 600
 TEST_RECOVERY_TIME = 5
 TEST_SETUP_TIME = 20
 TEST_STOP_DELAY = 5
+
+# Node host for dind (Docker-in-Docker execution)
+NODE_HOST = 'docker' if 'DOCKER_HOST' in os.environ else '127.0.0.1'
 
 class TestHelper(object):
 
@@ -48,7 +55,8 @@ class TestHelper(object):
             time.sleep(5)
             total_sleep += 5
 
-    def awaitOnline(self, dsn):
+    @staticmethod
+    def awaitOnline(dsn):
         total_sleep = 0
         one = 0
 
@@ -78,6 +86,12 @@ class TestHelper(object):
 
         self.client.bgrun()
 
+    def performRandomFailure(self, node, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
+        FailureClass = random.choice(ONE_NODE_FAILURES)
+        failure = FailureClass(node)
+
+        print('Simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
+        return self.performFailure(failure, wait, node_wait_for_commit, node_wait_for_online, stop_load)
 
     def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
 
@@ -122,6 +136,7 @@ class TestHelper(object):
         else:
             time.sleep(TEST_RECOVERY_TIME)
 
+        time.sleep(TEST_RECOVERY_TIME)
         aggs = self.client.get_aggregates()
 
         return (aggs_failure, aggs)

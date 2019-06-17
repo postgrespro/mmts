@@ -2,7 +2,7 @@ import docker
 
 class FailureInjector(object):
 
-    def __init__(self):
+    def __init__(self, node=None):
         self.docker_api = docker.from_env()
 
     def container_exec(self, node, command):
@@ -24,13 +24,26 @@ class SingleNodePartition(FailureInjector):
         super().__init__()
 
     def start(self):
-        # XXX: try reject too
         self.container_exec(self.node, "iptables -A INPUT -j DROP")
         self.container_exec(self.node, "iptables -A OUTPUT -j DROP")
 
     def stop(self):
         self.container_exec(self.node, "iptables -D INPUT -j DROP")
         self.container_exec(self.node, "iptables -D OUTPUT -j DROP")
+
+class SingleNodePartitionReject(FailureInjector):
+
+    def __init__(self, node):
+        self.node = node
+        super().__init__()
+
+    def start(self):
+        self.container_exec(self.node, "iptables -A INPUT -j REJECT")
+        self.container_exec(self.node, "iptables -A OUTPUT -j REJECT")
+
+    def stop(self):
+        self.container_exec(self.node, "iptables -D INPUT -j REJECT")
+        self.container_exec(self.node, "iptables -D OUTPUT -j REJECT")
 
 
 class EdgePartition(FailureInjector):
@@ -121,3 +134,6 @@ class StartNode(FailureInjector):
 
     def stop(self):
         self.docker_api.containers.get(self.node).start()
+
+ONE_NODE_FAILURES = [SingleNodePartition, SingleNodePartitionReject, RestartNode, CrashRecoverNode]
+TWO_NODE_FAILURES = [EdgePartition]

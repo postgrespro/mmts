@@ -3,22 +3,28 @@ import subprocess
 import time
 
 from lib.bank_client import MtmClient
+from lib.test_helper import *
 
-class RecoveryTest(unittest.TestCase):
+class RecoveryTest(unittest.TestCase, TestHelper):
 
     @classmethod
     def setUpClass(cls):
+        cls.dsns = [
+            "dbname=regression user=postgres host=127.0.0.1 port=15432",
+            "dbname=regression user=postgres host=127.0.0.1 port=15433",
+            "dbname=regression user=postgres host=127.0.0.1 port=15434"
+        ]
+
         print('setUp')
         subprocess.check_call(['docker-compose','up',
            '--force-recreate',
            '--build',
            '-d'])
-        time.sleep(10)
-        cls.client = MtmClient([
-            "dbname=regression user=postgres host=127.0.0.1 port=15432",
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
-            "dbname=regression user=postgres host=127.0.0.1 port=15434"
-        ], n_accounts=1000)
+
+        # Wait for all nodes to become online
+        [ cls.awaitOnline(dsn) for dsn in cls.dsns ]
+
+        cls.client = MtmClient(cls.dsns, n_accounts=1000)
 
     @classmethod
     def tearDownClass(cls):
