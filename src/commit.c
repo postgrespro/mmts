@@ -265,6 +265,9 @@ MtmTwoPhaseCommit()
 	 */
 	PG_TRY();
 	{
+		/* Finish commit on a sudden disconnect */
+		HOLD_INTERRUPTS();
+
 		for (;;)
 		{
 			SpinLockAcquire(&Mtm->cb_lock);
@@ -327,6 +330,7 @@ MtmTwoPhaseCommit()
 		// XXX: make this conditional
 		gather(participants, messages, &n_messages);
 
+		RESUME_INTERRUPTS();
 	}
 	PG_CATCH();
 	{
