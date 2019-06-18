@@ -6,10 +6,10 @@ use warnings;
 use Cluster;
 use TestLib;
 
-# Test whether we have DBD::pg...
-use DBI;
+# Test whether we have both DBI and DBD::pg
 my $dbdpg_rc = eval
 {
+  require DBI;
   require DBD::Pg;
   DBD::Pg->import(':async');
   1;
@@ -19,7 +19,7 @@ my $dbdpg_rc = eval
 require Test::More;
 if (not $dbdpg_rc)
 {
-	Test::More->import(skip_all => 'DBD::pg is not available');
+	Test::More->import(skip_all => 'DBI and DBD::Pg are not available');
 }
 else
 {
