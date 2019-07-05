@@ -15,6 +15,7 @@
 #include "storage/proc.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
+#include "utils/snapmgr.h"
 #include "utils/inval.h"
 #include "miscadmin.h"
 #include "commands/dbcommands.h"
@@ -42,6 +43,7 @@ static bool	force_in_bgworker;
 static bool	committers_incremented;
 static bool	init_done;
 static bool	config_valid;
+static bool inside_mtm_begin;
 // XXX: change dmq api and avoid that
 static int	sender_to_node[MTM_MAX_NODES];
 static MtmConfig *mtm_cfg;
@@ -194,6 +196,19 @@ MtmBeginTransaction()
 					"Multimaster node is not online: current status %s",
 					MtmNodeStatusMnem[node_status]);
 		}
+	}
+
+	/*
+	 * If during previous checks we acquired snapshot we'll prevent BEGIN
+	 * TRANSACTION ISOLATION LEVEL REPEATABLE READ from happening. So
+	 * commit/start transaction in this case.
+	 */
+	if (FirstSnapshotSet && !inside_mtm_begin)
+	{
+		inside_mtm_begin = true;
+		CommitTransactionCommand();
+		StartTransactionCommand();
+		inside_mtm_begin = false;
 	}
 }
 
