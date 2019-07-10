@@ -381,9 +381,11 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	 * receive abort from node_B since it was originated on other node.
 	 * So this prepare on node_A will stuck indefinitely.
 	 */
+	Assert(replorigin_session_origin == InvalidRepOriginId);
 	if (tx->xact_node_id != Mtm->my_node_id)
 	{
 		replorigin_session_origin = MtmNodeById(mtm_cfg, tx->xact_node_id)->origin_id;
+		Assert(replorigin_session_origin != InvalidRepOriginId);
 		replorigin_session_setup(replorigin_session_origin);
 	}
 
@@ -393,19 +395,15 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
-		return;
 	}
-
-	if (exists(tx, MtmTxCommited))
+	else if (exists(tx, MtmTxCommited))
 	{
 		FinishPreparedTransaction(gid, true, true);
 		mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
-		return;
 	}
-
-	if (exists(tx, MtmTxPreCommited) &&
+	else if (exists(tx, MtmTxPreCommited) &&
 		majority_in(tx, MtmTxPrepared | MtmTxPreCommited))
 	{
 		// XXX: do that through PreCommit
@@ -415,10 +413,8 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
-		return;
 	}
-
-	if (majority_in(tx, MtmTxPrepared | MtmTxPreAborted))
+	else if (majority_in(tx, MtmTxPrepared | MtmTxPreAborted))
 	{
 		// XXX: do that through PreAbort
 		// SetPreparedTransactionState(gid, MULTIMASTER_PREABORTED);
@@ -427,15 +423,13 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
 		Assert(found);
-		return;
 	}
 
-	if (tx->xact_node_id != Mtm->my_node_id)
+	if (replorigin_session_origin != InvalidRepOriginId)
 	{
 		replorigin_session_origin = InvalidRepOriginId;
 		replorigin_session_reset();
 	}
-
 }
 
 /*****************************************************************************
