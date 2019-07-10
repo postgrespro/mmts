@@ -1430,6 +1430,7 @@ dmq_stream_subscribe(char *stream_name)
 {
 	bool found;
 	DmqStreamSubscription *sub;
+	int i;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions, stream_name,
@@ -1442,6 +1443,23 @@ dmq_stream_subscribe(char *stream_name)
 	}
 	sub->procno = MyProc->pgprocno;
 	LWLockRelease(dmq_state->lock);
+
+	for (i = 0; i < dmq_local.n_inhandles; i++)
+	{
+		Size	len;
+		void   *data;
+		shm_mq_result res;
+
+		if (dmq_local.inhandles[i].mqh)
+			res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
+		else
+			res = SHM_MQ_DETACHED;
+
+		Assert(res != SHM_MQ_SUCCESS);
+
+		if (res == SHM_MQ_DETACHED)
+			dmq_reattach_shm_mq(i);
+	}
 }
 
 void
