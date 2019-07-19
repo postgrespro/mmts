@@ -71,9 +71,32 @@ run-pathman-regress:
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--temp-config=$(top_srcdir)/contrib/test_partition/pg_pathman.add \
-	--inputdir=$(top_srcdir)/contrib/test_partition/ \
+	--temp-config=$(CURDIR)/$(top_builddir)/contrib/test_partition/pg_pathman.add \
+	--inputdir=$(CURDIR)/$(top_builddir)/contrib/test_partition/ \
 	partition
 
+
+# bgw-based partition spawning is not supported by mm, so I
+# commenting out body of set_spawn_using_bgw() sql function before
+# running that
+run-pathman-regress-ext:
+	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
+	$(with_temp_install) \
+	PGPORT='65432' \
+	PGHOST='127.0.0.1' \
+	PGUSER='$(USER)' \
+	./pg_regress \
+	--bindir='' \
+	--use-existing \
+	--temp-config=$(CURDIR)/$(top_builddir)/contrib/pg_pathman/conf.add \
+	--inputdir=$(CURDIR)/$(top_builddir)/contrib/pg_pathman/ \
+	pathman_array_qual pathman_basic pathman_bgw pathman_calamity pathman_callbacks \
+	pathman_column_type pathman_cte pathman_domains pathman_dropped_cols pathman_expressions \
+	pathman_foreign_keys pathman_gaps pathman_inserts pathman_interval pathman_join_clause \
+	pathman_lateral pathman_hashjoin pathman_mergejoin pathman_only pathman_param_upd_del \
+	pathman_permissions pathman_rebuild_deletes pathman_rebuild_updates pathman_rowmarks \
+	pathman_runtime_nodes pathman_subpartitions pathman_update_node pathman_update_triggers \
+	pathman_upd_del pathman_utility_stmt pathman_views
+
 pg-regress: | start run-pg-regress
-pathman-regress: | start run-pathman-regress
+pathman-regress: | start run-pathman-regress-ext stop

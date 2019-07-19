@@ -1042,6 +1042,7 @@ MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 				{
 					MtmProcessDDLCommand(queryDesc->sourceText, true);
 					MtmDDLStatement = queryDesc;
+					MtmTx.contains_persistent_ddl = true;
 					break;
 				}
 			}
@@ -1399,12 +1400,18 @@ MtmInitializeRemoteFunctionsMap()
 			*q++ = '\0';
 		}
 		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
-		if (clist == NULL) {
+		if (clist == NULL)
+		{
 			mtm_log(DEBUG1, "Can't resolve function '%s', postponing that", p);
-		} else if (clist->next != NULL) {
-			mtm_log(NOTICE, "multimaster.remote_functions: ambigious function '%s'", p);
-		} else {
-			hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
+		}
+		else
+		{
+			while (clist != NULL)
+			{
+				mtm_log(DEBUG1, "multimaster.remote_functions: add '%s'", p);
+				hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
+				clist = clist->next;
+			}
 		}
 		p = q;
 	} while (p != NULL);

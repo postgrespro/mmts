@@ -321,7 +321,7 @@ MtmTwoPhaseCommit()
 
 				ereport(ERROR,
 						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						errmsg("[multimaster] failed to prepare transaction %s at node %d due to concurrent update",
+						errmsg("[multimaster] failed to prepare transaction %s at node %d",
 								gid, messages[i].node_id)));
 			}
 		}
