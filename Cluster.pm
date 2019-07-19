@@ -51,8 +51,14 @@ sub init
 
 			multimaster.heartbeat_send_timeout = 100
 			multimaster.heartbeat_recv_timeout = 5000
-			# multimaster.volkswagen_mode = on
 		});
+
+		if (defined $ENV{'MTM_VW'})
+		{
+			$node->append_conf('postgresql.conf', q{
+				multimaster.volkswagen_mode = on
+			});
+		}
 	}
 }
 
