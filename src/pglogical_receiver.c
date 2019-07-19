@@ -484,6 +484,7 @@ static void
 pglogical_receiver_at_exit(int status, Datum arg)
 {
 	int node_id = DatumGetInt32(arg);
+
 	BgwPoolCancel(&Mtm->pools[node_id - 1]);
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
@@ -493,28 +494,27 @@ pglogical_receiver_at_exit(int status, Datum arg)
 void
 pglogical_receiver_main(Datum main_arg)
 {
-	int nodeId = DatumGetInt32(main_arg);
+	int					nodeId = DatumGetInt32(main_arg);
 	/* Variables for replication connection */
-	PQExpBuffer query;
-	PGconn *conn;
-	PGresult *res;
-	MtmReplicationMode mode;
-	MtmReceiverContext receiver_ctx = {nodeId, false, false, 0};
+	PQExpBuffer			query;
+	PGconn				*conn;
+	PGresult			*res;
+	MtmReplicationMode	mode;
+	MtmReceiverContext	receiver_ctx = {nodeId, false, false, 0};
 
-	ByteBuffer buf;
+	ByteBuffer			buf;
 	/* Buffer for COPY data */
-	char	*copybuf = NULL;
-	int spill_file = -1;
-	StringInfoData spill_info;
-	static PortalData fakePortal;
+	char				*copybuf = NULL;
+	int					spill_file = -1;
+	StringInfoData		spill_info;
+	static PortalData	fakePortal;
 
-	Oid db_id;
-	Oid user_id;
+	Oid					db_id;
+	Oid					user_id;
 
 	on_shmem_exit(pglogical_receiver_at_exit, Int32GetDatum(nodeId));
 
 	MtmIsReceiver = true;
-
 	// XXX: get rid of that
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
@@ -556,15 +556,15 @@ pglogical_receiver_main(Datum main_arg)
 
 	/* This is main loop of logical replication.
 	 * In case of errors we will try to reestablish connection.
-	 * Also reconnet is forced when node is switch to recovery mode
+	 * Also reconnect is forced when node is switch to recovery mode
 	 */
 	for(;;)
 	{
 		int			count,
 					counterpart_disable_count;
-		XLogRecPtr		remote_start = InvalidXLogRecPtr;
-		Syncpoint	   *spvector = NULL;
-		HTAB		   *filter_map = NULL;
+		XLogRecPtr	remote_start = InvalidXLogRecPtr;
+		Syncpoint	*spvector = NULL;
+		HTAB		*filter_map = NULL;
 
 		/*
 		 * Determine when and how we should open replication slot.
@@ -680,8 +680,8 @@ pglogical_receiver_main(Datum main_arg)
 		{
 			int rc, hdr_len;
 
-			if (ProcDiePending)
-				BgwPoolStop(&Mtm->pools[nodeId-1]);
+			if (ProcDiePending && Mtm->pools[nodeId-1].nWorkers > 0)
+				PoolStateShutdown(Mtm->pools[nodeId-1].state);
 
 			CHECK_FOR_INTERRUPTS();
 
@@ -705,11 +705,14 @@ pglogical_receiver_main(Datum main_arg)
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 			{
-				BgwPoolStop(&Mtm->pools[nodeId-1]);
+				if (Mtm->pools[nodeId-1].nWorkers > 0)
+					PoolStateShutdown(Mtm->pools[nodeId-1].state);
+
 				proc_exit(1);
 			}
 
-			if (count != MtmGetRecoveryCount()) {
+			if (count != MtmGetRecoveryCount())
+			{
 				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
 				goto OnError;
 			}
@@ -736,9 +739,8 @@ pglogical_receiver_main(Datum main_arg)
 				}
 
 				rc = PQgetCopyData(conn, &copybuf, 1);
-				if (rc <= 0) {
+				if (rc <= 0)
 					break;
-				}
 
 				/*
 				 * Check message received from server:
@@ -815,8 +817,10 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int msg_len = rc - hdr_len;
 					stmt = copybuf + hdr_len;
-					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*1024L) {
-						if (spill_file < 0) {
+					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*1024L)
+					{
+						if (spill_file < 0)
+						{
 							int file_id;
 							spill_file = MtmCreateSpillFile(nodeId, &file_id);
 							pq_sendbyte(&spill_info, 'F');
@@ -840,13 +844,16 @@ pglogical_receiver_main(Datum main_arg)
 							/* all other messages should be processed by receiver itself */
 							MtmExecute(stmt, msg_len, &receiver_ctx, true);
 						}
-					} else {
+					}
+					else
+					{
 						ByteBufferAppend(&buf, stmt, msg_len);
 						if (stmt[0] == 'C') /* commit */
 						{
 							if (!MtmFilterTransaction(stmt, msg_len, spvector, filter_map))
 							{
-								if (spill_file >= 0) {
+								if (spill_file >= 0)
+								{
 									ByteBufferAppend(&buf, ")", 1);
 									pq_sendbyte(&spill_info, '(');
 									pq_sendint(&spill_info, buf.used, 4);
@@ -860,7 +867,8 @@ pglogical_receiver_main(Datum main_arg)
 								{
 									MtmExecute(buf.data, buf.used, &receiver_ctx, false);
 								}
-							} else if (spill_file >= 0) {
+							} else if (spill_file >= 0)
+							{
 								MtmCloseSpillFile(spill_file);
 								resetStringInfo(&spill_info);
 								spill_file = -1;

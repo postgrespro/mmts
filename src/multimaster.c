@@ -108,8 +108,6 @@ int	  MtmHeartbeatRecvTimeout;
 char* MtmRefereeConnStr;
 bool  MtmBreakConnection;
 
-static int	 MtmQueueSize;
-
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
@@ -232,7 +230,8 @@ MtmSharedShmemStartup()
 		SpinLockInit(&mtm_time->mutex);
 	}
 
-	Mtm = (MtmShared*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared) + sizeof(BgwPool)*(MtmMaxNodes), &found);
+	Mtm = (MtmShared*) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared) +
+							SizeOfBgwPool(MtmMaxWorkers) * MtmMaxNodes, &found);
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmShared));
@@ -250,9 +249,6 @@ MtmSharedShmemStartup()
 			Mtm->peers[i].receiver_pid = InvalidPid;
 			Mtm->peers[i].sender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
-
-			// XXX: change to dsa and make it per-receiver
-			BgwPoolInit(&Mtm->pools[i], MtmQueueSize, 0);
 		}
 	}
 
@@ -466,7 +462,7 @@ _PG_init(void)
 	 * the postmaster process.)	 We'll allocate or attach to the shared
 	 * resources in mtm_shmem_startup().
 	 */
-	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
+	RequestAddinShmemSpace(MTM_SHMEM_SIZE + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
 
 	dmq_init(MtmHeartbeatSendTimeout);
@@ -526,12 +522,15 @@ MtmAllApplyWorkersFinished()
 	{
 		volatile int ntasks;
 
+		if (Mtm->pools[i].nWorkers <= 0)
+			continue;
+
 		if (i == Mtm->my_node_id - 1)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[i].lock);
-		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
-		SpinLockRelease(&Mtm->pools[i].lock);
+		SpinLockAcquire(&Mtm->pools[i].state->lock);
+		ntasks = Mtm->pools[i].state->active + Mtm->pools[i].state->pending;
+		SpinLockRelease(&Mtm->pools[i].state->lock);
 
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
 
@@ -959,7 +958,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	 * recovered replication connections.
 	 */
 
-	/* Hold all receivers */
+	/* Hold all apply workers */
 	for (i = 0; i < cfg->n_nodes; i++)
 	{
 		int			node_id = cfg->nodes[i].node_id;
@@ -967,9 +966,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
-		Mtm->pools[node_id-1].n_holders += 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
+		Mtm->pools[node_id-1].state->n_holders += 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
 	}
 
 	/* Await for workers finish and create syncpoints */
@@ -1018,9 +1017,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			if (node_id == cfg->my_node_id)
 				continue;
 
-			SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
-			Mtm->pools[node_id-1].n_holders -= 1;
-			SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+			SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
+			Mtm->pools[node_id-1].state->n_holders -= 1;
+			SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
 		}
 		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 		PG_RE_THROW();
@@ -1035,9 +1034,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
-		Mtm->pools[node_id-1].n_holders -= 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
+		Mtm->pools[node_id-1].state->n_holders -= 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 
