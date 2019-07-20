@@ -61,8 +61,9 @@ run-pg-regress: submake-regress
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--schedule=serial_schedule \
-	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress
+	--schedule=$(abs_top_srcdir)/src/test/regress/serial_schedule \
+	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress \
+	--inputdir=$(abs_top_srcdir)/src/test/regress
 
 run-pathman-regress:
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
@@ -73,8 +74,8 @@ run-pathman-regress:
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--temp-config=$(CURDIR)/$(top_builddir)/contrib/test_partition/pg_pathman.add \
-	--inputdir=$(CURDIR)/$(top_builddir)/contrib/test_partition/ \
+	--temp-config=$(abs_top_srcdir)/contrib/test_partition/pg_pathman.add \
+	--inputdir=$(abs_top_srcdir)/contrib/test_partition/ \
 	partition
 
 
@@ -90,8 +91,8 @@ run-pathman-regress-ext:
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--temp-config=$(CURDIR)/$(top_builddir)/contrib/pg_pathman/conf.add \
-	--inputdir=$(CURDIR)/$(top_builddir)/contrib/pg_pathman/ \
+	--temp-config=$(abs_top_srcdir)/contrib/pg_pathman/conf.add \
+	--inputdir=$(abs_top_srcdir)/contrib/pg_pathman/ \
 	pathman_array_qual pathman_basic pathman_bgw pathman_calamity pathman_callbacks \
 	pathman_column_type pathman_cte pathman_domains pathman_dropped_cols pathman_expressions \
 	pathman_foreign_keys pathman_gaps pathman_inserts pathman_interval pathman_join_clause \
