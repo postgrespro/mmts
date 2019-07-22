@@ -198,7 +198,7 @@ MtmBeginTransaction()
 }
 
 /*
- * Genenerate global transaction identifier for two-pahse commit.
+ * Genenerate global transaction identifier for two-phase commit.
  * It should be unique for all nodes
  */
 void
@@ -235,6 +235,9 @@ MtmTwoPhaseCommit()
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
+
+	if (getNestLevelATX() != 0)
+		return false;
 
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
