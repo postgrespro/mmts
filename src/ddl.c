@@ -1482,7 +1482,7 @@ AdjustCreateSequence(List *options)
 
 	if (!has_increment)
 	{
-		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(MtmMaxNodes), -1);
+		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(MTM_MAX_NODES), -1);
 		options = lappend(options, defel);
 	}
 

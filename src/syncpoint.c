@@ -287,7 +287,7 @@ SyncpointGetLatest(int node_id)
 	char	   *sql;
 	Syncpoint	sp;
 
-	Assert(node_id > 0 && node_id <= MtmMaxNodes);
+	Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
 
 	memset(&sp, '\0', sizeof(Syncpoint));
 	sp.local_lsn = InvalidXLogRecPtr;
@@ -350,7 +350,7 @@ SyncpointGetAllLatest()
 	int				rc;
 	Syncpoint	   *spvector;
 
-	spvector = (Syncpoint *) palloc0(MtmMaxNodes * sizeof(Syncpoint));
+	spvector = (Syncpoint *) palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 
 	/* Init SPI */
 	StartTransactionCommand();
@@ -371,7 +371,7 @@ SyncpointGetAllLatest()
 		TupleDesc	tupdesc	= SPI_tuptable->tupdesc;
 		int			i;
 
-		Assert(SPI_processed <= MtmMaxNodes);
+		Assert(SPI_processed <= MTM_MAX_NODES);
 
 		for (i = 0; i < SPI_processed; i++)
 		{
@@ -383,7 +383,7 @@ SyncpointGetAllLatest()
 			node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
 			Assert(!isnull);
 			Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT4OID);
-			Assert(node_id > 0 && node_id <= MtmMaxNodes);
+			Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
 
 			origin_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 2, &isnull));
 			Assert(!isnull);
@@ -430,7 +430,7 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 
 	/* serialize filter_vector */
 	initStringInfo(&serialized_lsns);
-	for (i = 0; i < MtmMaxNodes; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (local_spvector[i].origin_lsn != InvalidXLogRecPtr &&
 			i + 1 != node_id)
@@ -502,7 +502,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	Assert(current_last_lsn != InvalidXLogRecPtr);
 
 	/* start from minimal among all of syncpoints */
-	for (i = 0; i < MtmMaxNodes; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (start_lsn > spvector[i].local_lsn &&
 				spvector[i].local_lsn != InvalidXLogRecPtr)

@@ -101,7 +101,6 @@ static TransactionManager MtmTM =
 // XXX
 bool  MtmBackgroundWorker;
 int	  MtmReplicationNodeId;
-int	  MtmMaxNodes;
 
 /*
  * Maximal size of transaction after which transaction is written to the disk.
@@ -249,7 +248,7 @@ MtmSharedShmemStartup()
 		ConditionVariableInit(&Mtm->commit_barrier_cv);
 		ConditionVariableInit(&Mtm->receiver_barrier_cv);
 
-		for (i = 0; i < MtmMaxNodes; i++)
+		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
 			Mtm->peers[i].receiver_pid = InvalidPid;
 			Mtm->peers[i].sender_pid = InvalidPid;
@@ -270,7 +269,7 @@ MtmShmemStartup(void)
 	if (PreviousShmemStartupHook)
 		PreviousShmemStartupHook();
 
-	MtmDeadlockDetectorShmemStartup(MtmMaxNodes);
+	MtmDeadlockDetectorShmemStartup(MTM_MAX_NODES);
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
 	MtmSharedShmemStartup();
@@ -314,22 +313,6 @@ _PG_init(void)
 		1,
 		INT_MAX,
 		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
-
-	// XXX
-	DefineCustomIntVariable(
-		"multimaster.max_nodes",
-		"Maximal number of cluster nodes",
-		"This parameters allows to add new nodes to the cluster, default value 0 restricts number of nodes to one specified in multimaster.conn_strings",
-		&MtmMaxNodes,
-		6,
-		0,
-		MTM_MAX_NODES,
-		PGC_POSTMASTER,
 		0,
 		NULL,
 		NULL,
@@ -544,9 +527,10 @@ MtmAllApplyWorkersFinished()
  * Check correctness of multimaster configuration
  */
 static bool
-check_config()
+check_config(int node_id)
 {
-	bool ok = true;
+	bool	ok = true;
+	int		workers_required;
 
 	if (max_prepared_xacts < 1)
 	{
@@ -556,15 +540,21 @@ check_config()
 		ok = false;
 	}
 
+	if (node_id <= 0 || node_id > MTM_MAX_NODES)
 	{
-		int workers_required = 2 * MTM_MAX_NODES + 1;
-		if (max_worker_processes < workers_required)
-		{
-			mtm_log(WARNING,
-				 "multimaster requires max_worker_processes >= %d",
-				 workers_required);
-			ok = false;
-		}
+		mtm_log(WARNING,
+			"node_id should be in range from 1 to %d, but %d is given",
+			MTM_MAX_NODES, node_id);
+		ok = false;
+	}
+
+	workers_required = 2 * node_id + 1;
+	if (max_worker_processes < workers_required)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires max_worker_processes >= %d",
+			 workers_required);
+		ok = false;
 	}
 
 	if (wal_level != WAL_LEVEL_LOGICAL)
@@ -575,19 +565,19 @@ check_config()
 		ok = false;
 	}
 
-	if (max_wal_senders < MtmMaxNodes)
+	if (max_wal_senders < node_id)
 	{
 		mtm_log(WARNING,
 			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
+			 node_id);
 		ok = false;
 	}
 
-	if (max_replication_slots < MtmMaxNodes)
+	if (max_replication_slots < node_id)
 	{
 		mtm_log(WARNING,
 			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
+			 node_id);
 		ok = false;
 	}
 
@@ -745,12 +735,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 							 &is_self_isnull));
 	Assert(!is_self_isnull);
 
-	if (node_id <= 0 || node_id > MTM_MAX_NODES)
-		mtm_log(ERROR,
-			"node_id should be in range from 1 to %d, but %d is given",
-			MTM_MAX_NODES, node_id);
-
-	if (!check_config())
+	if (!check_config(node_id))
 		mtm_log(ERROR, "multimaster can't start with current configs");
 
 	mtm_log(NodeMgmt, "Creating node%d", node_id);
@@ -1100,7 +1085,7 @@ MtmLoadConfig()
 	if (rc < 0 || rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to load saved nodes");
 
-	Assert(SPI_processed <= MtmMaxNodes);
+	Assert(SPI_processed <= MTM_MAX_NODES);
 
 	cfg->n_nodes = 0;
 	cfg->my_node_id = 0;

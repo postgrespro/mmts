@@ -623,7 +623,7 @@ pglogical_receiver_main(Datum main_arg)
 		}
 		else
 		{
-			spvector = palloc0(MtmMaxNodes * sizeof(Syncpoint));
+			spvector = palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 			spvector[receiver_ctx.node_id - 1] = SyncpointGetLatest(receiver_ctx.node_id);
 			filter_map = RecoveryFilterLoad(receiver_ctx.node_id, spvector, receiver_mtm_cfg);
 			remote_start = spvector[receiver_ctx.node_id - 1].origin_lsn;
@@ -640,7 +640,7 @@ pglogical_receiver_main(Datum main_arg)
 			appendStringInfo(message, "\t remote_start = %"INT64_MODIFIER"x\n", remote_start);
 
 			appendStringInfo(message, "\t syncpoint_vector (origin/local) = {");
-			for (i = 0; i < MtmMaxNodes; i++)
+			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
 				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
 				{

@@ -199,7 +199,6 @@ extern int	MtmHeartbeatSendTimeout;
 extern int	MtmHeartbeatRecvTimeout;
 extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
-extern int	MtmMaxNodes;
 extern bool	MtmBreakConnection;
 
 extern void MtmSleep(int64 interval);
