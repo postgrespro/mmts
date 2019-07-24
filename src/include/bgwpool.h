@@ -16,9 +16,14 @@
 #define MULTIMASTER_BGW_RESTART_TIMEOUT BGW_NEVER_RESTART /* seconds */
 
 
+/*
+ * Shared data of BgwPool
+ */
 typedef struct
 {
 	volatile slock_t	lock;
+	ConditionVariable	syncpoint_cv;
+	int					n_holders;
 
 	/* Tell workers that queue contains a number of work. */
 	ConditionVariable	available_cv;
@@ -29,8 +34,6 @@ typedef struct
 	 * attempt to try to add the work data into the queue.
 	 */
 	ConditionVariable	overflow_cv;
-	ConditionVariable	syncpoint_cv;
-	int			n_holders;
 
 	/* Queue state */
 	size_t		head;
@@ -42,35 +45,23 @@ typedef struct
 	size_t		pending;
 	bool		producerBlocked;
 	bool		shutdown;
-	/* Must be last field at the structure */
-	char		queue[FLEXIBLE_ARRAY_MEMBER];
-} PoolState;
 
-typedef struct
-{
 	char		poolName[MAX_NAME_LEN];
 	Oid			db_id;
 	Oid			user_id;
-
-	dsm_handle	pool_handler; /* DSM descriptor. Workers use it for attaching */
-	PoolState	*state;
+	dsm_handle	dsmhandler; /* DSM descriptor. Workers use it for attaching */
 
 	size_t					nWorkers; /* a number of pool workers launched */
 	TimestampTz				lastDynamicWorkerStartTime;
 	/* Handlers of workers at the pool */
-	BackgroundWorkerHandle	*bgwhandles[FLEXIBLE_ARRAY_MEMBER];
+	BackgroundWorkerHandle **bgwhandles;
 } BgwPool;
 
 
-#define SizeOfBgwPool(nodes)	(offsetof(BgwPool, bgwhandles) + sizeof(BackgroundWorkerHandle *) * nodes)
-extern int MtmQueueSize;
-
-typedef BgwPool*(*BgwPoolConstructor)(void);
-
+extern void BgwPoolInit(BgwPool* pool);
 extern void BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id);
 extern void BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx);
-extern size_t PoolStateGetQueueSize(PoolState* pool);
-extern void PoolStateShutdown(PoolState* pool);
+extern void PoolStateShutdown(BgwPool* pool);
 extern void BgwPoolCancel(BgwPool* pool);
 
 #endif

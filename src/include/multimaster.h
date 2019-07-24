@@ -176,7 +176,7 @@ typedef struct
 		int					dmq_dest_id;
 		XLogRecPtr			trim_lsn;
 	} peers[MTM_MAX_NODES];
-	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
+	BgwPool	pools[MTM_MAX_NODES];		/* [Mtm->nAllNodes]: per-node data */
 } MtmShared;
 
 extern MtmShared *Mtm;

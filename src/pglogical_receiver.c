@@ -557,6 +557,7 @@ pglogical_receiver_main(Datum main_arg)
 	/* This is main loop of logical replication.
 	 * In case of errors we will try to reestablish connection.
 	 * Also reconnect is forced when node is switch to recovery mode
+	 * Leave the cycle in the case of Postmaster die.
 	 */
 	for(;;)
 	{
@@ -681,7 +682,7 @@ pglogical_receiver_main(Datum main_arg)
 			int rc, hdr_len;
 
 			if (ProcDiePending && Mtm->pools[nodeId-1].nWorkers > 0)
-				PoolStateShutdown(Mtm->pools[nodeId-1].state);
+				PoolStateShutdown(&Mtm->pools[nodeId-1]);
 
 			CHECK_FOR_INTERRUPTS();
 
@@ -706,9 +707,19 @@ pglogical_receiver_main(Datum main_arg)
 			if (rc & WL_POSTMASTER_DEATH)
 			{
 				if (Mtm->pools[nodeId-1].nWorkers > 0)
-					PoolStateShutdown(Mtm->pools[nodeId-1].state);
-
+					PoolStateShutdown(&Mtm->pools[nodeId-1]);
 				proc_exit(1);
+			}
+
+			if (ProcDiePending)
+			{
+				dsm_handle handle = Mtm->pools[nodeId-1].dsmhandler;
+				dsm_segment *seg = dsm_find_mapping(handle);
+				dsm_detach(seg);
+
+				if (Mtm->pools[nodeId-1].nWorkers > 0)
+					PoolStateShutdown(&Mtm->pools[nodeId-1]);
+				return;
 			}
 
 			if (count != MtmGetRecoveryCount())
@@ -864,9 +875,8 @@ pglogical_receiver_main(Datum main_arg)
 									resetStringInfo(&spill_info);
 								}
 								else
-								{
 									MtmExecute(buf.data, buf.used, &receiver_ctx, false);
-								}
+
 							} else if (spill_file >= 0)
 							{
 								MtmCloseSpillFile(spill_file);
@@ -993,9 +1003,10 @@ pglogical_receiver_main(Datum main_arg)
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
 	}
-	ByteBufferFree(&buf);
-	/* Restart this bgworker */
-	proc_exit(1);
+//	ByteBufferFree(&buf);
+	/* Never reach that point */
+
+	proc_exit(2);
 }
 
 BackgroundWorkerHandle *

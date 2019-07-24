@@ -103,7 +103,12 @@ bool  MtmBackgroundWorker;
 int	  MtmReplicationNodeId;
 int	  MtmMaxNodes;
 
-int	  MtmTransSpillThreshold; // XXX: align with receiver buffer size
+/*
+ * Maximal size of transaction after which transaction is written to the disk.
+ * Also defines bgwpool shared queue size (See BgwPoolStart routine).
+ */
+int	  MtmTransSpillThreshold;
+
 int	  MtmHeartbeatSendTimeout;
 int	  MtmHeartbeatRecvTimeout;
 char* MtmRefereeConnStr;
@@ -231,8 +236,7 @@ MtmSharedShmemStartup()
 		SpinLockInit(&mtm_time->mutex);
 	}
 
-	Mtm = (MtmShared*) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared) +
-							SizeOfBgwPool(MtmMaxWorkers) * MtmMaxNodes, &found);
+	Mtm = (MtmShared*) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared), &found);
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmShared));
@@ -415,22 +419,6 @@ _PG_init(void)
 		NULL
 	);
 
-	// XXX
-	DefineCustomIntVariable(
-		"multimaster.queue_size",
-		"Multimaster queue size",
-		NULL,
-		&MtmQueueSize,
-		10*1024*1024,
-		1024*1024,
-		INT_MAX,
-		PGC_BACKEND,
-		GUC_NO_SHOW_ALL,
-		NULL,
-		NULL,
-		NULL
-	);
-
 	DefineCustomStringVariable(
 		"multimaster.remote_functions",
 		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
@@ -460,7 +448,7 @@ _PG_init(void)
 		NULL
 	);
 
-	MtmDeadlockDetectorInit(MtmMaxNodes);
+	MtmDeadlockDetectorInit(MTM_MAX_NODES);
 
 	/*
 	 * Request additional shared resources.	 (These are no-ops if we're not in
@@ -523,7 +511,7 @@ MtmAllApplyWorkersFinished()
 {
 	int i;
 
-	for (i = 0; i < MtmMaxNodes; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		volatile int ntasks;
 
@@ -533,9 +521,9 @@ MtmAllApplyWorkersFinished()
 		if (i == Mtm->my_node_id - 1)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[i].state->lock);
-		ntasks = Mtm->pools[i].state->active + Mtm->pools[i].state->pending;
-		SpinLockRelease(&Mtm->pools[i].state->lock);
+		SpinLockAcquire(&Mtm->pools[i].lock);
+		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
+		SpinLockRelease(&Mtm->pools[i].lock);
 
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
 
@@ -560,12 +548,6 @@ check_config()
 {
 	bool ok = true;
 
-	if (MtmMaxNodes < 1)
-	{
-		mtm_log(WARNING, "multimaster requires multimaster.max_nodes > 0");
-		ok = false;
-	}
-
 	if (max_prepared_xacts < 1)
 	{
 		mtm_log(WARNING,
@@ -575,7 +557,7 @@ check_config()
 	}
 
 	{
-		int workers_required = 2 * MtmMaxNodes + 1;
+		int workers_required = 2 * MTM_MAX_NODES + 1;
 		if (max_worker_processes < workers_required)
 		{
 			mtm_log(WARNING,
@@ -971,9 +953,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
-		Mtm->pools[node_id-1].state->n_holders += 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
+		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		Mtm->pools[node_id-1].n_holders += 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 
 	/* Await for workers finish and create syncpoints */
@@ -1022,9 +1004,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			if (node_id == cfg->my_node_id)
 				continue;
 
-			SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
-			Mtm->pools[node_id-1].state->n_holders -= 1;
-			SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
+			SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+			Mtm->pools[node_id-1].n_holders -= 1;
+			SpinLockRelease(&Mtm->pools[node_id - 1].lock);
 		}
 		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 		PG_RE_THROW();
@@ -1039,9 +1021,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].state->lock);
-		Mtm->pools[node_id-1].state->n_holders -= 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].state->lock);
+		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		Mtm->pools[node_id-1].n_holders -= 1;
+		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 

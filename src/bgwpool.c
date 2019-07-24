@@ -26,16 +26,62 @@
 
 
 #define MSGLEN	(INTALIGN(size) + payload + sizeof(int))
-#define MinSizeOfPoolState	offsetof(PoolState, queue)
 
-int		MtmQueueSize;
 bool	MtmIsPoolWorker;
 bool	MtmIsLogicalReceiver;
 int		MtmMaxWorkers;
 
-static PoolState* MtmPool;
+static BgwPool* MtmPool;
+
+/* DSM Queue shared between receiver and its workers */
+static char	*queue = NULL;
 
 void BgwPoolDynamicWorkerMainLoop(Datum arg);
+
+
+void
+BgwPoolInit(BgwPool* pool)
+{
+	SpinLockInit(&pool->lock);
+	pool->nWorkers = 0;
+	pool->shutdown = false;
+	pool->producerBlocked = false;
+	pool->head = 0;
+	pool->tail = 0;
+	pool->active = 0;
+	pool->pending = 0;
+	pool->size = 0;
+	pool->lastDynamicWorkerStartTime = 0;
+	ConditionVariableInit(&pool->syncpoint_cv);
+	ConditionVariableInit(&pool->available_cv);
+	ConditionVariableInit(&pool->overflow_cv);
+	pool->bgwhandles = (BackgroundWorkerHandle **) ShmemAlloc(MtmMaxWorkers *
+											sizeof(BackgroundWorkerHandle *));
+}
+
+/*
+ * Call at the start the multimaster WAL receiver.
+ */
+void
+BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
+{
+	dsm_segment	*seg;
+	size_t		size = INTALIGN(MtmTransSpillThreshold * 1024L * 2);
+
+	/* ToDo: remember a segment creation failure (and NULL) case. */
+	seg = dsm_create(size, 0);
+	Assert(seg != NULL);
+	dsm_pin_segment(seg);
+	dsm_pin_mapping(seg);
+	pool->dsmhandler = dsm_segment_handle(seg);
+	queue = (char *) dsm_segment_address(seg);
+	Assert(queue != NULL);
+
+	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
+	pool->db_id = db_id;
+	pool->user_id = user_id;
+	pool->size = size;
+}
 
 static void
 BgwShutdownHandler(int sig)
@@ -57,25 +103,22 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 }
 
 static void
-BgwPoolMainLoop(dsm_handle pool_handler)
+BgwPoolMainLoop(BgwPool* poolDesc)
 {
 	int					size;
 	void				*work;
 	int					payload = INTALIGN(sizeof(MtmReceiverContext));
 	MtmReceiverContext	ctx;
 	static PortalData	fakePortal;
-	Oid					db_id;
-	Oid					user_id;
 	dsm_segment			*seg;
-	PoolState			*pool;
 
 	/* Connect to the queue */
-	Assert(!dsm_find_mapping(pool_handler));
-	seg = dsm_attach(pool_handler);
-	dsm_pin_mapping(seg);
-	pool = dsm_segment_address(seg);
-	MtmPool = pool;
-	mtm_log(BgwPoolEvent, "[%d] Start background worker shutdown=%d", MyProcPid, pool->shutdown);
+	Assert(!dsm_find_mapping(poolDesc->dsmhandler));
+	seg = dsm_attach(poolDesc->dsmhandler);
+	queue = dsm_segment_address(seg);
+	MtmPool = poolDesc;
+	mtm_log(BgwPoolEvent, "[%d] Start background worker shutdown=%d",
+												MyProcPid, poolDesc->shutdown);
 
 	MtmIsPoolWorker = true;
 
@@ -94,9 +137,7 @@ BgwPoolMainLoop(dsm_handle pool_handler)
 	// from on_shem_exit_hook
 
 	BackgroundWorkerUnblockSignals();
-	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
-	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
-	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
+	BackgroundWorkerInitializeConnectionByOid(poolDesc->db_id, poolDesc->user_id, 0);
 	ActivePortal = &fakePortal;
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
@@ -116,17 +157,17 @@ BgwPoolMainLoop(dsm_handle pool_handler)
 		}
 
 		// XXX: change to LWLock
-		SpinLockAcquire(&pool->lock);
+		SpinLockAcquire(&poolDesc->lock);
 
 		/* Worker caught the shutdown signal - release locks and return. */
-		if (pool->shutdown)
+		if (poolDesc->shutdown)
 		{
-			SpinLockRelease(&pool->lock);
+			SpinLockRelease(&poolDesc->lock);
 			break;
 		}
 
 		/* Empty queue */
-		if (pool->head == pool->tail)
+		if (poolDesc->head == poolDesc->tail)
 		{
 			/*
 			 * We need to prepare conditional variable before release of the
@@ -135,74 +176,70 @@ BgwPoolMainLoop(dsm_handle pool_handler)
 			 * sleep preparation worker will go to a sleep and receiver will
 			 * remain in opinion, that worker waked up and doing its work.
 			 */
-			ConditionVariablePrepareToSleep(&pool->available_cv);
-			SpinLockRelease(&pool->lock);
-			/*
-			 * TODO: At this point receiver may have enough time to set shutdown
-			 * sign, call ConditionVariableBroadcast(), and return.
-			 * In this case worker never exit frim the sleep.
-			 */
-			ConditionVariableSleep(&pool->available_cv, PG_WAIT_EXTENSION);
+			ConditionVariablePrepareToSleep(&poolDesc->available_cv);
+			SpinLockRelease(&poolDesc->lock);
+
+			ConditionVariableSleep(&poolDesc->available_cv, PG_WAIT_EXTENSION);
 			continue;
 		}
 
 		/* Wait for end of the node joining operation */
-		while (pool->n_holders > 0 && !pool->shutdown)
+		while (poolDesc->n_holders > 0 && !poolDesc->shutdown)
 		{
-			SpinLockRelease(&pool->lock);
+			SpinLockRelease(&poolDesc->lock);
 			ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
-			SpinLockAcquire(&pool->lock);
+			SpinLockAcquire(&poolDesc->lock);
 		}
 
-		size = *(int *) &pool->queue[pool->head];
-		Assert(size < pool->size);
+		size = *(int *) &queue[poolDesc->head];
+		Assert(size < poolDesc->size);
 		work = palloc(size);
-		pool->pending -= 1;
-		pool->active += 1;
+		poolDesc->pending -= 1;
+		poolDesc->active += 1;
 
-		if (pool->head + MSGLEN > pool->size)
+		if (poolDesc->head + MSGLEN > poolDesc->size)
 		{
-			ctx = *(MtmReceiverContext *) &pool->queue;
-			memcpy(work, &pool->queue[payload], size);
-			pool->head = payload + INTALIGN(size);
+			ctx = *(MtmReceiverContext *) &queue;
+			memcpy(work, &queue[payload], size);
+			poolDesc->head = payload + INTALIGN(size);
 		}
 		else
 		{
-			memcpy(&ctx, &pool->queue[pool->head + sizeof(int)], payload);
-			memcpy(work, &pool->queue[pool->head + sizeof(int) + payload], size);
-			pool->head += MSGLEN;
+			memcpy(&ctx, &queue[poolDesc->head + sizeof(int)], payload);
+			memcpy(work, &queue[poolDesc->head + sizeof(int) + payload], size);
+			poolDesc->head += MSGLEN;
 		}
 
 		/* wrap head */
-		if (pool->head == pool->size)
-			pool->head = 0;
+		if (poolDesc->head == poolDesc->size)
+			poolDesc->head = 0;
 
 		/*
 		 * We should reset head and tail in order to accept messages bigger
 		 * than half of buffer size.
 		 */
-		if (pool->head == pool->tail)
+		if (poolDesc->head == poolDesc->tail)
 		{
-			pool->head = 0;
-			pool->tail = 0;
+			poolDesc->head = 0;
+			poolDesc->tail = 0;
 		}
 
-		if (pool->producerBlocked)
+		if (poolDesc->producerBlocked)
 		{
-			pool->producerBlocked = false;
-			ConditionVariableBroadcast(&pool->overflow_cv);
+			poolDesc->producerBlocked = false;
+			ConditionVariableBroadcast(&poolDesc->overflow_cv);
 		}
 
-		SpinLockRelease(&pool->lock);
+		SpinLockRelease(&poolDesc->lock);
 
 		MtmExecutor(work, size, &ctx);
 		pfree(work);
 
-		SpinLockAcquire(&pool->lock);
-		pool->active -= 1;
-		SpinLockRelease(&pool->lock);
+		SpinLockAcquire(&poolDesc->lock);
+		poolDesc->active -= 1;
+		SpinLockRelease(&poolDesc->lock);
 
-		ConditionVariableBroadcast(&pool->syncpoint_cv);
+		ConditionVariableBroadcast(&poolDesc->syncpoint_cv);
 	}
 
 	dsm_detach(seg);
@@ -211,55 +248,8 @@ BgwPoolMainLoop(dsm_handle pool_handler)
 
 void BgwPoolDynamicWorkerMainLoop(Datum arg)
 {
-	BgwPoolMainLoop((dsm_handle)DatumGetUInt32(arg));
+	BgwPoolMainLoop((BgwPool*) DatumGetPointer(arg));
 }
-
-/*
- * Call at the start the multimaster WAL receiver.
- */
-void
-BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
-{
-	dsm_segment	*seg;
-	size_t		size = INTALIGN(MtmQueueSize);
-
-	/* ToDo: remember a segment creation failure (and NULL) case. */
-	seg = dsm_create(MinSizeOfPoolState + size, 0);
-	Assert(seg != NULL);
-	dsm_pin_segment(seg);
-	dsm_pin_mapping(seg);
-	pool->pool_handler = dsm_segment_handle(seg);
-	pool->state = (PoolState *) dsm_segment_address(seg);
-	Assert(pool->state != NULL);
-
-	SpinLockInit(&pool->state->lock);
-	ConditionVariableInit(&pool->state->available_cv);
-	ConditionVariableInit(&pool->state->overflow_cv);
-	ConditionVariableInit(&pool->state->syncpoint_cv);
-
-	strncpy(pool->poolName, poolName, MAX_NAME_LEN);
-	pool->db_id = db_id;
-	pool->user_id = user_id;
-	pool->nWorkers = 0;
-	pool->state->shutdown = false;
-	pool->state->producerBlocked = false;
-	pool->state->head = 0;
-	pool->state->tail = 0;
-	pool->state->active = 0;
-	pool->state->pending = 0;
-	pool->state->size = size;
-	pool->lastDynamicWorkerStartTime = 0;
-}
-
-size_t PoolStateGetQueueSize(PoolState* pool)
-{
-	size_t used;
-    SpinLockAcquire(&pool->lock);
-	used = pool->head <= pool->tail ? pool->tail - pool->head : pool->size - pool->head + pool->tail;
-    SpinLockRelease(&pool->lock);            
-	return used;
-}
-
 
 static void BgwStartExtraWorker(BgwPool* pool)
 {
@@ -274,9 +264,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
-	worker.bgw_main_arg = UInt32GetDatum(pool->pool_handler);
-	memcpy(worker.bgw_extra, &pool->db_id, sizeof(Oid));
-	memcpy(worker.bgw_extra + sizeof(Oid), &pool->user_id, sizeof(Oid));
+	worker.bgw_main_arg = PointerGetDatum(pool);
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "%s-dynworker-%d", pool->poolName, (int) pool->nWorkers + 1);
@@ -299,12 +287,13 @@ static void BgwStartExtraWorker(BgwPool* pool)
  * After return from routine work and ctx buffers can be reused safely.
  */
 void
-BgwPoolExecute(BgwPool* bgwpool, void* work, int size, MtmReceiverContext *ctx)
+BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 {
-	PoolState	*pool = bgwpool->state;
-	int			payload = INTALIGN(sizeof(MtmReceiverContext));
+	int	payload = INTALIGN(sizeof(MtmReceiverContext));
 
 	Assert(pool != NULL);
+	Assert(queue != NULL);
+
 	// XXX: align with spill size and assert that
 	if (MSGLEN > pool->size)
 	{
@@ -333,27 +322,27 @@ BgwPoolExecute(BgwPool* bgwpool, void* work, int size, MtmReceiverContext *ctx)
 		{
 			pool->pending += 1;
 
-			if (pool->active + pool->pending > bgwpool->nWorkers)
-				BgwStartExtraWorker(bgwpool);
+			if (pool->active + pool->pending > pool->nWorkers)
+				BgwStartExtraWorker(pool);
 
 			/*
 			 * We always have free space for size at tail, as everything is 
 			 * int-aligned and when pool->tail becomes equal to pool->size it
 			 * is switched to zero.
 			 */
-			*(int *) &pool->queue[pool->tail] = size;
+			*(int *) &queue[pool->tail] = size;
 
 			if (pool->size - pool->tail >= MSGLEN)
 			{
-				memcpy(&pool->queue[pool->tail + sizeof(int)], ctx, payload);
-				memcpy(&pool->queue[pool->tail + sizeof(int) + payload], work, size);
+				memcpy(&queue[pool->tail + sizeof(int)], ctx, payload);
+				memcpy(&queue[pool->tail + sizeof(int) + payload], work, size);
 				pool->tail += MSGLEN;
 			}
 			else
 			{
 				/* Message can't fit into the end of queue. */
-				memcpy(pool->queue, ctx, payload);
-				memcpy(&pool->queue[payload], work, size);
+				memcpy(queue, ctx, payload);
+				memcpy(&queue[payload], work, size);
 				pool->tail = MSGLEN - sizeof(int);
 			}
 
@@ -377,10 +366,10 @@ BgwPoolExecute(BgwPool* bgwpool, void* work, int size, MtmReceiverContext *ctx)
 }
 
 /*
- * Initiate shutdown process of the worker: set shutdown sign and wake up all
- * another workers.
+ * Initiate shutdown process of workers: set shutdown sign and wake up all
+ * workers.
  */
-void PoolStateShutdown(PoolState* pool)
+void PoolStateShutdown(BgwPool* pool)
 {
 	SpinLockAcquire(&pool->lock);
 	pool->shutdown = true;
@@ -396,6 +385,7 @@ BgwPoolCancel(BgwPool* pool)
 {
 	int	i;
 
+	SpinLockAcquire(&pool->lock);
 	for (i = 0; i < pool->nWorkers; i++)
 	{
 		BgwHandleStatus	status;
@@ -408,4 +398,5 @@ BgwPoolCancel(BgwPool* pool)
 			kill(pid, SIGINT);
 		}
 	}
+	SpinLockRelease(&pool->lock);
 }

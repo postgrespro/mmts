@@ -527,17 +527,19 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		if (Mtm->pools[rctx->node_id-1].nWorkers <= 0)
 			break;
 
-		SpinLockAcquire(&Mtm->pools[rctx->node_id-1].state->lock);
-		ntasks = Mtm->pools[rctx->node_id-1].state->active +
-				 Mtm->pools[rctx->node_id-1].state->pending;
-		SpinLockRelease(&Mtm->pools[rctx->node_id-1].state->lock);
+		SpinLockAcquire(&Mtm->pools[rctx->node_id-1].lock);
+		ntasks = Mtm->pools[rctx->node_id-1].active +
+				 Mtm->pools[rctx->node_id-1].pending;
+		ConditionVariablePrepareToSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv);
+		SpinLockRelease(&Mtm->pools[rctx->node_id-1].lock);
 
 		Assert(ntasks >= 0);
 		if (ntasks == 0)
 			break;
-
-		ConditionVariableSleep(&Mtm->pools[rctx->node_id-1].state->syncpoint_cv,
+elog(LOG, "BEFORE syncpoint_cv");
+		ConditionVariableSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv,
 															PG_WAIT_EXTENSION);
+		elog(LOG, "AFTER syncpoint_cv");
 	}
 
 	/*
