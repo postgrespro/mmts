@@ -13,6 +13,7 @@
 #include "access/twophase.h"
 #include "access/transam.h"
 #include "storage/proc.h"
+#include "storage/spin.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
 #include "utils/snapmgr.h"

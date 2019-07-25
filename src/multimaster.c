@@ -504,9 +504,9 @@ MtmAllApplyWorkersFinished()
 		if (i == Mtm->my_node_id - 1)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[i].lock);
+		LWLockAcquire(&Mtm->pools[i].lock, LW_EXCLUSIVE);
 		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
-		SpinLockRelease(&Mtm->pools[i].lock);
+		LWLockRelease(&Mtm->pools[i].lock);
 
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
 
@@ -938,9 +938,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 		Mtm->pools[node_id-1].n_holders += 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 
 	/* Await for workers finish and create syncpoints */
@@ -989,9 +989,10 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			if (node_id == cfg->my_node_id)
 				continue;
 
-			SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+
+			LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 			Mtm->pools[node_id-1].n_holders -= 1;
-			SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+			LWLockRelease(&Mtm->pools[node_id - 1].lock);
 		}
 		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 		PG_RE_THROW();
@@ -1006,9 +1007,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 		Mtm->pools[node_id-1].n_holders -= 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 

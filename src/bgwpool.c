@@ -5,8 +5,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
 #include "storage/dsm.h"
-#include "storage/s_lock.h"
-#include "storage/spin.h"
+#include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/pg_sema.h"
 #include "storage/shmem.h"
@@ -42,7 +41,9 @@ void BgwPoolDynamicWorkerMainLoop(Datum arg);
 void
 BgwPoolInit(BgwPool* pool)
 {
-	SpinLockInit(&pool->lock);
+	LWLockInitialize(&pool->lock, LWLockNewTrancheId());
+	LWLockRegisterTranche(pool->lock.tranche, "BGWPOOL_LWLOCK");
+
 	pool->nWorkers = 0;
 	pool->shutdown = false;
 	pool->producerBlocked = false;
@@ -157,12 +158,12 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 		}
 
 		// XXX: change to LWLock
-		SpinLockAcquire(&poolDesc->lock);
+		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 
 		/* Worker caught the shutdown signal - release locks and return. */
 		if (poolDesc->shutdown)
 		{
-			SpinLockRelease(&poolDesc->lock);
+			LWLockRelease(&poolDesc->lock);
 			break;
 		}
 
@@ -177,7 +178,7 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			 * remain in opinion, that worker waked up and doing its work.
 			 */
 			ConditionVariablePrepareToSleep(&poolDesc->available_cv);
-			SpinLockRelease(&poolDesc->lock);
+			LWLockRelease(&poolDesc->lock);
 
 			ConditionVariableSleep(&poolDesc->available_cv, PG_WAIT_EXTENSION);
 			continue;
@@ -186,9 +187,9 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 		/* Wait for end of the node joining operation */
 		while (poolDesc->n_holders > 0 && !poolDesc->shutdown)
 		{
-			SpinLockRelease(&poolDesc->lock);
+			LWLockRelease(&poolDesc->lock);
 			ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
-			SpinLockAcquire(&poolDesc->lock);
+			LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		}
 
 		size = *(int *) &queue[poolDesc->head];
@@ -230,14 +231,14 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			ConditionVariableBroadcast(&poolDesc->overflow_cv);
 		}
 
-		SpinLockRelease(&poolDesc->lock);
+		LWLockRelease(&poolDesc->lock);
 
 		MtmExecutor(work, size, &ctx);
 		pfree(work);
 
-		SpinLockAcquire(&poolDesc->lock);
+		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		poolDesc->active -= 1;
-		SpinLockRelease(&poolDesc->lock);
+		LWLockRelease(&poolDesc->lock);
 
 		ConditionVariableBroadcast(&poolDesc->syncpoint_cv);
 	}
@@ -287,15 +288,15 @@ static void BgwStartExtraWorker(BgwPool* pool)
  * After return from routine work and ctx buffers can be reused safely.
  */
 void
-BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
+BgwPoolExecute(BgwPool* poolDesc, void* work, int size, MtmReceiverContext *ctx)
 {
 	int	payload = INTALIGN(sizeof(MtmReceiverContext));
 
-	Assert(pool != NULL);
+	Assert(poolDesc != NULL);
 	Assert(queue != NULL);
 
 	// XXX: align with spill size and assert that
-	if (MSGLEN > pool->size)
+	if (MSGLEN > poolDesc->size)
 	{
 		/* 
 		 * Size of work is larger than size of shared buffer: 
@@ -305,8 +306,8 @@ BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 		return;
 	}
  
-	SpinLockAcquire(&pool->lock);
-	while (!pool->shutdown)
+	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
+	while (!poolDesc->shutdown)
 	{
 		/*
 		 * If queue is not wrapped through the end of buffer (head <= tail) we can
@@ -316,87 +317,89 @@ BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx)
 		 * If queue is wrapped through the end of buffer (tail < head) we can fit
 		 * message only between head and tail.
 		 */
-		if ((pool->head <= pool->tail &&
-			(pool->size - pool->tail >= MSGLEN || pool->head >= size + payload)) ||
-			(pool->head > pool->tail && pool->head - pool->tail >= MSGLEN))
+		if ((poolDesc->head <= poolDesc->tail &&
+			(poolDesc->size - poolDesc->tail >= MSGLEN ||
+			poolDesc->head >= size + payload)) ||
+			(poolDesc->head > poolDesc->tail &&
+			poolDesc->head - poolDesc->tail >= MSGLEN))
 		{
-			pool->pending += 1;
+			poolDesc->pending += 1;
 
-			if (pool->active + pool->pending > pool->nWorkers)
-				BgwStartExtraWorker(pool);
+			if (poolDesc->active + poolDesc->pending > poolDesc->nWorkers)
+				BgwStartExtraWorker(poolDesc);
 
 			/*
 			 * We always have free space for size at tail, as everything is 
 			 * int-aligned and when pool->tail becomes equal to pool->size it
 			 * is switched to zero.
 			 */
-			*(int *) &queue[pool->tail] = size;
+			*(int *) &queue[poolDesc->tail] = size;
 
-			if (pool->size - pool->tail >= MSGLEN)
+			if (poolDesc->size - poolDesc->tail >= MSGLEN)
 			{
-				memcpy(&queue[pool->tail + sizeof(int)], ctx, payload);
-				memcpy(&queue[pool->tail + sizeof(int) + payload], work, size);
-				pool->tail += MSGLEN;
+				memcpy(&queue[poolDesc->tail + sizeof(int)], ctx, payload);
+				memcpy(&queue[poolDesc->tail + sizeof(int) + payload], work, size);
+				poolDesc->tail += MSGLEN;
 			}
 			else
 			{
 				/* Message can't fit into the end of queue. */
 				memcpy(queue, ctx, payload);
 				memcpy(&queue[payload], work, size);
-				pool->tail = MSGLEN - sizeof(int);
+				poolDesc->tail = MSGLEN - sizeof(int);
 			}
 
-			if (pool->tail == pool->size)
-				pool->tail = 0;
+			if (poolDesc->tail == poolDesc->size)
+				poolDesc->tail = 0;
 
-			ConditionVariableBroadcast(&pool->available_cv);
+			ConditionVariableBroadcast(&poolDesc->available_cv);
 			break;
 		}
 		else
 		{
-			pool->producerBlocked = true;
+			poolDesc->producerBlocked = true;
 			/* It is critical that the sleep preparation will stay here */
-			ConditionVariablePrepareToSleep(&pool->overflow_cv);
-			SpinLockRelease(&pool->lock);
-			ConditionVariableSleep(&pool->overflow_cv, PG_WAIT_EXTENSION);
-			SpinLockAcquire(&pool->lock);
+			ConditionVariablePrepareToSleep(&poolDesc->overflow_cv);
+			LWLockRelease(&poolDesc->lock);
+			ConditionVariableSleep(&poolDesc->overflow_cv, PG_WAIT_EXTENSION);
+			LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		}
 	}
-	SpinLockRelease(&pool->lock);
+	LWLockRelease(&poolDesc->lock);
 }
 
 /*
  * Initiate shutdown process of workers: set shutdown sign and wake up all
  * workers.
  */
-void PoolStateShutdown(BgwPool* pool)
+void PoolStateShutdown(BgwPool* poolDesc)
 {
-	SpinLockAcquire(&pool->lock);
-	pool->shutdown = true;
-	ConditionVariableBroadcast(&pool->available_cv);
-	SpinLockRelease(&pool->lock);
+	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
+	poolDesc->shutdown = true;
+	ConditionVariableBroadcast(&poolDesc->available_cv);
+	LWLockRelease(&poolDesc->lock);
 }
 
 /*
  * Tell our lads to cancel currently active transactions.
  */
 void
-BgwPoolCancel(BgwPool* pool)
+BgwPoolCancel(BgwPool* poolDesc)
 {
 	int	i;
 
-	SpinLockAcquire(&pool->lock);
-	for (i = 0; i < pool->nWorkers; i++)
+	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
+	for (i = 0; i < poolDesc->nWorkers; i++)
 	{
 		BgwHandleStatus	status;
 		pid_t			pid;
 
-		status = GetBackgroundWorkerPid(pool->bgwhandles[i], &pid);
+		status = GetBackgroundWorkerPid(poolDesc->bgwhandles[i], &pid);
 		if (status == BGWH_STARTED)
 		{
 			Assert(pid > 0);
 			kill(pid, SIGINT);
 		}
 	}
-	SpinLockRelease(&pool->lock);
+	LWLockRelease(&poolDesc->lock);
 }

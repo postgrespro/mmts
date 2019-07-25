@@ -1,8 +1,7 @@
 #ifndef __BGWPOOL_H__
 #define __BGWPOOL_H__
 
-#include "storage/s_lock.h"
-#include "storage/spin.h"
+#include "storage/lwlock.h"
 #include "storage/pg_sema.h"
 #include "postmaster/bgworker.h"
 #include "storage/condition_variable.h"
@@ -21,7 +20,7 @@
  */
 typedef struct
 {
-	volatile slock_t	lock;
+	LWLock				lock;
 	ConditionVariable	syncpoint_cv;
 	int					n_holders;
 

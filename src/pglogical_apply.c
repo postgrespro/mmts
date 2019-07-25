@@ -520,26 +520,29 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 * allow previous transactions to proceed. This way we will not delay
 	 * application of transaction bodies, just prepare record itself.
 	 */
+	LWLockAcquire(&Mtm->pools[rctx->node_id-1].lock, LW_EXCLUSIVE);
 	for(;;)
 	{
 		int ntasks;
 
 		if (Mtm->pools[rctx->node_id-1].nWorkers <= 0)
+		{
+			LWLockRelease(&Mtm->pools[rctx->node_id-1].lock);
 			break;
+		}
 
-		SpinLockAcquire(&Mtm->pools[rctx->node_id-1].lock);
 		ntasks = Mtm->pools[rctx->node_id-1].active +
 				 Mtm->pools[rctx->node_id-1].pending;
 		ConditionVariablePrepareToSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv);
-		SpinLockRelease(&Mtm->pools[rctx->node_id-1].lock);
+		LWLockRelease(&Mtm->pools[rctx->node_id-1].lock);
 
 		Assert(ntasks >= 0);
 		if (ntasks == 0)
 			break;
-elog(LOG, "BEFORE syncpoint_cv");
+
 		ConditionVariableSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv,
 															PG_WAIT_EXTENSION);
-		elog(LOG, "AFTER syncpoint_cv");
+		LWLockAcquire(&Mtm->pools[rctx->node_id-1].lock, LW_EXCLUSIVE);
 	}
 
 	/*
