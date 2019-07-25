@@ -21,7 +21,6 @@
 #include "postgres.h"
 #include "fmgr.h"
 #include "miscadmin.h"
-// #include "common/pg_socket.h"
 #include "pqexpbuffer.h"
 #include "access/xact.h"
 #include "access/clog.h"
@@ -67,8 +66,8 @@ bool MtmIsReceiver;
 
 typedef struct MtmFlushPosition
 {
-	dlist_node node;
-	int        node_id;
+	dlist_node	node;
+	int			node_id;
 	XLogRecPtr	local_end;
 	XLogRecPtr	remote_end;
 } MtmFlushPosition;
@@ -81,7 +80,7 @@ char const* const MtmReplicationModeName[] =
 
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
-MtmConfig *receiver_mtm_cfg;
+MtmConfig	*receiver_mtm_cfg;
 bool		receiver_mtm_cfg_valid;
 
 /* Signal handling */
@@ -308,15 +307,15 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 static bool
 MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_map)
 {
-	StringInfoData s;
-	uint8		event;
+	StringInfoData	s;
+	uint8			event;
 	XLogRecPtr		origin_lsn;
 	XLogRecPtr		end_lsn;
 	XLogRecPtr		tx_lsn;
-	int			replication_node;
-	int			origin_node;
-	char const* gid = "";
-	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
+	int				replication_node;
+	int				origin_node;
+	char const*		gid = "";
+	char			msgtype PG_USED_FOR_ASSERTS_ONLY;
 
 	s.data = record;
 	s.len = size;
@@ -377,12 +376,10 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 
 		hash_search(filter_map, &entry, HASH_FIND, &found);
 
-		{
-			mtm_log(MtmReceiverFilter,
-				"Filter (map) transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%d/%"INT64_MODIFIER"x) -> %d",
-				gid, replication_node, event,
-				spvector[origin_node-1].origin_lsn, origin_node, tx_lsn, found);
-		}
+		mtm_log(MtmReceiverFilter,
+			"Filter (map) transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%d/%"INT64_MODIFIER"x) -> %d",
+			gid, replication_node, event,
+			spvector[origin_node-1].origin_lsn, origin_node, tx_lsn, found);
 
 		return found;
 	}
@@ -422,10 +419,10 @@ MtmEndSession(int nodeId, bool unlock)
 static PGconn *
 receiver_connect(char *conninfo)
 {
-	PGconn *conn;
-	ConnStatusType status;
-	const char *keys[] = {"dbname", "replication", NULL};
-	const char *vals[] = {conninfo, "database", NULL};
+	PGconn			*conn;
+	ConnStatusType	status;
+	const char		*keys[] = {"dbname", "replication", NULL};
+	const char		*vals[] = {conninfo, "database", NULL};
 
 	conn = PQconnectdbParams(keys, vals, /* expand_dbname = */ true);
 	status = PQstatus(conn);
@@ -447,9 +444,9 @@ receiver_connect(char *conninfo)
 void
 MtmReceiverCreateSlot(char *conninfo, int my_node_id)
 {
-	StringInfoData cmd;
-	PGresult   *res;
-	PGconn	   *conn = receiver_connect(conninfo);
+	StringInfoData	cmd;
+	PGresult		*res;
+	PGconn			*conn = receiver_connect(conninfo);
 
 	if (!conn)
 		mtm_log(ERROR, "Could not connect to '%s'", conninfo);
@@ -846,15 +843,11 @@ pglogical_receiver_main(Datum main_arg)
 					}
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S' ))) {
 						if (stmt[0] == 'M' && stmt[1] == 'C')
-						{
 							/* concurrent DDL should be executed by parallel workers */
 							MtmExecute(stmt, msg_len, &receiver_ctx, false);
-						}
 						else
-						{
 							/* all other messages should be processed by receiver itself */
 							MtmExecute(stmt, msg_len, &receiver_ctx, true);
-						}
 					}
 					else
 					{
@@ -877,7 +870,8 @@ pglogical_receiver_main(Datum main_arg)
 								else
 									MtmExecute(buf.data, buf.used, &receiver_ctx, false);
 
-							} else if (spill_file >= 0)
+							}
+							else if (spill_file >= 0)
 							{
 								MtmCloseSpillFile(spill_file);
 								resetStringInfo(&spill_info);
@@ -899,16 +893,16 @@ pglogical_receiver_main(Datum main_arg)
 				 * not more than the specified timeout, so that we can send a
 				 * response back to the client.
 				 */
-				int			r;
-				fd_set	  input_mask;
-				int64	   message_target = 0;
-				int64	   fsync_target = 0;
-				struct timeval timeout;
-				struct timeval *timeoutptr = NULL;
-				int64	   targettime;
-				long		secs;
-				int		 usecs;
-				int64		now;
+				int				r;
+				fd_set			input_mask;
+				int64	   		message_target = 0;
+				int64			fsync_target = 0;
+				struct timeval	timeout;
+				struct timeval	*timeoutptr = NULL;
+				int64			targettime;
+				long			secs;
+				int				usecs;
+				int64			now;
 
 				FD_ZERO(&input_mask);
 				FD_SET(PQsocket(conn), &input_mask);
@@ -919,10 +913,7 @@ pglogical_receiver_main(Datum main_arg)
 				if (fsync_target > 0 && fsync_target < targettime)
 					targettime = fsync_target;
 				now = feGetCurrentTimestamp();
-				feTimestampDifference(now,
-									  targettime,
-									  &secs,
-									  &usecs);
+				feTimestampDifference(now, targettime, &secs, &usecs);
 				if (secs <= 0)
 					timeout.tv_sec = 1; /* Always sleep at least 1 sec */
 				else
@@ -940,14 +931,13 @@ pglogical_receiver_main(Datum main_arg)
 					sendFeedback(conn, now, nodeId);
 				}
 				else if (r < 0 && errno == EINTR)
-				{
 					/*
 					 * Got a timeout or signal. Continue the loop and either
 					 * deliver a status packet to the server or just go back into
 					 * blocking.
 					 */
 					continue;
-				}
+
 				else if (r < 0)
 				{
 					ereport(LOG, (MTM_ERRMSG("%s: Incorrect status received.",
@@ -1003,17 +993,16 @@ pglogical_receiver_main(Datum main_arg)
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
 	}
-//	ByteBufferFree(&buf);
-	/* Never reach that point */
 
+	/* Never reach that point */
 	proc_exit(2);
 }
 
 BackgroundWorkerHandle *
 MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 {
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
+	BackgroundWorker		worker;
+	BackgroundWorkerHandle	*handle;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
