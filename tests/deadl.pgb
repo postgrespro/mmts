@@ -1,0 +1,10 @@
+\set fromuser random(1,64)
+\set touser random(1,64)
+\set amount random(1,10000)
+BEGIN;
+INSERT INTO transactions (uid,amount) VALUES (:fromuser, -:amount);
+INSERT INTO transactions (uid,amount) VALUES (:touser, :amount);
+INSERT INTO users (uid,sum) VALUES (:fromuser, -:amount) ON CONFLICT(uid) DO UPDATE SET sum=users.sum-:amount WHERE users.uid=:fromuser;
+INSERT INTO users (uid,sum) VALUES (:touser, :amount) ON CONFLICT(uid) DO UPDATE SET sum=users.sum+:amount WHERE users.uid=:touser;
+END;
+
