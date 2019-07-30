@@ -169,6 +169,11 @@ retry:
 		for (i = 0; i < natts; i++)
 		{
 			Form_pg_attribute att = TupleDescAttr(tupDesc, i);
+
+			if (att->attisdropped)
+				/* The case of ALTER TABLE ... DROP ... COLUMN */
+				continue;
+
 			if (nulls[i] && tup->isnull[i]) /* both nulls */
 				continue;
 			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not null */
