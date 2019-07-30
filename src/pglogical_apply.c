@@ -882,10 +882,15 @@ read_rel(StringInfo s, LOCKMODE mode)
  * transaction decoding and GID will not be known in advance.
  */
 static void
-mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
+mtm_send_xid_reply(TransactionId xid, int node_id,
+					MtmMessageCode msg_code, ErrorData *edata)
 {
 	DmqDestinationId dest_id;
 	StringInfoData msg;
+	int32		sqlerrcode = ERRCODE_SUCCESSFUL_COMPLETION;
+
+	if (msg_code != MSG_PREPARED)
+		sqlerrcode = edata ? edata->sqlerrcode : ERRCODE_T_R_SERIALIZATION_FAILURE;
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
@@ -895,6 +900,9 @@ mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 
 	initStringInfo(&msg);
 	pq_sendbyte(&msg, msg_code);
+	pq_sendint32(&msg, sqlerrcode);
+	pq_sendstring(&msg, edata ? edata->message : "");
+
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
 					msg.data, msg.len);
 
@@ -922,6 +930,9 @@ mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
 
 	initStringInfo(&msg);
 	pq_sendbyte(&msg, msg_code);
+	pq_sendint32(&msg, ERRCODE_SUCCESSFUL_COMPLETION);
+	pq_sendstring(&msg, "");
+
 	dmq_push_buffer(dest_id, gid, msg.data, msg.len);
 
 	mtm_log(MtmApplyTrace,
@@ -1019,7 +1030,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			if (receiver_ctx->parallel_allowed)
 			{
 				mtm_send_xid_reply(current_gtid->xid, origin_node,
-								   res ? MSG_PREPARED : MSG_ABORTED);
+								   res ? MSG_PREPARED : MSG_ABORTED, NULL);
 			}
 
 			/*
@@ -1662,10 +1673,13 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     }
     PG_CATCH();
     {
+		ErrorData  *edata;
 		query_cancel_allowed = false;
 
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		MtmHandleApplyError();
+		edata = CopyErrorData();
+
 		MemoryContextSwitchTo(old_context);
 		EmitErrorReport();
 		FlushErrorState();
@@ -1681,9 +1695,11 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		{
 			MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
-				mtm_send_xid_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+				mtm_send_xid_reply(current_gtid.xid, current_gtid.node,
+									MSG_ABORTED, edata);
 		}
 
+		FreeErrorData(edata);
 		AbortCurrentTransaction();
 	}
 	PG_END_TRY();

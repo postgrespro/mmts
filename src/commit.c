@@ -35,7 +35,9 @@
 
 typedef struct
 {
-	StringInfoData	message;
+	MtmMessageCode status;
+	int32		errcode;
+	const char *errmsg;
 	int			node_id;
 } mtm_msg;
 
@@ -239,6 +241,15 @@ MtmGidParseXid(const char* gid)
 	return xid;
 }
 
+static void
+parse_reply(mtm_msg *message, StringInfo msg_buf)
+{
+	message->status = pq_getmsgbyte(msg_buf);
+	message->errcode = pq_getmsgint(msg_buf, 4);
+	message->errmsg = pq_getmsgstring(msg_buf);
+	message->node_id = -1;
+}
+
 bool
 MtmTwoPhaseCommit()
 {
@@ -333,26 +344,26 @@ MtmTwoPhaseCommit()
 
 		for (i = 0; i < n_messages; i++)
 		{
-			MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
+			Assert(messages[i].status == MSG_PREPARED || messages[i].status == MSG_ABORTED);
 
-			Assert(status == MSG_PREPARED || status == MSG_ABORTED);
-			if (status == MSG_ABORTED)
+			if (messages[i].status == MSG_ABORTED)
 			{
 				FinishPreparedTransaction(gid, false, false);
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-
 				if (!MtmVolksWagenMode)
 				{
 					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							errmsg("[multimaster] failed to prepare transaction %s at node %d",
-									gid, messages[i].node_id)));
+							(errcode(messages[i].errcode),
+							 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+									gid, messages[i].node_id),
+							 errdetail("sqlstate %s (%s)",
+									unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 				}
 				else
 				{
 					ereport(ERROR,
-							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-							errmsg("[multimaster] failed to prepare transaction at peer node")));
+							(errcode(messages[i].errcode),
+							 errmsg("[multimaster] failed to prepare transaction at peer node")));
 				}
 			}
 		}
@@ -415,7 +426,7 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
-			messages[*msg_count].message = msg;
+			parse_reply(&messages[*msg_count], &msg);
 			messages[*msg_count].node_id = sender_to_node[sender_id];
 			(*msg_count)++;
 			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
@@ -493,27 +504,27 @@ MtmExplicitPrepare(char *gid)
 
 	for (i = 0; i < n_messages; i++)
 	{
-		MtmMessageCode status = pq_getmsgbyte(&messages[i].message);
+		Assert(messages[i].status == MSG_PREPARED || messages[i].status == MSG_ABORTED);
 
-		Assert(status == MSG_PREPARED || status == MSG_ABORTED);
-		if (status == MSG_ABORTED)
+		if (messages[i].status == MSG_ABORTED)
 		{
-			
+
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-
 			if (!MtmVolksWagenMode)
 			{
 				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i].node_id)));
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								gid, messages[i].node_id),
+						 errdetail("sqlstate %s (%s)",
+								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 			}
 			else
 			{
 				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						(errcode(messages[i].errcode),
 						errmsg("[multimaster] failed to prepare transaction at peer node")));
 			}
 		}
