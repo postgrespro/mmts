@@ -125,7 +125,7 @@ static void MtmProcessUtilitySender(PlannedStmt *pstmt,
 static void MtmGucUpdate(const char *key, char *value);
 static void MtmInitializeRemoteFunctionsMap(void);
 static char *MtmGucSerialize(void);
-static void MtmMakeRelationLocal(Oid relid);
+static void MtmMakeRelationLocal(Oid relid, bool locked);
 static List *AdjustCreateSequence(List *options);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
@@ -1077,7 +1077,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 						}
 						if (rel->rd_replidindex == InvalidOid) {
 							// XXX
-							MtmMakeRelationLocal(RelationGetRelid(rel));
+							MtmMakeRelationLocal(RelationGetRelid(rel), false);
 							continue;
 						}
 					}
@@ -1251,7 +1251,7 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 	Datum		values[Natts_mtm_local_tables];
 	bool		nulls[Natts_mtm_local_tables];
 
-	MtmMakeRelationLocal(reloid);
+	MtmMakeRelationLocal(reloid, false);
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
 	rel = heap_openrv(rv, RowExclusiveLock);
@@ -1283,22 +1283,24 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 }
 
 static void
-MtmMakeRelationLocal(Oid relid)
+MtmMakeRelationLocal(Oid relid, bool locked)
 {
 	if (OidIsValid(relid))
 	{
-		LWLockAcquire(ddl_shared->localtab_lock, LW_EXCLUSIVE);
+		if (!locked)
+			LWLockAcquire(ddl_shared->localtab_lock, LW_EXCLUSIVE);
 		hash_search(MtmLocalTables, &relid, HASH_ENTER, NULL);
-		LWLockRelease(ddl_shared->localtab_lock);
+		if (!locked)
+			LWLockRelease(ddl_shared->localtab_lock);
 	}
 }
 
 void
-MtmMakeTableLocal(char const* schema, char const* name)
+MtmMakeTableLocal(char const* schema, char const* name, bool locked)
 {
 	RangeVar* rv = makeRangeVar((char*)schema, (char*)name, -1);
 	Oid relid = RangeVarGetRelid(rv, NoLock, true);
-	MtmMakeRelationLocal(relid);
+	MtmMakeRelationLocal(relid, locked);
 }
 
 static void
@@ -1310,6 +1312,7 @@ MtmLoadLocalTables(void)
 	HeapTuple		tuple;
 
 	Assert(IsTransactionState());
+	Assert(LWLockHeldByMeInMode(ddl_shared->localtab_lock, LW_EXCLUSIVE));
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
 	rel = heap_openrv_extended(rv, RowExclusiveLock, true);
@@ -1319,7 +1322,7 @@ MtmLoadLocalTables(void)
 		while (HeapTupleIsValid(tuple = systable_getnext(scan)))
 		{
 			MtmLocalTablesTuple	*t = (MtmLocalTablesTuple*) GETSTRUCT(tuple);
-			MtmMakeTableLocal(NameStr(t->schema), NameStr(t->name));
+			MtmMakeTableLocal(NameStr(t->schema), NameStr(t->name), true);
 		}
 
 		systable_endscan(scan);

@@ -3,6 +3,31 @@ select conninfo as node1 from mtm.nodes() where id = 1 \gset
 select conninfo as node2 from mtm.nodes() where id = 2 \gset
 select conninfo as node3 from mtm.nodes() where id = 3 \gset
 
+-- check local tables just after init while walsender didn't send any data
+begin;
+create table local_tab(id serial primary key);
+select mtm.make_table_local('local_tab');
+commit;
+
+-- check that it is actually local
+insert into local_tab values (1);
+\c :node2
+insert into local_tab values (2);
+\c :node3
+insert into local_tab values (3);
+table local_tab;
+\c :node2
+table local_tab;
+update local_tab set id = id*100;
+table local_tab;
+\c :node1
+table local_tab;
+delete from local_tab;
+\c :node2
+table local_tab;
+truncate local_tab;
+\c :node1
+table local_tab;
 
 -- check that implicit empty transactions works fine
 create table t (a int, b text);

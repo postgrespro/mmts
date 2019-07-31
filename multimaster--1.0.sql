@@ -153,7 +153,7 @@ CREATE TABLE mtm.local_tables(
     rel_schema name,
     rel_name name,
     primary key(rel_schema, rel_name)
-);
+) WITH (user_catalog_table=true);
 
 CREATE TABLE mtm.referee_decision(
     key text primary key not null,

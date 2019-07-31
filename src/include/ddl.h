@@ -28,6 +28,6 @@ extern void MtmApplyDDLMessage(const char *messageBody, bool transactional);
 extern void MtmDDLResetApplyState(void);
 extern void MtmSetRemoteFunction(char const* list, void* extra);
 extern void MtmToggleDML(void);
-extern void MtmMakeTableLocal(char const* schema, char const* name);
+extern void MtmMakeTableLocal(char const* schema, char const* name, bool locked);
 
 #endif
