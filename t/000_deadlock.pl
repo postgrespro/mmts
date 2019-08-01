@@ -82,7 +82,7 @@ query_exec_async($conns[0], "commit");
 query_exec_async($conns[1], "commit");
 
 my $timeout = 5;
-while ($timeout > 0)
+while (--$timeout > 0)
 {
 	my $r0 = $conns[0]->pg_ready();
 	my $r1 = $conns[1]->pg_ready();
