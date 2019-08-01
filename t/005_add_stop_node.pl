@@ -74,6 +74,8 @@ $cluster->pgbench(0, ('-N', '-n', -t => '100') );
 
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
 $cluster->release_socket($sock);
+$cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''
+	});
 $cluster->{nodes}->[$new_node_off]->start;
 $cluster->await_nodes( (3,0,1,2) );
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");
