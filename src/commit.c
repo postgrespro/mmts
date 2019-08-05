@@ -304,6 +304,13 @@ MtmTwoPhaseCommit()
 		{
 			if (!MtmVolksWagenMode)
 				mtm_log(WARNING, "Failed to prepare transaction %s", gid);
+
+			Assert(committers_incremented);
+			SpinLockAcquire(&Mtm->cb_lock);
+			Mtm->n_committers -= 1;
+			SpinLockRelease(&Mtm->cb_lock);
+			committers_incremented = false;
+			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 			return true;
 		}
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
