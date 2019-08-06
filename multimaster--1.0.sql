@@ -229,4 +229,21 @@ BEGIN
 END
 $$
 LANGUAGE plpgsql;
+
+CREATE TYPE bgwpool_result AS (nWorkers INT, Active INT, Pending INT, Size INT,
+								Head INT, Tail INT, ReceiverName TEXT);
+CREATE FUNCTION mtm.node_bgwpool_stat() RETURNS bgwpool_result
+AS 'MODULE_PATHNAME','mtm_get_bgwpool_stat'
+LANGUAGE C;
+
+CREATE VIEW mtm_stat_bgwpool AS
+	SELECT	nWorkers,
+			Active,
+			Pending,
+			Size,
+			Head,
+			Tail,
+			ReceiverName
+	FROM mtm.node_bgwpool_stat();
+
 -- select mtm.alter_sequences();

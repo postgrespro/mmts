@@ -1238,17 +1238,17 @@ process_remote_update(StringInfo s, Relation rel)
 {
 	char			action;
 	EState			*estate;
-	TupleTableSlot *newslot;
-	TupleTableSlot *oldslot;
-	bool		    pkey_sent;
-	bool		    found_tuple;
-	TupleData       old_tuple;
-	TupleData       new_tuple;
-	Oid			    idxoid = InvalidOid;
-	Relation	    idxrel = NULL;
-	TupleDesc	    tupDesc = RelationGetDescr(rel);
-	ScanKeyData     skey[INDEX_MAX_KEYS];
-	HeapTuple	    remote_tuple = NULL;
+	TupleTableSlot	*newslot;
+	TupleTableSlot	*oldslot;
+	bool			pkey_sent;
+	bool			found_tuple;
+	TupleData		old_tuple;
+	TupleData		new_tuple;
+	Oid				idxoid = InvalidOid;
+	Relation		idxrel = NULL;
+	TupleDesc		tupDesc = RelationGetDescr(rel);
+	ScanKeyData		skey[INDEX_MAX_KEYS];
+	HeapTuple		remote_tuple = NULL;
 
 	action = pq_getmsgbyte(s);
 
@@ -1290,9 +1290,7 @@ process_remote_update(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	if (!OidIsValid(idxoid))
-	{
 		found_tuple = find_heap_tuple(pkey_sent ? &old_tuple : &new_tuple, rel, oldslot, true);
-	}
 	else
 	{
 		/* open index, so we can build scan key for row */
@@ -1306,7 +1304,7 @@ process_remote_update(StringInfo s, Relation rel)
 
 		/* look for tuple identified by the (old) primary key */
 		found_tuple = find_pkey_tuple(skey, rel, idxrel, oldslot, true,
-									  pkey_sent ? LockTupleExclusive : LockTupleNoKeyExclusive);
+					pkey_sent ? LockTupleExclusive : LockTupleNoKeyExclusive);
 
 	}
 	if (found_tuple)

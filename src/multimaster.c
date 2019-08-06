@@ -63,6 +63,7 @@ PG_FUNCTION_INFO_V1(mtm_after_node_create);
 PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 PG_FUNCTION_INFO_V1(mtm_join_node);
 PG_FUNCTION_INFO_V1(mtm_init_cluster);
+PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -324,7 +325,7 @@ _PG_init(void)
 		"Maximal size of transaction after which transaction is written to the disk",
 		NULL,
 		&MtmTransSpillThreshold,
-		100 * 1024, /* 100Mb */
+		25 * 1024, /* 100Mb */
 		0,
 		MaxAllocSize/1024,
 		PGC_SIGHUP,
@@ -1357,4 +1358,57 @@ launcher_main(Datum main_arg)
 	heap_close(rel, AccessShareLock);
 
 	CommitTransactionCommand();
+}
+
+#define BGWPOOL_STAT_COLS	(7)
+Datum
+mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
+{
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	Datum		values[BGWPOOL_STAT_COLS];
+	bool		nulls[BGWPOOL_STAT_COLS];
+	int i;
+
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	/* Build a tuple descriptor for our result type */
+		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+	MemoryContextSwitchTo(oldcontext);
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (Mtm->pools[i].nWorkers == 0)
+		{
+			continue;
+		}
+
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, 0, sizeof(nulls));
+
+		values[0] = Int32GetDatum(Mtm->pools[i].nWorkers);
+		values[1] = Int32GetDatum(Mtm->pools[i].active);
+		values[2] = Int32GetDatum(Mtm->pools[i].pending);
+		values[3] = Int32GetDatum(Mtm->pools[i].size);
+		values[4] = Int32GetDatum(Mtm->pools[i].head);
+		values[5] = Int32GetDatum(Mtm->pools[i].tail);
+		values[6] = CStringGetDatum(Mtm->pools[i].poolName);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }

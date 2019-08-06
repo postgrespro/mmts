@@ -288,7 +288,6 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 	/* parallel_allowed should never be set during recovery */
 	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
 
-
 	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || no_pool)
 		MtmExecutor(work, size, receiver_ctx);
 	else
@@ -841,13 +840,17 @@ pglogical_receiver_main(Datum main_arg)
 						MtmSpillToFile(spill_file, buf.data, buf.used);
 						ByteBufferReset(&buf);
 					}
-					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' || stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S' ))) {
+					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
+							stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S' )))
+					{
 						if (stmt[0] == 'M' && stmt[1] == 'C')
 							/* concurrent DDL should be executed by parallel workers */
 							MtmExecute(stmt, msg_len, &receiver_ctx, false);
 						else
+						{
 							/* all other messages should be processed by receiver itself */
 							MtmExecute(stmt, msg_len, &receiver_ctx, true);
+						}
 					}
 					else
 					{
@@ -869,7 +872,6 @@ pglogical_receiver_main(Datum main_arg)
 								}
 								else
 									MtmExecute(buf.data, buf.used, &receiver_ctx, false);
-
 							}
 							else if (spill_file >= 0)
 							{
