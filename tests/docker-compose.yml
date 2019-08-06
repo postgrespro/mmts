@@ -18,6 +18,9 @@ services:
         dbname=regression user=pg host=node3
     ports:
       - "15432:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.1
 
   node2:
     container_name: node2
@@ -35,6 +38,9 @@ services:
         dbname=regression user=pg host=node3
     ports:
       - "15433:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.2
 
   node3:
     container_name: node3
@@ -52,6 +58,9 @@ services:
         dbname=regression user=pg host=node3
     ports:
       - "15434:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.3
 
   # toxi:
   #   image: kelvich/toxiproxy
@@ -83,3 +92,12 @@ services:
   #       {"name": "rep32", "listen": "0.0.0.0:32000", "upstream": "node2:5432"},
   #       {"name": "arb32", "listen": "0.0.0.0:32001", "upstream": "node2:5433"}
   #     ]'
+
+
+networks:
+  mtm_bridge:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 192.168.0.0/24
+         gateway: 192.168.0.254

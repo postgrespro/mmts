@@ -171,8 +171,8 @@ class MtmClient(object):
         conn = psycopg2.connect(self.dsns[0])
         cur = conn.cursor()
         cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
-            ("dbname=regression user=pg host=node1",
-            '"dbname=regression user=pg host=node2", "dbname=regression user=pg host=node3"'))
+            ("dbname=regression user=pg host=192.168.0.1",
+            '"dbname=regression user=pg host=192.168.0.2", "dbname=regression user=pg host=192.168.0.3"'))
         conn.commit()
         cur.close()
         conn.close()
