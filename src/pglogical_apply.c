@@ -462,14 +462,12 @@ UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot)
 
 	if (estate->es_result_relation_info->ri_NumIndices > 0)
 	{
-		recheckIndexes = ExecInsertIndexTuples(slot,
-											   &slot->tts_tuple->t_self,
-											   estate, false, NULL, NIL);
-
-		if (recheckIndexes != NIL)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 MTM_ERRMSG("bdr doesn't support index rechecks")));
+		ExecInsertIndexTuples(slot, &slot->tts_tuple->t_self,
+													estate, false, NULL, NIL);
+		/*
+		 * Do not recheck indexes because of multimaster made it at the head
+		 * node early.
+		 */
 	}
 
 	/* FIXME: recheck the indexes */
