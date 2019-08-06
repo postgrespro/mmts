@@ -84,6 +84,9 @@ BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id)
 	pool->size = size;
 }
 
+/*
+ * Handler of receiver worker for SIGQUIT and SIGTERM signals
+ */
 static void
 BgwShutdownHandler(int sig)
 {

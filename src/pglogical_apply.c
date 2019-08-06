@@ -122,6 +122,9 @@ MtmHandleApplyError(void)
 	FreeErrorData(edata);
 }
 
+/*
+ * Handler of receiver worker for SIGINT and SIGHUP signals
+ */
 void
 ApplyCancelHandler(SIGNAL_ARGS)
 {
@@ -142,7 +145,8 @@ ApplyCancelHandler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
+static bool
+find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
 {
 	HeapTuple	  tuple;
 	HeapScanDesc  scan;
@@ -150,16 +154,13 @@ bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lo
 	TransactionId xwait;
 	TupleDesc     tupDesc =  RelationGetDescr(rel);
 	int           natts = tupDesc->natts;
-	Datum*        values = (Datum*)palloc(natts*sizeof(Datum));
-	bool*         nulls = (bool*)palloc(natts*sizeof(bool));
+	Datum*        values = (Datum*) palloc(natts * sizeof(Datum));
+	bool*         nulls = (bool*) palloc(natts * sizeof(bool));
 	bool		  found = false;
 	int           i;
 
 	InitDirtySnapshot(snap);
-	scan = heap_beginscan(rel,
-						  &snap,
-						  0,
-						  NULL);
+	scan = heap_beginscan(rel, &snap, 0, NULL);
 retry:
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -176,14 +177,18 @@ retry:
 
 			if (nulls[i] && tup->isnull[i]) /* both nulls */
 				continue;
+
 			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not null */
 				break;
+
 			else if (!(att->attlen == -1
 					   ? datumIsEqual(PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(tup->values[i]))),
 									  PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(values[i]))), att->attbyval, -1)
 					   : datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen)))
+				/* Corresponding attributes are not identical */
 				break;
 		}
+
 		if (i == natts)
 		{
 			/* FIXME: Improve TupleSlot to not require copying the whole tuple */
@@ -253,7 +258,7 @@ retry:
  * If a matching tuple is found setup 'tid' to point to it and return true,
  * false is returned otherwise.
  */
-bool
+static bool
 find_pkey_tuple(ScanKey skey, Relation rel, Relation idxrel,
 				TupleTableSlot *slot, bool lock, LockTupleMode mode)
 {
@@ -1093,22 +1098,19 @@ pq_peekmsgbyte(StringInfo msg)
 static void
 process_remote_insert(StringInfo s, Relation rel)
 {
-	EState *estate;
-	TupleData new_tuple;
-	TupleTableSlot *newslot;
-	TupleTableSlot *oldslot;
-	ResultRelInfo *relinfo;
-	int	i;
-	TupleDesc tupDesc = RelationGetDescr(rel);
-	HeapTuple tup;
-
-	PushActiveSnapshot(GetTransactionSnapshot());
+	EState			*estate;
+	TupleData		new_tuple;
+	TupleTableSlot	*newslot;
+	TupleTableSlot	*oldslot;
+	ResultRelInfo	*relinfo;
+	int				i;
+	TupleDesc		tupDesc = RelationGetDescr(rel);
+	HeapTuple		tup;
 
 	estate = create_rel_estate(rel);
-	newslot = ExecInitExtraTupleSlot(estate, NULL);
-	oldslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(newslot, tupDesc);
-	ExecSetSlotDescriptor(oldslot, tupDesc);
+	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	oldslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	PushActiveSnapshot(GetTransactionSnapshot());
 
 	ExecOpenIndices(estate->es_result_relation_info, false);
 	relinfo = estate->es_result_relation_info;
@@ -1118,27 +1120,29 @@ process_remote_insert(StringInfo s, Relation rel)
 	if (pq_peekmsgbyte(s) == 'I')
 	{
 		/* Use bulk insert */
-		BulkInsertState bistate = GetBulkInsertState();
-		HeapTuple bufferedTuples[MAX_BUFFERED_TUPLES];
-		MemoryContext oldcontext;
-		int nBufferedTuples = 1;
-		size_t bufferedTuplesSize;
-		CommandId	mycid = GetCurrentCommandId(true);
+		BulkInsertState	bistate = GetBulkInsertState();
+		HeapTuple		bufferedTuples[MAX_BUFFERED_TUPLES];
+		MemoryContext	oldcontext;
+		int				nBufferedTuples = 1;
+		size_t			bufferedTuplesSize;
+		CommandId		mycid = GetCurrentCommandId(true);
 
 		bufferedTuples[0] = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
 		bufferedTuplesSize = bufferedTuples[0]->t_len;
 
 		while (nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE)
 		{
-			int action = pq_getmsgbyte(s);
+			int	action = pq_getmsgbyte(s);
+
 			Assert(action == 'I');
 			read_tuple_parts(s, rel, &new_tuple);
 			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
-															  new_tuple.values, new_tuple.isnull);
+											new_tuple.values, new_tuple.isnull);
 			bufferedTuplesSize += bufferedTuples[nBufferedTuples++]->t_len;
 			if (pq_peekmsgbyte(s) != 'I')
 				break;
 		}
+
 		/*
 		 * heap_multi_insert leaks memory, so switch to short-lived memory context
 		 * before calling it.
@@ -1179,23 +1183,31 @@ process_remote_insert(StringInfo s, Relation rel)
 		}
 
 	    FreeBulkInsertState(bistate);
-	} else {
-        /* Insert single tuple */
+	}
+	else
+	{
+		MemoryContext	oldctx;
+		TriggerDesc		*tmp;
 
-	    tup = heap_form_tuple(tupDesc,
-							  new_tuple.values, new_tuple.isnull);
+		/* Insert single tuple */
+		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		tup = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
 		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
+		MemoryContextSwitchTo(oldctx);
 
 		/* debug output */
 #ifdef VERBOSE_INSERT
 		log_tuple("INSERT:%s", tupDesc, newslot->tts_tuple);
 #endif
 
-		simple_heap_insert(rel, newslot->tts_tuple);
-		UserTableUpdateOpenIndexes(estate, newslot);
+		tmp = estate->es_result_relation_info->ri_TrigDesc;
+		estate->es_result_relation_info->ri_TrigDesc = NULL;
+		ExecSimpleRelationInsert(estate, newslot);
+		estate->es_result_relation_info->ri_TrigDesc = tmp;
 
 		/* AFTER ROW INSERT Triggers */
-		if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
+		if (strcmp(get_namespace_name(RelationGetNamespace(rel)),
+			MULTIMASTER_SCHEMA_NAME) == 0)
 		{
 			ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
 							NIL, NULL);
@@ -1224,8 +1236,8 @@ process_remote_insert(StringInfo s, Relation rel)
 static void
 process_remote_update(StringInfo s, Relation rel)
 {
-	char		action;
-	EState	   *estate;
+	char			action;
+	EState			*estate;
 	TupleTableSlot *newslot;
 	TupleTableSlot *oldslot;
 	bool		    pkey_sent;
@@ -1371,9 +1383,7 @@ process_remote_delete(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	if (!OidIsValid(idxoid))
-	{
 		found_old = find_heap_tuple(&oldtup, rel, oldslot, true);
-	}
 	else
 	{
 		/* Now open the primary key index */
@@ -1434,22 +1444,23 @@ process_remote_delete(StringInfo s, Relation rel)
 void
 MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 {
-    StringInfoData s;
-    Relation rel = NULL;
-	int spill_file = -1;
-	int save_cursor = 0;
-	int save_len = 0;
-	MemoryContext old_context;
-	MemoryContext top_context;
-	GlobalTransactionId current_gtid = {0, InvalidTransactionId};
+	StringInfoData		s;
+	Relation			rel = NULL;
+	int					spill_file = -1;
+	int					save_cursor = 0;
+	int					save_len = 0;
+	MemoryContext		old_context;
+	MemoryContext		top_context;
+	GlobalTransactionId	current_gtid = {0, InvalidTransactionId};
 
     s.data = work;
     s.len = size;
     s.maxlen = -1;
 	s.cursor = 0;
 	
-    if (MtmApplyContext == NULL) {
-        MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
+	if (MtmApplyContext == NULL)
+	{
+		MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
 												"ApplyContext",
 												ALLOCSET_DEFAULT_SIZES);
     }
