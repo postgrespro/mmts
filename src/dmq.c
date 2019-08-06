@@ -534,6 +534,7 @@ dmq_sender_main(Datum main_arg)
 						PQfinish(conns[conn_id].pgconn);
 
 					pqtime = dmq_now();
+					mtm_log(DmqStateIntermediate, "[DMQ] PQconnectStart to %s", conns[conn_id].connstr);
 					conns[conn_id].pgconn = PQconnectStart(conns[conn_id].connstr);
 					mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqs = %f ms", dmq_now() - pqtime);
 
@@ -541,7 +542,7 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Idle;
 
-						mtm_log(DmqStateIntermediate,
+						mtm_log(DmqStateFinal,
 								"[DMQ] failed to start connection with %s (%s): %s",
 								conns[conn_id].receiver_name,
 								conns[conn_id].connstr,
