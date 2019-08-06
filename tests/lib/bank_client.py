@@ -82,6 +82,8 @@ class MtmClient(object):
         # self.create_extension()
 
         self.total = 0
+        # each dict is aggname_prefix => list of MtmTxAggregate, one for each
+        # coroutine
         self.aggregates = [{} for e in dsns]
         keep_trying(40, 1, self.create_extension, 'self.create_extension')
         keep_trying(40, 1, self.await_nodes, 'self.await_nodes')

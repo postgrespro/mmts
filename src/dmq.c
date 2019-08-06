@@ -1547,6 +1547,10 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 	}
 }
 
+/*
+ * Returns true if successfully filled msg, false otherwise; in the latter
+ * case, *wait is true if it makes sense to retry.
+ */
 bool
 dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 {
