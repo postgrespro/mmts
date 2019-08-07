@@ -344,10 +344,19 @@ MtmTwoPhaseCommit()
 				FinishPreparedTransaction(gid, false, false);
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 
-				ereport(ERROR,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i].node_id)));
+				if (!MtmVolksWagenMode)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							errmsg("[multimaster] failed to prepare transaction %s at node %d",
+									gid, messages[i].node_id)));
+				}
+				else
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+							errmsg("[multimaster] failed to prepare transaction at peer node")));
+				}
 			}
 		}
 
@@ -496,8 +505,20 @@ MtmExplicitPrepare(char *gid)
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-			mtm_log(ERROR, "Failed to prepare transaction %s at node %d",
-							gid, messages[i].node_id);
+
+			if (!MtmVolksWagenMode)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								gid, messages[i].node_id)));
+			}
+			else
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+						errmsg("[multimaster] failed to prepare transaction at peer node")));
+			}
 		}
 	}
 
