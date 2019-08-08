@@ -251,9 +251,6 @@ MtmTwoPhaseCommit()
 	int			n_messages;
 	int			i;
 
-	if (getNestLevelATX() != 0)
-		return false;
-
 	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
 		return false;
 
