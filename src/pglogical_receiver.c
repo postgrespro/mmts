@@ -677,10 +677,12 @@ pglogical_receiver_main(Datum main_arg)
 		{
 			int rc, hdr_len;
 
-			if (ProcDiePending && Mtm->pools[nodeId-1].nWorkers > 0)
-				PoolStateShutdown(&Mtm->pools[nodeId-1]);
-
-			CHECK_FOR_INTERRUPTS();
+			if (ProcDiePending)
+			{
+				if (Mtm->pools[nodeId-1].nWorkers > 0)
+					PoolStateShutdown(&Mtm->pools[nodeId-1]);
+				proc_exit(0);
+			}
 
 			/* Wait necessary amount of time */
 			rc = WaitLatchOrSocket(MyLatch,
@@ -707,16 +709,8 @@ pglogical_receiver_main(Datum main_arg)
 				proc_exit(1);
 			}
 
-			if (ProcDiePending)
-			{
-				dsm_handle handle = Mtm->pools[nodeId-1].dsmhandler;
-				dsm_segment *seg = dsm_find_mapping(handle);
-				dsm_detach(seg);
-
-				if (Mtm->pools[nodeId-1].nWorkers > 0)
-					PoolStateShutdown(&Mtm->pools[nodeId-1]);
-				return;
-			}
+			CHECK_FOR_INTERRUPTS();
+			AcceptInvalidationMessages();
 
 			if (count != MtmGetRecoveryCount())
 			{

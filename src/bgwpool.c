@@ -160,6 +160,9 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
+		CHECK_FOR_INTERRUPTS();
+		AcceptInvalidationMessages();
+
 		// XXX: change to LWLock
 		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 
@@ -184,14 +187,17 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			LWLockRelease(&poolDesc->lock);
 
 			ConditionVariableSleep(&poolDesc->available_cv, PG_WAIT_EXTENSION);
+			ConditionVariableCancelSleep();
 			continue;
 		}
 
 		/* Wait for end of the node joining operation */
 		while (poolDesc->n_holders > 0 && !poolDesc->shutdown)
 		{
+			ConditionVariablePrepareToSleep(&Mtm->receiver_barrier_cv);
 			LWLockRelease(&poolDesc->lock);
 			ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
+			ConditionVariableCancelSleep();
 			LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		}
 
@@ -259,7 +265,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 {
 	BackgroundWorker worker;
 	BackgroundWorkerHandle* handle;
-	MemoryContext oldcontext;
+	pid_t pid;
 
 	if (pool->nWorkers >= MtmMaxWorkers)
 		return;
@@ -268,6 +274,7 @@ static void BgwStartExtraWorker(BgwPool* pool)
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |  BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
+	worker.bgw_notify_pid = MyProcPid;
 	worker.bgw_main_arg = PointerGetDatum(pool);
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "BgwPoolDynamicWorkerMainLoop");
@@ -275,14 +282,12 @@ static void BgwStartExtraWorker(BgwPool* pool)
 
 	pool->lastDynamicWorkerStartTime = GetCurrentTimestamp();
 
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-
 	if (RegisterDynamicBackgroundWorker(&worker, &handle))
 		pool->bgwhandles[pool->nWorkers++] = handle;
 	else
 		elog(WARNING, "Failed to start dynamic background worker");
 
-	MemoryContextSwitchTo(oldcontext);
+	WaitForBackgroundWorkerStartup(handle, &pid);
 }
 
 /*
@@ -365,6 +370,7 @@ BgwPoolExecute(BgwPool* poolDesc, void* work, int size, MtmReceiverContext *ctx)
 			ConditionVariablePrepareToSleep(&poolDesc->overflow_cv);
 			LWLockRelease(&poolDesc->lock);
 			ConditionVariableSleep(&poolDesc->overflow_cv, PG_WAIT_EXTENSION);
+			ConditionVariableCancelSleep();
 			LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		}
 	}

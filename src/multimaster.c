@@ -325,7 +325,7 @@ _PG_init(void)
 		"Maximal size of transaction after which transaction is written to the disk",
 		NULL,
 		&MtmTransSpillThreshold,
-		25 * 1024, /* 100Mb */
+		100 * 1024, /* 100Mb */
 		0,
 		MaxAllocSize/1024,
 		PGC_SIGHUP,
