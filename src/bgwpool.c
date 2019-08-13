@@ -198,7 +198,8 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			LWLockRelease(&poolDesc->lock);
 			ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
 			ConditionVariableCancelSleep();
-			LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
+			continue;
+			//LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 		}
 
 		size = *(int *) &queue[poolDesc->head];
@@ -360,7 +361,7 @@ BgwPoolExecute(BgwPool* poolDesc, void* work, int size, MtmReceiverContext *ctx)
 			if (poolDesc->tail == poolDesc->size)
 				poolDesc->tail = 0;
 
-			ConditionVariableBroadcast(&poolDesc->available_cv);
+			ConditionVariableSignal(&poolDesc->available_cv);
 			break;
 		}
 		else

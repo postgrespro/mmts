@@ -962,14 +962,17 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MtmBeginSession(origin_node);
 
-			if (!IsTransactionState()) {
+			if (!IsTransactionState())
+			{
 				StartTransactionCommand();
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 				CommitTransactionCommand();
+
 				MemoryContextSwitchTo(MtmApplyContext);
-			} else {
-				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 			}
+			else
+				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+
 			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
 			if (receiver_ctx->parallel_allowed)
@@ -1029,7 +1032,6 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			current_gtid->xid = InvalidTransactionId;
 			current_gtid->my_xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
-
 
 			MtmEndSession(origin_node, true);
 
@@ -1455,77 +1457,76 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     s.len = size;
     s.maxlen = -1;
 	s.cursor = 0;
-	
+
 	if (MtmApplyContext == NULL)
-	{
 		MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
 												"ApplyContext",
 												ALLOCSET_DEFAULT_SIZES);
-    }
+
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
 
 	PG_TRY();
-
-	AcceptInvalidationMessages();
-	if (!receiver_mtm_cfg_valid)
 	{
-		if (receiver_mtm_cfg)
-			pfree(receiver_mtm_cfg);
-
-		receiver_mtm_cfg = MtmLoadConfig();
-
-		if (receiver_mtm_cfg->my_node_id == 0 ||
-			MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL) //XXX
-			proc_exit(0);
-
-		receiver_mtm_cfg_valid = true;
-	}
-
-	StartTransactionCommand();
-	SetPGVariable("session_authorization", NIL, false);
-	ResetAllOptions();
-	CommitTransactionCommand();
-
-    {    
 		bool inside_transaction = true;
-        do { 
-            char action = pq_getmsgbyte(&s);
-			old_context = MemoryContextSwitchTo(MtmApplyContext);
 
+		AcceptInvalidationMessages();
+
+		/* Clear authorization settings */
+		StartTransactionCommand();
+		SetPGVariable("session_authorization", NIL, false);
+		ResetAllOptions();
+		CommitTransactionCommand();
+
+		if (!receiver_mtm_cfg_valid)
+		{
+			if (receiver_mtm_cfg)
+				pfree(receiver_mtm_cfg);
+			receiver_mtm_cfg = MtmLoadConfig();
+			if (receiver_mtm_cfg->my_node_id == 0 ||
+				MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL) //XXX
+				proc_exit(0);
+
+			receiver_mtm_cfg_valid = true;
+		}
+
+		do {
+			char action = pq_getmsgbyte(&s);
+
+			old_context = MemoryContextSwitchTo(MtmApplyContext);
 			mtm_log(MtmApplyTrace, "got action '%c'", action);
 
 			switch (action)
 			{
-                /* BEGIN */
-            case 'B':
-			    inside_transaction = process_remote_begin(&s, &current_gtid);
+				/* BEGIN */
+			case 'B':
+				inside_transaction = process_remote_begin(&s, &current_gtid);
 				break;
-                /* COMMIT */
-            case 'C':
-  			    close_rel(rel);
+				/* COMMIT */
+			case 'C':
+				close_rel(rel);
 				process_remote_commit(&s, &current_gtid, receiver_ctx);
 				inside_transaction = false;
-                break;
-                /* INSERT */
-            case 'I':
+				break;
+				/* INSERT */
+			case 'I':
 				Assert(rel);
-			    process_remote_insert(&s, rel);
-                break;
-                /* UPDATE */
-            case 'U':
+				process_remote_insert(&s, rel);
+				break;
+				/* UPDATE */
+			case 'U':
 				Assert(rel);
-                process_remote_update(&s, rel);
-                break;
-                /* DELETE */
-            case 'D':
+				process_remote_update(&s, rel);
+				break;
+				/* DELETE */
+			case 'D':
 				Assert(rel);
-                process_remote_delete(&s, rel);
-                break;
-            case 'R':
-  			    close_rel(rel);
-                rel = read_rel(&s, RowExclusiveLock);
-                break;
+				process_remote_delete(&s, rel);
+				break;
+			case 'R':
+				close_rel(rel);
+				rel = read_rel(&s, RowExclusiveLock);
+				break;
 			case 'F':
 			{
 				int node_id = pq_getmsgint(&s, 4);
@@ -1534,9 +1535,10 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				spill_file = MtmOpenSpillFile(node_id, file_id);
 				break;
 			}
- 		    case '(':
+			case '(':
 			{
-			    size_t size = pq_getmsgint(&s, 4);    
+				size_t size = pq_getmsgint(&s, 4);
+
 				s.data = MemoryContextAlloc(TopMemoryContext, size);
 				save_cursor = s.cursor;
 				save_len = s.len;
@@ -1545,14 +1547,12 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				MtmReadSpillFile(spill_file, s.data, size);
 				break;
 			}
-  		    case ')':
-			{
-  			    pfree(s.data);
+			case ')':
+				pfree(s.data);
 				s.data = work;
-  			    s.cursor = save_cursor;
+				s.cursor = save_cursor;
 				s.len = save_len;
 				break;
-			}
 			case 'N':
 			{
 				int64 next;
@@ -1565,17 +1565,15 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				AdjustSequence(relid, next);
 				break;
 			}
-		    case '0':
-			    Assert(rel != NULL);
-			    heap_truncate_one_rel(rel);
+			case '0':
+				Assert(rel != NULL);
+				heap_truncate_one_rel(rel);
 				break;
 			case 'M':
-			{
-  			    close_rel(rel);
+				close_rel(rel);
 				rel = NULL;
 				inside_transaction = !process_remote_message(&s, receiver_ctx);
 				break;
-			}
 			case 'Z':
 			{
 				int			rc;
@@ -1646,10 +1644,6 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		AbortCurrentTransaction();
 	}
 	PG_END_TRY();
-
-	// Assert(s.cursor == s.len);
-	// only non-error scenario
-	// Assert(s.data == work);
 
 	if (s.data != work)
 		pfree(s.data);

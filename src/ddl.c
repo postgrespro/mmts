@@ -1141,8 +1141,8 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 	/*
 	 * Set proper context for running receiver DDL.
 	 *
-	 * MtmProcessUtilityReciever() will work only when DDLApplyInProgress is
-	 * set ti true. Captured non-transactional DDL will be placed into
+	 * MtmProcessUtilityReceiver() will work only when DDLApplyInProgress is
+	 * set to true. Captured non-transactional DDL will be placed into
 	 * MtmCapturedDDL. In case of error both of this variables are reset by
 	 * MtmDDLResetApplyState().
 	 */
@@ -1223,7 +1223,6 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 			default:
 				Assert(false);
-
 		}
 
 		pfree(MtmCapturedDDL);

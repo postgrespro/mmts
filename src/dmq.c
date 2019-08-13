@@ -45,7 +45,6 @@
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
 #include "utils/dynahash.h"
-#include "utils/inval.h"
 #include "utils/ps_status.h"
 
 #define DMQ_MQ_SIZE  ((Size) 65536)
@@ -1152,7 +1151,6 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 		// XXX: is it enough?
 		CHECK_FOR_INTERRUPTS();
-		AcceptInvalidationMessages();
 
 		if (dmq_now() - last_message_at > recv_timeout)
 		{

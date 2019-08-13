@@ -106,16 +106,16 @@ static bool startup_message_sent = false;
 
 void MtmOutputPluginWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
 {
-	if (flush) {
+	if (flush)
 		OutputPluginWrite(ctx, last_write);
-	}
 }
 
 void MtmOutputPluginPrepareWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
 {
-	if (!ctx->prepared_write) { 
+	if (!ctx->prepared_write)
 		OutputPluginPrepareWrite(ctx, last_write);
-	} else if (flush || ctx->out->len > OUTPUT_BUFFER_SIZE) {
+	else if (flush || ctx->out->len > OUTPUT_BUFFER_SIZE)
+	{
 		OutputPluginWrite(ctx, false);
 		OutputPluginPrepareWrite(ctx, last_write);
 	}
