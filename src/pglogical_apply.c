@@ -10,6 +10,7 @@
 #include "access/relscan.h"
 #include "access/xact.h"
 #include "access/clog.h"
+#include "access/tuptoaster.h"
 
 #include "catalog/catversion.h"
 #include "catalog/dependency.h"
@@ -179,7 +180,8 @@ retry:
 			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not null */
 				break;
 			else if (!(att->attlen == -1
-					   ? datumIsEqual(PointerGetDatum(PG_DETOAST_DATUM_PACKED(tup->values[i])), PointerGetDatum(PG_DETOAST_DATUM_PACKED(values[i])), att->attbyval, -1)
+					   ? datumIsEqual(PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(tup->values[i]))),
+									  PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(values[i]))), att->attbyval, -1)
 					   : datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen)))
 				break;
 		}
