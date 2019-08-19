@@ -43,7 +43,6 @@ typedef struct
 	size_t		active;
 	size_t		pending;
 	bool		producerBlocked;
-	bool		shutdown;
 
 	char		poolName[MAX_NAME_LEN];
 	Oid			db_id;
@@ -57,10 +56,9 @@ typedef struct
 } BgwPool;
 
 
-extern void BgwPoolInit(BgwPool* pool);
 extern void BgwPoolStart(BgwPool* pool, char *poolName, Oid db_id, Oid user_id);
 extern void BgwPoolExecute(BgwPool* pool, void* work, int size, MtmReceiverContext *ctx);
-extern void PoolStateShutdown(BgwPool* pool);
+extern void BgwPoolShutdown(BgwPool* poolDesc);
 extern void BgwPoolCancel(BgwPool* pool);
 
 #endif

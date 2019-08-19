@@ -481,7 +481,6 @@ pglogical_receiver_at_exit(int status, Datum arg)
 {
 	int node_id = DatumGetInt32(arg);
 
-	BgwPoolCancel(&Mtm->pools[node_id - 1]);
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
 	LWLockRelease(Mtm->lock);
@@ -565,7 +564,7 @@ pglogical_receiver_main(Datum main_arg)
 
 		/*
 		 * Determine when and how we should open replication slot.
-		 * Druing recovery we need to open only one replication slot from which node should receive all transactions.
+		 * During recovery we need to open only one replication slot from which node should receive all transactions.
 		 * Slots at other nodes should be removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
@@ -679,8 +678,7 @@ pglogical_receiver_main(Datum main_arg)
 
 			if (ProcDiePending)
 			{
-				if (Mtm->pools[nodeId-1].nWorkers > 0)
-					PoolStateShutdown(&Mtm->pools[nodeId-1]);
+				BgwPoolShutdown(&Mtm->pools[nodeId-1]);
 				proc_exit(0);
 			}
 
@@ -704,8 +702,7 @@ pglogical_receiver_main(Datum main_arg)
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 			{
-				if (Mtm->pools[nodeId-1].nWorkers > 0)
-					PoolStateShutdown(&Mtm->pools[nodeId-1]);
+				BgwPoolShutdown(&Mtm->pools[nodeId-1]);
 				proc_exit(1);
 			}
 
@@ -999,6 +996,8 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 {
 	BackgroundWorker		worker;
 	BackgroundWorkerHandle	*handle;
+	pid_t pid;
+	BgwHandleStatus	status;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
@@ -1017,5 +1016,7 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 		elog(ERROR, "Failed to start receiver worker");
 
+	status = WaitForBackgroundWorkerStartup(handle, &pid);
+	Assert(status == BGWH_STARTED);
 	return handle;
 }

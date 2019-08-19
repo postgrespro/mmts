@@ -1103,7 +1103,6 @@ process_remote_insert(StringInfo s, Relation rel)
 	EState			*estate;
 	TupleData		new_tuple;
 	TupleTableSlot	*newslot;
-	TupleTableSlot	*oldslot;
 	ResultRelInfo	*relinfo;
 	int				i;
 	TupleDesc		tupDesc = RelationGetDescr(rel);
@@ -1112,7 +1111,6 @@ process_remote_insert(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 	estate = create_rel_estate(rel);
 	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
-	oldslot = ExecInitExtraTupleSlot(estate, tupDesc);
 
 	ExecOpenIndices(estate->es_result_relation_info, false);
 	relinfo = estate->es_result_relation_info;
