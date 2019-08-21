@@ -1065,7 +1065,8 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 	if (MtmIsEnabled())
 	{
-		if (estate->es_processed != 0 && (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)) {
+		if (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)
+		{
 			int i;
 			for (i = 0; i < estate->es_num_result_relations; i++) {
 				Relation rel = estate->es_result_relations[i].ri_RelationDesc;
