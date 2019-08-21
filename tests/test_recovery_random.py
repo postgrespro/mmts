@@ -53,9 +53,9 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
         time.sleep(TEST_STOP_DELAY)
         # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
-        subprocess.run('docker logs node1 > mmts_node1.log', shell=True)
-        subprocess.run('docker logs node2 > mmts_node2.log', shell=True)
-        subprocess.run('docker logs node3 > mmts_node3.log', shell=True)
+        subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
+        subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
+        subprocess.run('docker logs node3 &> mmts_node3.log', shell=True)
 
         if not cls.client.is_data_identic():
             raise AssertionError('Different data on nodes')
