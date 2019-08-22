@@ -9,6 +9,7 @@ import datetime
 import docker
 import warnings
 import random
+import socket
 
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
@@ -18,10 +19,14 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
     @classmethod
     def setUpClass(cls):
+        # resolve hostname once during start as aoipg or docker have problems
+        # with resolving hostname under a load
+        host_ip = socket.gethostbyname(NODE_HOST)
+
         cls.dsns = [
-            f"dbname=regression user=postgres host={NODE_HOST} port=15432",
-            f"dbname=regression user=postgres host={NODE_HOST} port=15433",
-            f"dbname=regression user=postgres host={NODE_HOST} port=15434"
+            f"dbname=regression user=postgres host={host_ip} port=15432",
+            f"dbname=regression user=postgres host={host_ip} port=15433",
+            f"dbname=regression user=postgres host={host_ip} port=15434"
         ]
 
         subprocess.check_call(['docker-compose', 'up',
@@ -47,7 +52,10 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         cls.client.stop()
 
         time.sleep(TEST_STOP_DELAY)
-        subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
+        # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
+        subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
+        subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
+        subprocess.run('docker logs node3 &> mmts_node3.log', shell=True)
 
         if not cls.client.is_data_identic():
             raise AssertionError('Different data on nodes')

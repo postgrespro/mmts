@@ -28,6 +28,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "catalog/pg_authid.h"
 
 #include "multimaster.h"
 #include "ddd.h"
@@ -1083,12 +1084,22 @@ MtmLoadConfig()
 	int			rc;
 	int			i;
 	bool		inside_tx = IsTransactionState();
+	Oid			save_userid;
+	int			save_sec_context;
 
 	cfg = (MtmConfig *) MemoryContextAllocZero(TopMemoryContext,
 										   sizeof(MtmConfig));
 
 	if (!inside_tx)
 		StartTransactionCommand();
+
+	/*
+	 * Escalate our privileges, as current user may not have rights to access
+	 * mtm schema.
+	 */
+	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+	SetUserIdAndSecContext(BOOTSTRAP_SUPERUSERID,
+						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
 	/* Load node_id's with connection strings from mtm.cluster_nodes */
 
@@ -1190,6 +1201,9 @@ MtmLoadConfig()
 
 	SPI_finish();
 	PopActiveSnapshot();
+
+	/* restore back current user context */
+	SetUserIdAndSecContext(save_userid, save_sec_context);
 
 	if (!inside_tx)
 		CommitTransactionCommand();

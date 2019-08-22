@@ -348,6 +348,7 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	bool found;
 	resolver_tx *tx;
 
+	Assert(IsTransactionState());
 	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
 	Assert(state != MtmTxInProgress);
 
@@ -499,9 +500,13 @@ handle_responses(void)
 		gid = pq_getmsgrawstring(&msg);
 		state = pq_getmsgint(&msg, 4);
 
+		StartTransactionCommand();
+
 		LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
 		resolve_tx(gid, node_id, state);
 		LWLockRelease(resolver_state->lock);
+
+		CommitTransactionCommand();
 	}
 }
 

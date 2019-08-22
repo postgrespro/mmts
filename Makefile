@@ -61,7 +61,7 @@ run-pg-regress: submake-regress
 	./pg_regress \
 	--bindir='' \
 	--use-existing \
-	--schedule=$(abs_top_srcdir)/src/test/regress/serial_schedule \
+	--schedule=$(abs_top_srcdir)/src/test/regress/parallel_schedule \
 	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress \
 	--inputdir=$(abs_top_srcdir)/src/test/regress
 

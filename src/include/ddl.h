@@ -17,6 +17,7 @@
 /* GUCs */
 extern bool		MtmMonotonicSequences;
 extern char	   *MtmRemoteFunctionsList;
+extern bool		MtmRemoteFunctionsUpdating;
 extern bool		MtmVolksWagenMode;
 extern bool		MtmIgnoreTablesWithoutPk;
 

@@ -93,6 +93,7 @@ static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
 
 static HTAB	   *MtmRemoteFunctions;
+static bool		MtmRemoteFunctionsValid;
 static HTAB	   *MtmLocalTables;
 
 static ExecutorStart_hook_type PreviousExecutorStartHook;
@@ -1026,10 +1027,8 @@ MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 	{
 		ListCell   *tlist;
 
-		if (!MtmRemoteFunctions)
-		{
+		if (!MtmRemoteFunctionsValid)
 			MtmInitializeRemoteFunctionsMap();
-		}
 
 		foreach(tlist, queryDesc->plannedstmt->planTree->targetlist)
 		{
@@ -1066,7 +1065,8 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 	if (MtmIsEnabled())
 	{
-		if (estate->es_processed != 0 && (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)) {
+		if (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)
+		{
 			int i;
 			for (i = 0; i < estate->es_num_result_relations; i++) {
 				Relation rel = estate->es_result_relations[i].ri_RelationDesc;
@@ -1362,10 +1362,7 @@ MtmIsRelationLocal(Relation rel)
 void
 MtmSetRemoteFunction(char const* list, void* extra)
 {
-	if (MtmRemoteFunctions) {
-		hash_destroy(MtmRemoteFunctions);
-		MtmRemoteFunctions = NULL;
-	}
+	MtmRemoteFunctionsValid = false;
 }
 
 static void
@@ -1378,9 +1375,12 @@ MtmInitializeRemoteFunctionsMap()
 	Oid			save_userid;
 	int			save_sec_context;
 
+	Assert(!MtmRemoteFunctionsValid);
+
 	for (p = MtmRemoteFunctionsList; (q = strchr(p, ',')) != NULL; p = q + 1, n_funcs++);
 
-	Assert(MtmRemoteFunctions == NULL);
+	if (MtmRemoteFunctions)
+		hash_destroy(MtmRemoteFunctions);
 
 	memset(&info, 0, sizeof(info));
 	info.entrysize = info.keysize = sizeof(Oid);
@@ -1426,6 +1426,8 @@ MtmInitializeRemoteFunctionsMap()
 
 	/* restore back current user context */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
+
+	MtmRemoteFunctionsValid = true;
 }
 
 /*****************************************************************************

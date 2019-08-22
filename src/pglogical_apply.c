@@ -85,7 +85,6 @@ static EState* create_rel_estate(Relation rel);
 static bool find_pkey_tuple(ScanKey skey, Relation rel, Relation idxrel,
                             TupleTableSlot *slot, bool lock, LockTupleMode mode);
 static bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock);
-static void build_index_scan_keys(EState *estate, ScanKey *scan_keys, TupleData *tup);
 static bool build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup);
 static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
 static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
@@ -333,47 +332,6 @@ retry:
 	return found;
 }
 
-static void
-build_index_scan_keys(EState *estate, ScanKey *scan_keys, TupleData *tup)
-{
-	ResultRelInfo *relinfo;
-	int i;
-
-	relinfo = estate->es_result_relation_info;
-
-	/* build scankeys for each index */
-	for (i = 0; i < relinfo->ri_NumIndices; i++)
-	{
-		IndexInfo  *ii = relinfo->ri_IndexRelationInfo[i];
-
-		/*
-		 * Only unique indexes are of interest here, and we can't deal with
-		 * expression indexes so far. FIXME: predicates should be handled
-		 * better.
-		 */
-		if (!ii->ii_Unique || ii->ii_Expressions != NIL)
-		{
-			scan_keys[i] = NULL;
-			continue;
-		}
-
-		scan_keys[i] = palloc(ii->ii_NumIndexAttrs * sizeof(ScanKeyData));
-
-		/*
-		 * Only return index if we could build a key without NULLs.
-		 */
-		if (build_index_scan_key(scan_keys[i],
-								  relinfo->ri_RelationDesc,
-								  relinfo->ri_IndexRelationDescs[i],
-								  tup))
-		{
-			pfree(scan_keys[i]);
-			scan_keys[i] = NULL;
-			continue;
-		}
-	}
-}
-
 /*
  * Setup a ScanKey for a search in the relation 'rel' for a tuple 'key' that
  * is setup to match 'rel' (*NOT* idxrel!).
@@ -464,14 +422,8 @@ UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot)
 
 	if (estate->es_result_relation_info->ri_NumIndices > 0)
 	{
-		recheckIndexes = ExecInsertIndexTuples(slot,
-											   &slot->tts_tuple->t_self,
-											   estate, false, NULL, NIL);
-
-		if (recheckIndexes != NIL)
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 MTM_ERRMSG("bdr doesn't support index rechecks")));
+		ExecInsertIndexTuples(slot, &slot->tts_tuple->t_self,
+													estate, false, NULL, NIL);
 	}
 
 	/* FIXME: recheck the indexes */
@@ -884,10 +836,15 @@ read_rel(StringInfo s, LOCKMODE mode)
  * transaction decoding and GID will not be known in advance.
  */
 static void
-mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
+mtm_send_xid_reply(TransactionId xid, int node_id,
+					MtmMessageCode msg_code, ErrorData *edata)
 {
 	DmqDestinationId dest_id;
 	StringInfoData msg;
+	int32		sqlerrcode = ERRCODE_SUCCESSFUL_COMPLETION;
+
+	if (msg_code != MSG_PREPARED)
+		sqlerrcode = edata ? edata->sqlerrcode : ERRCODE_T_R_SERIALIZATION_FAILURE;
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
@@ -897,6 +854,9 @@ mtm_send_xid_reply(TransactionId xid, int node_id, MtmMessageCode msg_code)
 
 	initStringInfo(&msg);
 	pq_sendbyte(&msg, msg_code);
+	pq_sendint32(&msg, sqlerrcode);
+	pq_sendstring(&msg, edata ? edata->message : "");
+
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
 					msg.data, msg.len);
 
@@ -924,6 +884,9 @@ mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
 
 	initStringInfo(&msg);
 	pq_sendbyte(&msg, msg_code);
+	pq_sendint32(&msg, ERRCODE_SUCCESSFUL_COMPLETION);
+	pq_sendstring(&msg, "");
+
 	dmq_push_buffer(dest_id, gid, msg.data, msg.len);
 
 	mtm_log(MtmApplyTrace,
@@ -1021,7 +984,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			if (receiver_ctx->parallel_allowed)
 			{
 				mtm_send_xid_reply(current_gtid->xid, origin_node,
-								   res ? MSG_PREPARED : MSG_ABORTED);
+								   res ? MSG_PREPARED : MSG_ABORTED, NULL);
 			}
 
 			/*
@@ -1104,7 +1067,6 @@ process_remote_insert(StringInfo s, Relation rel)
 	TupleTableSlot *newslot;
 	TupleTableSlot *oldslot;
 	ResultRelInfo *relinfo;
-	ScanKey	*index_keys;
 	int	i;
 	TupleDesc tupDesc = RelationGetDescr(rel);
 	HeapTuple tup;
@@ -1193,58 +1155,10 @@ process_remote_insert(StringInfo s, Relation rel)
 							  new_tuple.values, new_tuple.isnull);
 		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
 
-		// if (rel->rd_rel->relkind != RELKIND_RELATION) // RELKIND_MATVIEW
-		// 	mtm_log(ERROR, "unexpected relkind '%c' rel \"%s\"",
-		// 		 rel->rd_rel->relkind, RelationGetRelationName(rel));
-
 		/* debug output */
 #ifdef VERBOSE_INSERT
 		log_tuple("INSERT:%s", tupDesc, newslot->tts_tuple);
 #endif
-
-		/*
-		 * Search for conflicting tuples.
-		 */
-		index_keys = palloc0(relinfo->ri_NumIndices * sizeof(ScanKeyData*));
-
-		build_index_scan_keys(estate, index_keys, &new_tuple);
-
-		/* do a SnapshotDirty search for conflicting tuples */
-		for (i = 0; i < relinfo->ri_NumIndices; i++)
-		{
-			IndexInfo  *ii = relinfo->ri_IndexRelationInfo[i];
-			bool found = false;
-
-			/*
-			 * Only unique indexes are of interest here, and we can't deal with
-			 * expression indexes so far. FIXME: predicates should be handled
-			 * better.
-			 *
-			 * NB: Needs to match expression in build_index_scan_key
-			 */
-			if (!ii->ii_Unique || ii->ii_Expressions != NIL)
-				continue;
-
-			if (index_keys[i] == NULL)
-				continue;
-
-			Assert(ii->ii_Expressions == NIL);
-
-			/* if conflict: wait */
-			found = find_pkey_tuple(index_keys[i],
-									rel, relinfo->ri_IndexRelationDescs[i],
-									oldslot, true, LockTupleExclusive);
-			/* alert if there's more than one conflicting unique key */
-			if (found)
-			{
-				/* TODO: Report tuple identity in log */
-				ereport(ERROR,
-						(errcode(ERRCODE_UNIQUE_VIOLATION),
-						 MTM_ERRMSG("Unique constraints violated by remotely INSERTed tuple in %s", RelationGetRelationName(rel)),
-						 errdetail("Cannot apply transaction because remotely INSERTed tuple conflicts with a local tuple on UNIQUE constraint and/or PRIMARY KEY")));
-			}
-			CHECK_FOR_INTERRUPTS();
-		}
 
 		simple_heap_insert(rel, newslot->tts_tuple);
 		UserTableUpdateOpenIndexes(estate, newslot);
@@ -1664,10 +1578,13 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
     }
     PG_CATCH();
     {
+		ErrorData  *edata;
 		query_cancel_allowed = false;
 
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		MtmHandleApplyError();
+		edata = CopyErrorData();
+
 		MemoryContextSwitchTo(old_context);
 		EmitErrorReport();
 		FlushErrorState();
@@ -1683,9 +1600,11 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		{
 			MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
-				mtm_send_xid_reply(current_gtid.xid, current_gtid.node, MSG_ABORTED);
+				mtm_send_xid_reply(current_gtid.xid, current_gtid.node,
+									MSG_ABORTED, edata);
 		}
 
+		FreeErrorData(edata);
 		AbortCurrentTransaction();
 	}
 	PG_END_TRY();

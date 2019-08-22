@@ -404,6 +404,7 @@ class MtmClient(object):
     def stop(self):
         self.running = False
         self.evloop_process.terminate()
+        self.evloop_process.join()
         time.sleep(3)
 
     @classmethod
