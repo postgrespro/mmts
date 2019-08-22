@@ -26,7 +26,7 @@ sub new
 
 sub init
 {
-	my ($self) = @_;
+	my ($self, $conf_opts) = @_;
 	my $nodes = $self->{nodes};
 
 	# use port range different to ordinary TAP tests
@@ -52,6 +52,11 @@ sub init
 			multimaster.heartbeat_send_timeout = 100
 			multimaster.heartbeat_recv_timeout = 5000
 		});
+
+		if (defined $conf_opts)
+		{
+			$node->append_conf('postgresql.conf', $conf_opts);
+		}
 
 		if (defined $ENV{'MTM_VW'})
 		{
