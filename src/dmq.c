@@ -602,6 +602,7 @@ dmq_sender_main(Datum main_arg)
 				{
 					double		pqtime;
 					PostgresPollingStatusType status;
+					int			pos = event.pos;
 
 					pqtime = dmq_now();
 					status = PQconnectPoll(conns[conn_id].pgconn);
@@ -612,16 +613,29 @@ dmq_sender_main(Datum main_arg)
 							status,
 							conns[conn_id].receiver_name);
 
+					/*
+					 * PQconnectPoll() can recreate socket behind the scene, so
+					 * re-register it in WaitEventSet.
+					 */
+					if (status == PGRES_POLLING_READING || status == PGRES_POLLING_WRITING)
+					{
+						DeleteWaitEvent(set, pos);
+						pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
+												PQsocket(conns[conn_id].pgconn),
+												NULL, (void *) conn_id);
+						conns[conn_id].pos = pos;
+					}
+
 					if (status == PGRES_POLLING_READING)
 					{
-						ModifyWaitEvent(set, event.pos, WL_SOCKET_READABLE, NULL);
+						ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
 						mtm_log(DmqStateIntermediate,
 								"[DMQ] Connecting: modify wait event to WL_SOCKET_READABLE on %s",
 								conns[conn_id].receiver_name);
 					}
 					else if (status == PGRES_POLLING_WRITING)
 					{
-						ModifyWaitEvent(set, event.pos, WL_SOCKET_WRITEABLE, NULL);
+						ModifyWaitEvent(set, pos, WL_SOCKET_WRITEABLE, NULL);
 						mtm_log(DmqStateIntermediate,
 								"[DMQ] Connecting: modify wait event to WL_SOCKET_WRITEABLE on %s",
 								conns[conn_id].receiver_name);
@@ -633,7 +647,7 @@ dmq_sender_main(Datum main_arg)
 											   sender_name, conns[conn_id].recv_timeout);
 
 						conns[conn_id].state = Negotiating;
-						ModifyWaitEvent(set, event.pos, WL_SOCKET_READABLE, NULL);
+						ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
 						PQsendQuery(conns[conn_id].pgconn, query);
 
 						mtm_log(DmqStateIntermediate,
@@ -643,7 +657,7 @@ dmq_sender_main(Datum main_arg)
 					else if (status == PGRES_POLLING_FAILED)
 					{
 						conns[conn_id].state = Idle;
-						DeleteWaitEvent(set, event.pos);
+						DeleteWaitEvent(set, pos);
 
 						mtm_log(DmqStateIntermediate,
 								"[DMQ] failed to connect with %s (%s): %s",
