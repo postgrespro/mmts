@@ -32,7 +32,6 @@ sub query_row
 	my $sth = $dbi->prepare($sql) || die;
 	$sth->execute(@keys) || die;
 	my $ret = $sth->fetchrow_array || undef;
-	diag("query_row('$sql') -> $ret\n");
 	return $ret;
 }
 
@@ -40,7 +39,6 @@ sub query_exec
 {
 	my ($dbi, $sql) = @_;
 	my $rv = $dbi->do($sql) || die;
-	diag("query_exec('$sql') = $rv\n");
 	return $rv;
 }
 
@@ -51,7 +49,6 @@ sub query_exec_async
 	# constants from it.
 	my $DBD_PG_PG_ASYNC = 1;
 	my $rv = $dbi->do($sql, {pg_async => $DBD_PG_PG_ASYNC}) || die;
-	diag("query_exec_async('$sql')\n");
 	return $rv;
 }
 
@@ -89,27 +86,19 @@ while (--$timeout > 0)
 	if ($r0 && $r1) {
 		last;
 	}
-	diag("queries still running: [0]=$r0 [1]=$r1\n");
 	sleep(1);
 }
 
 if ($timeout > 0)
 {
-	diag("queries finished\n");
-
 	my $succeeded = 0;
 	$succeeded++ if $conns[0]->pg_result();
 	$succeeded++ if $conns[1]->pg_result();
-
-	pass("queries finished");
 }
 else
 {
-	diag("queries timed out\n");
 	$conns[0]->pg_cancel() unless $conns[0]->pg_ready();
 	$conns[1]->pg_cancel() unless $conns[1]->pg_ready();
-
-	fail("queries timed out");
 }
 
 query_row($conns[0], "select * from t where k = 1");

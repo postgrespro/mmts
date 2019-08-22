@@ -11,8 +11,13 @@ $cluster->create_mm('regression');
 
 my $port = $cluster->{nodes}->[0]->port;
 
-TestLib::system_or_bail($ENV{'PG_REGRESS'},
+my $ret = TestLib::system_log($ENV{'PG_REGRESS'},
     '--host=127.0.0.1', "--port=$port",
     '--use-existing', '--bindir=', 'multimaster');
 
-is(1,1, "ok");
+if ($ret != 0)
+{
+    print "### Got regression! \n", TestLib::slurp_file('regression.diffs');
+}
+
+is($ret, 0, "ok");
