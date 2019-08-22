@@ -934,6 +934,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 				StartTransactionCommand();
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 				CommitTransactionCommand();
+				MemoryContextSwitchTo(MtmApplyContext);
 			} else {
 				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
 			}
@@ -976,6 +977,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid="XID_FMT")", gid, xid);
 
 			CommitTransactionCommand();
+			MemoryContextSwitchTo(MtmApplyContext);
 
 			InterruptPending = false;
 			QueryCancelPending = false;
@@ -1015,6 +1017,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			FinishPreparedTransaction(gid, true, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();
+			MemoryContextSwitchTo(MtmApplyContext);
 
 			if (receiver_ctx->parallel_allowed)
 			{
@@ -1035,6 +1038,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			FinishPreparedTransaction(gid, false, true);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 			CommitTransactionCommand();
+			MemoryContextSwitchTo(MtmApplyContext);
 			MtmEndSession(origin_node, true);
 			mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
 			break;
