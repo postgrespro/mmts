@@ -4,11 +4,6 @@ use Cluster;
 # use TestLib;
 use Test::More tests => 1;
 
-# psql and pg_regress which calls psql calculates ascii table header
-# width based on string len which can be different in bytes and utf
-# codepoints
-$ENV{LC_ALL} = 'en_US.UTF-8';
-
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();

@@ -290,10 +290,10 @@ drop table atx_test1;
 -- replication of statements that have estate->es_processed == 0
 \c :node1
 create table zeroes_test (id integer, comments text);
-insert into zeroes_test values (1, 'тест');
+insert into zeroes_test values (1, 'test');
 -- result of this query would be INSERT 0 0, however update will change row
 with tab as
-  (select 1 id, 'переименовал' as comments),
+  (select 1 id, 'ranamed' as comments),
   upd as (
     update zeroes_test set comments = t.comments
     from tab t
