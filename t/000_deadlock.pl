@@ -94,11 +94,15 @@ if ($timeout > 0)
 	my $succeeded = 0;
 	$succeeded++ if $conns[0]->pg_result();
 	$succeeded++ if $conns[1]->pg_result();
+
+	pass("queries finished");
 }
 else
 {
 	$conns[0]->pg_cancel() unless $conns[0]->pg_ready();
 	$conns[1]->pg_cancel() unless $conns[1]->pg_ready();
+
+	fail("queries timed out");
 }
 
 query_row($conns[0], "select * from t where k = 1");
