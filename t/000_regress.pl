@@ -73,8 +73,8 @@ unlink('parallel_schedule');
 
 # strip dates out of resulted regression.diffs
 my $res_diff = TestLib::slurp_file('../../src/test/regress/regression.diffs');
-$res_diff =~ s/(--- .+\.out)\t.+\n/$1\tCENSORED\n/g;
-$res_diff =~ s/(\*\*\* .+\.out)\t.+\n/$1\tCENSORED\n/g;
+$res_diff =~ s/(--- ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
+$res_diff =~ s/(\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
 unlink('results/regression.diffs');
 TestLib::append_to_file('results/regression.diffs', $res_diff);
 
