@@ -1,5 +1,5 @@
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/enum.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/enum.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/enum.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/enum.out	CENSORED
 ***************
 *** 40,45 ****
 --- 40,46 ----
@@ -265,31 +265,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/opr_sanity.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/opr_sanity.out	CENSORED
-***************
-*** 871,877 ****
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-! (9 rows)
-  
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
---- 871,878 ----
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-!  pg_lsn            | bigint            |        0 | e
-! (10 rows)
-  
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
-
-======================================================================
-
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/insert.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/insert.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/insert.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/insert.out	CENSORED
 ***************
 *** 695,711 ****
   set role regress_insert_other_user;
@@ -355,8 +332,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/create_table.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/create_table.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/create_table.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/create_table.out	CENSORED
 ***************
 *** 265,281 ****
   DROP TABLE as_select1;
@@ -397,8 +374,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/create_operator.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/create_operator.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/create_operator.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/create_operator.out	CENSORED
 ***************
 *** 198,204 ****
      rightarg = int8,
@@ -470,8 +447,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/create_procedure.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/create_procedure.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/create_procedure.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/create_procedure.out	CENSORED
 ***************
 *** 190,200 ****
   REVOKE EXECUTE ON PROCEDURE ptest1(text) FROM PUBLIC;
@@ -507,8 +484,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/constraints.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/constraints.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/constraints.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/constraints.out	CENSORED
 ***************
 *** 706,737 ****
   CREATE ROLE regress_constraint_comments;
@@ -589,8 +566,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/updatable_views.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/updatable_views.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/updatable_views.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/updatable_views.out	CENSORED
 ***************
 *** 958,1187 ****
   CREATE USER regress_view_user2;
@@ -1346,8 +1323,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
 ***************
 *** 32,37 ****
 --- 32,39 ----
@@ -1402,8 +1379,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/hash_index.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/hash_index.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/hash_index.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/hash_index.out	CENSORED
 ***************
 *** 168,190 ****
   UPDATE hash_f8_heap
@@ -1457,8 +1434,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/update.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/update.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/update.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/update.out	CENSORED
 ***************
 *** 558,564 ****
   -- This should fail with RLS violation error while moving row from
@@ -1570,8 +1547,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/privileges.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/privileges.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/privileges.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/privileges.out	CENSORED
 ***************
 *** 42,77 ****
   (1 row)
@@ -4168,8 +4145,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/matview.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/matview.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/matview.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/matview.out	CENSORED
 ***************
 *** 186,198 ****
   (3 rows)
@@ -4344,10 +4321,10 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/atx.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/atx.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/atx.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/atx.out	CENSORED
 ***************
-*** 434,444 ****
+*** 434,445 ****
   $body$ language plpgsql;
   commit;
   select atx_2_update_func();
@@ -4359,18 +4336,20 @@
   drop table atx_2_t1;
   drop table atx_2_t2;
   -- 3
---- 434,444 ----
+  drop table if exists atx_3_t1;
+--- 434,445 ----
   $body$ language plpgsql;
   commit;
   select atx_2_update_func();
-! NOTICE:  Exception: 0A000, cannot PREPARE a transaction that has operated on temporary tables
-! ERROR:  Unsupported TG_OP: UPDATE
-! CONTEXT:  PL/pgSQL function atx_2_tmp_trigger_func() line 16 at RAISE
+! ERROR:  SPI_finish failed: SPI_ERROR_UNCONNECTED
+! CONTEXT:  PL/pgSQL function atx_2_tmp_trigger_func() line 5 during exception cleanup
 ! SQL statement "update atx_2_t1 set name = txid_current()::text where id in ( select id from tmp1 )"
 ! PL/pgSQL function atx_2_update_func() line 6 at SQL statement
   drop table atx_2_t1;
++ ERROR:  StartTransactionCommand: unexpected state STARTED
   drop table atx_2_t2;
   -- 3
+  drop table if exists atx_3_t1;
 ***************
 *** 545,554 ****
 --- 545,556 ----
@@ -4399,8 +4378,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/atx3.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/atx3.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/atx3.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/atx3.out	CENSORED
 ***************
 *** 28,37 ****
   end;
@@ -4423,8 +4402,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/atx5.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/atx5.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/atx5.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/atx5.out	CENSORED
 ***************
 *** 24,33 ****
   NOTICE:  function atx_test_30_one() does not exist, skipping
@@ -4448,8 +4427,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/alter_operator.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/alter_operator.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/alter_operator.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/alter_operator.out	CENSORED
 ***************
 *** 130,136 ****
   CREATE USER regress_alter_op_user;
@@ -4470,8 +4449,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/rules.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/rules.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/rules.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/rules.out	CENSORED
 ***************
 *** 1283,1288 ****
 --- 1283,1297 ----
@@ -4525,8 +4504,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/publication.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/publication.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/publication.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/publication.out	CENSORED
 ***************
 *** 10,17 ****
   SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
@@ -4571,7 +4550,7 @@
                                            List of publications
           Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
   --------------------+--------------------------+------------+---------+---------+---------+-----------
-+  multimaster        | stas                     | f          | t       | f       | f       | t
++  multimaster        | alex                     | f          | t       | f       | f       | t
    testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
    testpub_default    | regress_publication_user | f          | f       | t       | f       | f
 ! (3 rows)
@@ -4581,7 +4560,7 @@
                                            List of publications
           Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
   --------------------+--------------------------+------------+---------+---------+---------+-----------
-+  multimaster        | stas                     | f          | t       | f       | f       | t
++  multimaster        | alex                     | f          | t       | f       | f       | t
    testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
    testpub_default    | regress_publication_user | f          | t       | t       | t       | f
 ! (3 rows)
@@ -4617,8 +4596,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/subscription.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/subscription.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/subscription.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/subscription.out	CENSORED
 ***************
 *** 34,41 ****
   SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
@@ -4660,8 +4639,8 @@
 !                                                         List of subscriptions
 !    Name    |           Owner           | Enabled |  Publication  | Synchronous commit |                   Conninfo                    
 ! -----------+---------------------------+---------+---------------+--------------------+-----------------------------------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster} | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3 | stas                      | f       | {multimaster} | off                | port=55434 host=127.0.0.1 dbname='regression'
+!  mtm_sub_2 | alex                      | f       | {multimaster} | off                | port=55433 host=127.0.0.1 dbname='regression'
+!  mtm_sub_3 | alex                      | f       | {multimaster} | off                | port=55434 host=127.0.0.1 dbname='regression'
 !  testsub   | regress_subscription_user | f       | {testpub}     | off                | dbname=doesnotexist
 ! (3 rows)
   
@@ -4704,8 +4683,8 @@
 !                                                            List of subscriptions
 !    Name    |           Owner           | Enabled |     Publication     | Synchronous commit |                   Conninfo                    
 ! -----------+---------------------------+---------+---------------------+--------------------+-----------------------------------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3 | stas                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
+!  mtm_sub_2 | alex                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
+!  mtm_sub_3 | alex                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
 !  testsub   | regress_subscription_user | f       | {testpub2,testpub3} | off                | dbname=doesnotexist2
 ! (3 rows)
   
@@ -4715,8 +4694,8 @@
 !                          List of subscriptions
 !    Name    |           Owner           | Enabled |     Publication     
 ! -----------+---------------------------+---------+---------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}
-!  mtm_sub_3 | stas                      | f       | {multimaster}
+!  mtm_sub_2 | alex                      | f       | {multimaster}
+!  mtm_sub_3 | alex                      | f       | {multimaster}
 !  testsub   | regress_subscription_user | t       | {testpub2,testpub3}
 ! (3 rows)
   
@@ -4725,8 +4704,8 @@
 !                          List of subscriptions
 !    Name    |           Owner           | Enabled |     Publication     
 ! -----------+---------------------------+---------+---------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}
-!  mtm_sub_3 | stas                      | f       | {multimaster}
+!  mtm_sub_2 | alex                      | f       | {multimaster}
+!  mtm_sub_3 | alex                      | f       | {multimaster}
 !  testsub   | regress_subscription_user | f       | {testpub2,testpub3}
 ! (3 rows)
   
@@ -4752,8 +4731,8 @@
 !                                                             List of subscriptions
 !     Name     |           Owner           | Enabled |     Publication     | Synchronous commit |                   Conninfo                    
 ! -------------+---------------------------+---------+---------------------+--------------------+-----------------------------------------------
-!  mtm_sub_2   | stas                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3   | stas                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
+!  mtm_sub_2   | alex                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
+!  mtm_sub_3   | alex                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
    testsub_foo | regress_subscription_user | f       | {testpub2,testpub3} | local              | dbname=doesnotexist2
 ! (3 rows)
   
@@ -4762,8 +4741,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/select_views.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/select_views.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/select_views.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/select_views.out	CENSORED
 ***************
 *** 1317,1445 ****
   --           prior to the security policy of the view.
@@ -5122,8 +5101,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/foreign_key.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/foreign_key.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/foreign_key.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/foreign_key.out	CENSORED
 ***************
 *** 1786,1800 ****
   grant references on fk_notpartitioned_pk to regress_other_partitioned_fk_owner;
@@ -5181,8 +5160,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/cluster.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/cluster.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/cluster.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/cluster.out	CENSORED
 ***************
 *** 354,431 ****
   SELECT * FROM clstr_1 UNION ALL
@@ -5359,8 +5338,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/dependency.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/dependency.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/dependency.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/dependency.out	CENSORED
 ***************
 *** 57,136 ****
   -- this one is allowed
@@ -5541,8 +5520,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/guc.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/guc.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/guc.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/guc.out	CENSORED
 ***************
 *** 537,543 ****
 --- 537,545 ----
@@ -5585,8 +5564,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/equivclass.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/equivclass.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/equivclass.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/equivclass.out	CENSORED
 ***************
 *** 407,422 ****
   explain (costs off)
@@ -5618,8 +5597,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/plancache.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/plancache.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/plancache.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/plancache.out	CENSORED
 ***************
 *** 237,257 ****
   NOTICE:  1
@@ -5660,8 +5639,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/plpgsql.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/plpgsql.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/plpgsql.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/plpgsql.out	CENSORED
 ***************
 *** 4323,4328 ****
 --- 4323,4330 ----
@@ -5722,8 +5701,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/copy2.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/copy2.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/copy2.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/copy2.out	CENSORED
 ***************
 *** 258,354 ****
   CREATE TABLE vistest (LIKE testeoc);
@@ -6110,8 +6089,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/temp.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/temp.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/temp.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/temp.out	CENSORED
 ***************
 *** 139,162 ****
   CREATE TEMP TABLE temptest3(col int PRIMARY KEY) ON COMMIT DELETE ROWS;
@@ -6454,8 +6433,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/domain.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/domain.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/domain.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/domain.out	CENSORED
 ***************
 *** 316,398 ****
   create domain dcomptypea as comptype[];
@@ -6637,8 +6616,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/without_oid.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/without_oid.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/without_oid.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/without_oid.out	CENSORED
 ***************
 *** 84,103 ****
   PREPARE table_source(int) AS
@@ -6687,8 +6666,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/conversion.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/conversion.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/conversion.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/conversion.out	CENSORED
 ***************
 *** 4,33 ****
   CREATE USER regress_conversion_user WITH NOCREATEDB NOCREATEROLE;
@@ -6761,8 +6740,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/alter_table.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/alter_table.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/alter_table.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/alter_table.out	CENSORED
 ***************
 *** 168,180 ****
   ALTER TABLE part_attmp1 RENAME TO part_at2tmp1;
@@ -8616,8 +8595,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/sequence.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/sequence.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/sequence.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/sequence.out	CENSORED
 ***************
 *** 627,791 ****
   BEGIN;
@@ -8770,7 +8749,7 @@
 !       5
 ! (1 row)
 ! 
-  SELECT nextval('seq3');
+! SELECT nextval('seq3');
 !  nextval 
 ! ---------
 !        6
@@ -8916,7 +8895,7 @@
 + ERROR:  current transaction is aborted, commands ignored until end of transaction block
   SELECT setval('seq3', 5);
 ! ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  SELECT nextval('seq3');
+! SELECT nextval('seq3');
 ! ERROR:  current transaction is aborted, commands ignored until end of transaction block
   ROLLBACK;
   -- ALTER SEQUENCE
@@ -8930,8 +8909,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/largeobject.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/largeobject.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/largeobject.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/largeobject.out	CENSORED
 ***************
 *** 17,31 ****
   		|| ' OWNER TO regress_lo_user';
@@ -8962,7 +8941,7 @@
   	JOIN pg_authid rol ON lo.lomowner = rol.oid;
 !  rolname 
 ! ---------
-!  stas
+!  alex
   (1 row)
   
   -- NOTE: large objects require transactions
@@ -8977,7 +8956,7 @@
 ! (1 row)
 ! 
   TRUNCATE lotest_stash_values;
-  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/data/tenk.data');
+  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/data/tenk.data');
   BEGIN;
 --- 311,317 ----
   -- lo_unlink(lobjId oid) returns integer
@@ -8985,7 +8964,7 @@
   SELECT lo_unlink(loid) from lotest_stash_values;
 ! ERROR:  [multimaster] failed to prepare transaction at peer node
   TRUNCATE lotest_stash_values;
-  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/data/tenk.data');
+  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/data/tenk.data');
   BEGIN;
 ***************
 *** 400,410 ****
@@ -8999,7 +8978,7 @@
 ! 
   TRUNCATE lotest_stash_values;
   \lo_unlink :newloid
-  \lo_import '/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/lotest.txt'
+  \lo_import '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt'
 --- 397,403 ----
   (0 rows)
   
@@ -9007,12 +8986,12 @@
 ! ERROR:  [multimaster] failed to prepare transaction at peer node
   TRUNCATE lotest_stash_values;
   \lo_unlink :newloid
-  \lo_import '/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/lotest.txt'
+  \lo_import '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt'
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/with.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/with.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/with.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/with.out	CENSORED
 ***************
 *** 1875,1892 ****
 --- 1875,1897 ----
@@ -9062,8 +9041,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/autoprepare.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/autoprepare.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/autoprepare.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/autoprepare.out	CENSORED
 ***************
 *** 1,9 ****
   select count(*) from pg_class where relname='pg_class';
@@ -9158,8 +9137,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/identity.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/identity.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/identity.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/identity.out	CENSORED
 ***************
 *** 33,44 ****
   (1 row)
@@ -9235,8 +9214,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/indexing.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/indexing.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/indexing.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/indexing.out	CENSORED
 ***************
 *** 55,99 ****
   create index idxparti2 on idxpart (b, c);
@@ -9923,8 +9902,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/fast_default.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/fast_default.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/fast_default.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/fast_default.out	CENSORED
 ***************
 *** 61,71 ****
   -- Test a large sample of different datatypes
@@ -10215,8 +10194,8 @@
 
 ======================================================================
 
-*** /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/expected/stats.out	CENSORED
---- /Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/stats.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/stats.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/stats.out	CENSORED
 ***************
 *** 154,175 ****
   \c -
