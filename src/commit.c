@@ -406,7 +406,7 @@ MtmTwoPhaseCommit()
 	dmq_stream_unsubscribe(gid);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);
 
-	MaybeLogSyncpoint(false);
+	MaybeLogSyncpoint();
 
 	return true;
 }

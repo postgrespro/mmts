@@ -251,6 +251,7 @@ MtmSharedShmemStartup()
 			Mtm->peers[i].receiver_pid = InvalidPid;
 			Mtm->peers[i].sender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
+			Mtm->peers[i].trim_lsn = InvalidXLogRecPtr;
 
 			// XXX: change to dsa and make it per-receiver
 			BgwPoolInit(&Mtm->pools[i], MtmQueueSize, 0);
@@ -947,7 +948,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PQclear(res);
 
 	res = PQexec(conn, psprintf("insert into mtm.syncpoints values "
-				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint)",
+				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint, pg_current_wal_lsn()::bigint)",
 				cfg->my_node_id, end_lsn));
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{

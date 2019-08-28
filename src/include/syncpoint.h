@@ -33,9 +33,9 @@ typedef struct
 	XLogRecPtr	origin_lsn;
 } FilterEntry;
 
-extern void MaybeLogSyncpoint(bool force);
-extern void SyncpointRegister(int node_id, XLogRecPtr origin_lsn,
-							  XLogRecPtr local_lsn, XLogRecPtr trim_lsn);
+extern void MaybeLogSyncpoint(void);
+extern void SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
+							  XLogRecPtr restart_lsn, XLogRecPtr trim_lsn);
 extern Syncpoint SyncpointGetLatest(int node_id);
 extern Syncpoint *SyncpointGetAllLatest(void);
 extern XLogRecPtr QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector);

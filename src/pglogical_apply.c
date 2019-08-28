@@ -505,6 +505,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	int			origin_node;
 	XLogRecPtr	origin_lsn,
 				local_lsn,
+				restart_lsn = InvalidXLogRecPtr,
 				trim_lsn;
 
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
@@ -547,6 +548,8 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 */
 	if (msg[0] == 'F')
 	{
+		Assert(rctx->is_recovery == true);
+
 		/* forwarded, parse and save as is */
 		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
 					&origin_lsn, &trim_lsn);
@@ -569,6 +572,24 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		Assert(rc == 1);
 		Assert(origin_node != Mtm->my_node_id);
 
+		/* load restart_lsn before taking local_lsn */
+		{
+			char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN, origin_node);
+			int			i;
+
+			LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+			for (i = 0; i < max_replication_slots; i++)
+			{
+				ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+				if (s->in_use && strcmp(slot_name, NameStr(s->data.name)) == 0)
+					restart_lsn = s->data.restart_lsn;
+			}
+			LWLockRelease(ReplicationSlotControlLock);
+
+			pfree(slot_name);
+		}
+
 		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
 						   origin_node, origin_lsn, trim_lsn);
 		local_lsn = LogLogicalMessage("S", new_msg, strlen(new_msg) + 1, false);
@@ -577,7 +598,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 
 	Assert(rctx->is_recovery || rctx->node_id == origin_node);
 
-	SyncpointRegister(origin_node, origin_lsn, local_lsn, trim_lsn);
+	SyncpointRegister(origin_node, origin_lsn, local_lsn, restart_lsn, trim_lsn);
 
 	MtmUpdateLsnMapping(origin_node, origin_lsn);
 }
@@ -1038,7 +1059,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	if (!receiver_ctx->is_recovery)
 	{
 		Assert(replorigin_session_origin == InvalidRepOriginId);
-		MaybeLogSyncpoint(false);
+		MaybeLogSyncpoint();
 	}
 }
 

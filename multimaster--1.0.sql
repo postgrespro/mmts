@@ -171,10 +171,13 @@ CREATE TABLE mtm.config(
 
 CREATE CAST (pg_lsn AS bigint) WITHOUT FUNCTION;
 
+-- XXX: we need some kind of migration here
+
 CREATE TABLE mtm.syncpoints(
     node_id int not null,
     origin_lsn bigint not null,
     local_lsn  bigint not null,
+    restart_lsn  bigint not null,
     primary key(node_id, origin_lsn)
 );
 
