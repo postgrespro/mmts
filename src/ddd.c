@@ -296,6 +296,8 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 {
 	xid2GtidEntry   *entry;
 
+	Assert(Mtm->my_node_id != 0);
+
 	LWLockAcquire(LOCK_BY_INDEX(0), LW_SHARED);
 	entry = (xid2GtidEntry *) hash_search(xid2gtid, &xid,
 										  HASH_FIND, NULL);
