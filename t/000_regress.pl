@@ -47,22 +47,24 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	ALTER DATABASE "regression" SET timezone_abbreviations TO 'Default';
 	DROP SCHEMA public CASCADE; -- clean database after previous test
 	CREATE SCHEMA public;
+	GRANT ALL ON SCHEMA public TO public;
 });
 
 # do not show transaction from concurrent backends in pg_prepared_xacts
 $cluster->{nodes}->[0]->safe_psql('regression', q{
 	ALTER VIEW pg_prepared_xacts RENAME TO _pg_prepared_xacts;
-	CREATE VIEW pg_prepared_xacts AS select * from _pg_prepared_xacts where gid not like 'MTM-%';
+	CREATE VIEW pg_prepared_xacts AS
+		select * from _pg_prepared_xacts where gid not like 'MTM-%'
+		ORDER BY transaction::text::bigint;
 });
 
-$cluster->{nodes}->[0]->safe_psql('regression', "ALTER SYSTEM SET allow_system_table_mods = 'off'");
+$cluster->{nodes}->[0]->safe_psql('regression', q{
+	ALTER SYSTEM SET allow_system_table_mods = 'off'
+});
 foreach my $node (@{$cluster->{nodes}}){
 	$node->restart;
 }
-
-while ($cluster->{nodes}->[0]->psql('regression','SELECT version()')) {
-	sleep 1;
-}
+$cluster->await_nodes( (0,1,2) );
 
 # load schedule without tablespace test which is not expected
 # to work with several postgreses on a single node
@@ -84,6 +86,7 @@ unlink('parallel_schedule');
 my $res_diff = TestLib::slurp_file('../../src/test/regress/regression.diffs');
 $res_diff =~ s/(--- ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
 $res_diff =~ s/(\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
+$res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 unlink('results/regression.diffs');
 TestLib::append_to_file('results/regression.diffs', $res_diff);
 
