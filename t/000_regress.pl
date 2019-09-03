@@ -55,6 +55,15 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	CREATE VIEW pg_prepared_xacts AS select * from _pg_prepared_xacts where gid not like 'MTM-%';
 });
 
+$cluster->{nodes}->[0]->safe_psql('regression', "ALTER SYSTEM SET allow_system_table_mods = 'off'");
+foreach my $node (@{$cluster->{nodes}}){
+	$node->restart;
+}
+
+while ($cluster->{nodes}->[0]->psql('regression','SELECT version()')) {
+	sleep 1;
+}
+
 # load schedule without tablespace test which is not expected
 # to work with several postgreses on a single node
 my $schedule = TestLib::slurp_file('../../src/test/regress/parallel_schedule');
