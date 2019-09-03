@@ -426,10 +426,10 @@ MtmGucSerialize(void)
 	 * so our callback do not react on that.
 	 */
 	search_path = GetConfigOption("search_path", false, true);
-	if (strcmp(search_path, "\"\"") != 0)
-		appendStringInfo(serialized_gucs, "SET search_path TO %s; ", search_path);
-	else
+	if (strcmp(search_path, "\"\"") == 0 || strlen(search_path) == 0)
 		appendStringInfo(serialized_gucs, "SET search_path TO ''; ");
+	else
+		appendStringInfo(serialized_gucs, "SET search_path TO %s; ", search_path);
 
 	return serialized_gucs->data;
 }
