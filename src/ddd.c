@@ -530,6 +530,9 @@ MtmDetectGlobalDeadLock(PGPROC* proc)
 	bool		found;
 	RepOriginId	saved_origin_id = replorigin_session_origin;
 
+	if (!MtmTx.distributed)
+		return false;
+
 	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);
 
 	if (!TransactionIdIsValid(pgxact->xid))
