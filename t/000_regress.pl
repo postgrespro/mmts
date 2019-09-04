@@ -56,6 +56,10 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	CREATE VIEW pg_prepared_xacts AS
 		select * from _pg_prepared_xacts where gid not like 'MTM-%'
 		ORDER BY transaction::text::bigint;
+	ALTER TABLE pg_publication RENAME TO _pg_publication;
+	CREATE VIEW pg_catalog.pg_publication AS SELECT oid,* FROM pg_catalog._pg_publication WHERE pubname<>'multimaster';
+	ALTER TABLE pg_subscription RENAME TO _pg_subscription;
+	CREATE VIEW pg_catalog.pg_subscription AS SELECT oid,* FROM pg_catalog._pg_subscription WHERE subname NOT LIKE 'mtm_sub_%';
 });
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
