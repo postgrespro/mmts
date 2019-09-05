@@ -307,21 +307,6 @@
 
 ======================================================================
 
-*** contrib/mmts/../../src/test/regress/expected/create_index.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/create_index.out	CENSORED
-***************
-*** 2705,2710 ****
---- 2705,2711 ----
-      "std_index" btree (f2)
-  
-  DROP TABLE concur_heap;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  --
-  -- Test ADD CONSTRAINT USING INDEX
-  --
-
-======================================================================
-
 *** contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
 ***************
@@ -337,19 +322,18 @@
   aggtest|f
 ***************
 *** 32,37 ****
---- 34,42 ----
+--- 34,41 ----
   check_tbl|f
   circle_tbl|t
   city|f
 + cluster_nodes|t
-+ concur_heap|t
 + config|t
   copy_tbl|f
   d|f
   d_star|f
 ***************
 *** 69,74 ****
---- 74,80 ----
+--- 73,79 ----
   iportaltest|f
   kd_point_tbl|t
   line_tbl|f
@@ -366,7 +350,7 @@
   pg_publication_rel|t
   pg_range|t
   pg_replication_origin|t
---- 147,152 ----
+--- 146,151 ----
 ***************
 *** 153,159 ****
   pg_shseclabel|t
@@ -376,10 +360,10 @@
   pg_subscription_rel|t
   pg_tablespace|t
   pg_transform|t
---- 158,163 ----
+--- 157,162 ----
 ***************
 *** 175,180 ****
---- 179,185 ----
+--- 178,184 ----
   radix_text_tbl|t
   ramp|f
   real_city|f
@@ -389,7 +373,7 @@
   slow_emp4000|f
 ***************
 *** 187,192 ****
---- 192,198 ----
+--- 191,197 ----
   sql_sizing_profiles|f
   stud_emp|f
   student|f
@@ -399,7 +383,7 @@
   tbl_include_pk|t
 ***************
 *** 195,200 ****
---- 201,207 ----
+--- 200,206 ----
   tbl_include_unique2|f
   tenk1|t
   tenk2|t
