@@ -265,29 +265,6 @@
 
 ======================================================================
 
-*** contrib/mmts/../../src/test/regress/expected/opr_sanity.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/opr_sanity.out	CENSORED
-***************
-*** 871,877 ****
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-! (9 rows)
-  
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
---- 871,878 ----
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-!  pg_lsn            | bigint            |        0 | e
-! (10 rows)
-  
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
-
-======================================================================
-
 *** contrib/mmts/../../src/test/regress/expected/create_table.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/create_table.out	CENSORED
 ***************
@@ -330,22 +307,49 @@
 
 ======================================================================
 
+*** contrib/mmts/../../src/test/regress/expected/create_index.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/create_index.out	CENSORED
+***************
+*** 2705,2710 ****
+--- 2705,2711 ----
+      "std_index" btree (f2)
+  
+  DROP TABLE concur_heap;
++ ERROR:  [multimaster] failed to prepare transaction at peer node
+  --
+  -- Test ADD CONSTRAINT USING INDEX
+  --
+
+======================================================================
+
 *** contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
 ***************
+*** 11,16 ****
+--- 11,18 ----
+     FROM pg_class c LEFT JOIN pg_namespace n ON n.oid = relnamespace
+     WHERE relkind IN ('r', 'p') AND (nspname ~ '^pg_temp_') IS NOT TRUE
+     ORDER BY relname;
++ _pg_publication|t
++ _pg_subscription|t
+  a|f
+  a_star|f
+  aggtest|f
+***************
 *** 32,37 ****
---- 32,39 ----
+--- 34,42 ----
   check_tbl|f
   circle_tbl|t
   city|f
 + cluster_nodes|t
++ concur_heap|t
 + config|t
   copy_tbl|f
   d|f
   d_star|f
 ***************
 *** 69,74 ****
---- 71,77 ----
+--- 74,80 ----
   iportaltest|f
   kd_point_tbl|t
   line_tbl|f
@@ -354,8 +358,28 @@
   lseg_tbl|f
   main_table|f
 ***************
+*** 141,147 ****
+  pg_pltemplate|t
+  pg_policy|t
+  pg_proc|t
+- pg_publication|t
+  pg_publication_rel|t
+  pg_range|t
+  pg_replication_origin|t
+--- 147,152 ----
+***************
+*** 153,159 ****
+  pg_shseclabel|t
+  pg_statistic|t
+  pg_statistic_ext|t
+- pg_subscription|t
+  pg_subscription_rel|t
+  pg_tablespace|t
+  pg_transform|t
+--- 158,163 ----
+***************
 *** 175,180 ****
---- 178,184 ----
+--- 179,185 ----
   radix_text_tbl|t
   ramp|f
   real_city|f
@@ -365,7 +389,7 @@
   slow_emp4000|f
 ***************
 *** 187,192 ****
---- 191,197 ----
+--- 192,198 ----
   sql_sizing_profiles|f
   stud_emp|f
   student|f
@@ -375,7 +399,7 @@
   tbl_include_pk|t
 ***************
 *** 195,200 ****
---- 200,206 ----
+--- 201,207 ----
   tbl_include_unique2|f
   tenk1|t
   tenk2|t
@@ -633,10 +657,92 @@
 
 ======================================================================
 
+*** contrib/mmts/../../src/test/regress/expected/rowsecurity.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/rowsecurity.out	CENSORED
+***************
+*** 113,142 ****
+  (3 rows)
+  
+  \d document
+!         Table "regress_rls_schema.document"
+!  Column  |  Type   | Collation | Nullable | Default 
+! ---------+---------+-----------+----------+---------
+!  did     | integer |           | not null | 
+!  cid     | integer |           |          | 
+!  dlevel  | integer |           | not null | 
+!  dauthor | name    |           |          | 
+!  dtitle  | text    |           |          | 
+! Indexes:
+!     "document_pkey" PRIMARY KEY, btree (did)
+! Foreign-key constraints:
+!     "document_cid_fkey" FOREIGN KEY (cid) REFERENCES category(cid)
+! Policies:
+!     POLICY "p1"
+!       USING ((dlevel <= ( SELECT uaccount.seclv
+!    FROM uaccount
+!   WHERE (uaccount.pguser = CURRENT_USER))))
+!     POLICY "p1r" AS RESTRICTIVE
+!       TO regress_rls_dave
+!       USING ((cid <> 44))
+!     POLICY "p2r" AS RESTRICTIVE
+!       TO regress_rls_dave
+!       USING (((cid <> 44) AND (cid < 50)))
+! 
+  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename = 'document' ORDER BY policyname;
+       schemaname     | tablename | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
+  --------------------+-----------+------------+-------------+--------------------+-----+--------------------------------------------+------------
+--- 113,119 ----
+  (3 rows)
+  
+  \d document
+! ERROR:  permission denied for view pg_publication
+  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename = 'document' ORDER BY policyname;
+       schemaname     | tablename | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
+  --------------------+-----------+------------+-------------+--------------------+-----+--------------------------------------------+------------
+***************
+*** 938,964 ****
+  CREATE POLICY pp1r ON part_document AS RESTRICTIVE TO regress_rls_dave
+      USING (cid < 55);
+  \d+ part_document
+!                           Table "regress_rls_schema.part_document"
+!  Column  |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
+! ---------+---------+-----------+----------+---------+----------+--------------+-------------
+!  did     | integer |           |          |         | plain    |              | 
+!  cid     | integer |           |          |         | plain    |              | 
+!  dlevel  | integer |           | not null |         | plain    |              | 
+!  dauthor | name    |           |          |         | plain    |              | 
+!  dtitle  | text    |           |          |         | extended |              | 
+! Partition key: RANGE (cid)
+! Policies:
+!     POLICY "pp1"
+!       USING ((dlevel <= ( SELECT uaccount.seclv
+!    FROM uaccount
+!   WHERE (uaccount.pguser = CURRENT_USER))))
+!     POLICY "pp1r" AS RESTRICTIVE
+!       TO regress_rls_dave
+!       USING ((cid < 55))
+! Partitions: part_document_fiction FOR VALUES FROM (11) TO (12),
+!             part_document_nonfiction FOR VALUES FROM (99) TO (100),
+!             part_document_satire FOR VALUES FROM (55) TO (56)
+! 
+  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename like '%part_document%' ORDER BY policyname;
+       schemaname     |   tablename   | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
+  --------------------+---------------+------------+-------------+--------------------+-----+--------------------------------------------+------------
+--- 915,921 ----
+  CREATE POLICY pp1r ON part_document AS RESTRICTIVE TO regress_rls_dave
+      USING (cid < 55);
+  \d+ part_document
+! ERROR:  permission denied for view pg_publication
+  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename like '%part_document%' ORDER BY policyname;
+       schemaname     |   tablename   | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
+  --------------------+---------------+------------+-------------+--------------------+-----+--------------------------------------------+------------
+
+======================================================================
+
 *** contrib/mmts/../../src/test/regress/expected/atx.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/atx.out	CENSORED
 ***************
-*** 434,444 ****
+*** 434,445 ****
   $body$ language plpgsql;
   commit;
   select atx_2_update_func();
@@ -648,18 +754,20 @@
   drop table atx_2_t1;
   drop table atx_2_t2;
   -- 3
---- 434,444 ----
+  drop table if exists atx_3_t1;
+--- 434,445 ----
   $body$ language plpgsql;
   commit;
   select atx_2_update_func();
-! NOTICE:  Exception: 0A000, cannot PREPARE a transaction that has operated on temporary tables
-! ERROR:  Unsupported TG_OP: UPDATE
-! CONTEXT:  PL/pgSQL function atx_2_tmp_trigger_func() line 16 at RAISE
+! ERROR:  SPI_finish failed: SPI_ERROR_UNCONNECTED
+! CONTEXT:  PL/pgSQL function atx_2_tmp_trigger_func() line 5 during exception cleanup
 ! SQL statement "update atx_2_t1 set name = txid_current()::text where id in ( select id from tmp1 )"
 ! PL/pgSQL function atx_2_update_func() line 6 at SQL statement
   drop table atx_2_t1;
++ ERROR:  StartTransactionCommand: unexpected state STARTED
   drop table atx_2_t2;
   -- 3
+  drop table if exists atx_3_t1;
 ***************
 *** 545,554 ****
 --- 545,556 ----
@@ -758,7 +866,7 @@
       ih.thepath,
       interpt_pp(ih.thepath, r.thepath) AS exit
 ***************
-*** 1440,1454 ****
+*** 1440,1458 ****
       p.parameter_types,
       p.from_sql
      FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql);
@@ -774,7 +882,11 @@
   pg_publication_tables| SELECT p.pubname,
       n.nspname AS schemaname,
       c.relname AS tablename
---- 1449,1463 ----
+!    FROM pg_publication p,
+      (pg_class c
+       JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+    WHERE (c.oid IN ( SELECT pg_get_publication_tables.relid
+--- 1449,1477 ----
       p.parameter_types,
       p.from_sql
      FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql);
@@ -787,220 +899,146 @@
 !    FROM _pg_prepared_xacts
 !   WHERE (_pg_prepared_xacts.gid !~~ 'MTM-%'::text)
 !   ORDER BY ((_pg_prepared_xacts.transaction)::text)::bigint;
+! pg_publication| SELECT _pg_publication.oid,
+!     _pg_publication.pubname,
+!     _pg_publication.pubowner,
+!     _pg_publication.puballtables,
+!     _pg_publication.pubinsert,
+!     _pg_publication.pubupdate,
+!     _pg_publication.pubdelete,
+!     _pg_publication.pubtruncate
+!    FROM _pg_publication
+!   WHERE (_pg_publication.pubname <> 'multimaster'::name);
   pg_publication_tables| SELECT p.pubname,
       n.nspname AS schemaname,
       c.relname AS tablename
+!    FROM _pg_publication p,
+      (pg_class c
+       JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+    WHERE (c.oid IN ( SELECT pg_get_publication_tables.relid
+***************
+*** 1642,1648 ****
+      l.provider,
+      l.label
+     FROM (pg_seclabel l
+!      JOIN pg_publication p ON (((l.classoid = p.tableoid) AND (l.objoid = p.oid))))
+    WHERE (l.objsubid = 0)
+  UNION ALL
+   SELECT l.objoid,
+--- 1661,1667 ----
+      l.provider,
+      l.label
+     FROM (pg_seclabel l
+!      JOIN _pg_publication p ON (((l.classoid = p.tableoid) AND (l.objoid = p.oid))))
+    WHERE (l.objsubid = 0)
+  UNION ALL
+   SELECT l.objoid,
+***************
+*** 1654,1660 ****
+      l.provider,
+      l.label
+     FROM (pg_shseclabel l
+!      JOIN pg_subscription s ON (((l.classoid = s.tableoid) AND (l.objoid = s.oid))))
+  UNION ALL
+   SELECT l.objoid,
+      l.classoid,
+--- 1673,1679 ----
+      l.provider,
+      l.label
+     FROM (pg_shseclabel l
+!      JOIN _pg_subscription s ON (((l.classoid = s.tableoid) AND (l.objoid = s.oid))))
+  UNION ALL
+   SELECT l.objoid,
+      l.classoid,
+***************
+*** 1907,1913 ****
+      st.last_msg_receipt_time,
+      st.latest_end_lsn,
+      st.latest_end_time
+!    FROM (pg_subscription su
+       LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
+  pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
+      pg_stat_all_indexes.indexrelid,
+--- 1926,1932 ----
+      st.last_msg_receipt_time,
+      st.latest_end_lsn,
+      st.latest_end_time
+!    FROM (_pg_subscription su
+       LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
+  pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
+      pg_stat_all_indexes.indexrelid,
+***************
+*** 2217,2222 ****
+--- 2236,2252 ----
+       JOIN pg_attribute a ON (((c.oid = a.attrelid) AND (a.attnum = s.staattnum))))
+       LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
+    WHERE ((NOT a.attisdropped) AND has_column_privilege(c.oid, a.attnum, 'select'::text) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
++ pg_subscription| SELECT _pg_subscription.oid,
++     _pg_subscription.subdbid,
++     _pg_subscription.subname,
++     _pg_subscription.subowner,
++     _pg_subscription.subenabled,
++     _pg_subscription.subconninfo,
++     _pg_subscription.subslotname,
++     _pg_subscription.subsynccommit,
++     _pg_subscription.subpublications
++    FROM _pg_subscription
++   WHERE (_pg_subscription.subname !~~ 'mtm_sub_%'::text);
+  pg_tables| SELECT n.nspname AS schemaname,
+      c.relname AS tablename,
+      pg_get_userbyid(c.relowner) AS tableowner,
 
 ======================================================================
 
 *** contrib/mmts/../../src/test/regress/expected/publication.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/publication.out	CENSORED
 ***************
-*** 10,17 ****
+*** 8,16 ****
+  CREATE PUBLICATION testpub_default;
+  COMMENT ON PUBLICATION testpub_default IS 'test publication';
   SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
-   obj_description  
-  ------------------
-   test publication
-! (1 row)
+!  obj_description  
+! ------------------
+!  test publication
+  (1 row)
   
   CREATE PUBLICATION testpib_ins_trunct WITH (publish = insert);
-  ALTER PUBLICATION testpub_default SET (publish = update);
---- 10,18 ----
+--- 8,16 ----
+  CREATE PUBLICATION testpub_default;
+  COMMENT ON PUBLICATION testpub_default IS 'test publication';
   SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
-   obj_description  
-  ------------------
-+  
-   test publication
-! (2 rows)
+!  obj_description 
+! -----------------
+!  
+  (1 row)
   
   CREATE PUBLICATION testpib_ins_trunct WITH (publish = insert);
-  ALTER PUBLICATION testpub_default SET (publish = update);
-***************
-*** 24,41 ****
-                                           List of publications
-          Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
-  --------------------+--------------------------+------------+---------+---------+---------+-----------
-   testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
-   testpub_default    | regress_publication_user | f          | f       | t       | f       | f
-! (2 rows)
-  
-  ALTER PUBLICATION testpub_default SET (publish = 'insert, update, delete');
-  \dRp
-                                           List of publications
-          Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
-  --------------------+--------------------------+------------+---------+---------+---------+-----------
-   testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
-   testpub_default    | regress_publication_user | f          | t       | t       | t       | f
-! (2 rows)
-  
-  --- adding tables
-  CREATE SCHEMA pub_test;
---- 25,44 ----
-                                           List of publications
-          Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
-  --------------------+--------------------------+------------+---------+---------+---------+-----------
-+  multimaster        | stas                     | f          | t       | f       | f       | t
-   testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
-   testpub_default    | regress_publication_user | f          | f       | t       | f       | f
-! (3 rows)
-  
-  ALTER PUBLICATION testpub_default SET (publish = 'insert, update, delete');
-  \dRp
-                                           List of publications
-          Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates 
-  --------------------+--------------------------+------------+---------+---------+---------+-----------
-+  multimaster        | stas                     | f          | t       | f       | f       | t
-   testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f
-   testpub_default    | regress_publication_user | f          | t       | t       | t       | f
-! (3 rows)
-  
-  --- adding tables
-  CREATE SCHEMA pub_test;
 
 ======================================================================
 
 *** contrib/mmts/../../src/test/regress/expected/subscription.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/subscription.out	CENSORED
 ***************
-*** 34,41 ****
+*** 32,40 ****
+  WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+  COMMENT ON SUBSCRIPTION testsub IS 'test subscription';
   SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
-    obj_description  
-  -------------------
-   test subscription
-! (1 row)
+!   obj_description  
+! -------------------
+!  test subscription
+  (1 row)
   
   -- fail - name already exists
-  CREATE SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false);
---- 34,43 ----
+--- 32,40 ----
+  WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+  COMMENT ON SUBSCRIPTION testsub IS 'test subscription';
   SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
-    obj_description  
-  -------------------
-+  
-+  
-   test subscription
-! (3 rows)
+!  obj_description 
+! -----------------
+!  
+  (1 row)
   
   -- fail - name already exists
-  CREATE SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist' PUBLICATION testpub WITH (connect = false);
-***************
-*** 76,86 ****
-  ERROR:  invalid connection string syntax: missing "=" after "foobar" in connection info string
-  
-  \dRs+
-!                                          List of subscriptions
-!   Name   |           Owner           | Enabled | Publication | Synchronous commit |      Conninfo       
-! ---------+---------------------------+---------+-------------+--------------------+---------------------
-!  testsub | regress_subscription_user | f       | {testpub}   | off                | dbname=doesnotexist
-! (1 row)
-  
-  ALTER SUBSCRIPTION testsub SET PUBLICATION testpub2, testpub3 WITH (refresh = false);
-  ALTER SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist2';
---- 78,90 ----
-  ERROR:  invalid connection string syntax: missing "=" after "foobar" in connection info string
-  
-  \dRs+
-!                                                         List of subscriptions
-!    Name    |           Owner           | Enabled |  Publication  | Synchronous commit |                   Conninfo                    
-! -----------+---------------------------+---------+---------------+--------------------+-----------------------------------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster} | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3 | stas                      | f       | {multimaster} | off                | port=55434 host=127.0.0.1 dbname='regression'
-!  testsub   | regress_subscription_user | f       | {testpub}     | off                | dbname=doesnotexist
-! (3 rows)
-  
-  ALTER SUBSCRIPTION testsub SET PUBLICATION testpub2, testpub3 WITH (refresh = false);
-  ALTER SUBSCRIPTION testsub CONNECTION 'dbname=doesnotexist2';
-***************
-*** 91,118 ****
-  ALTER SUBSCRIPTION testsub SET (create_slot = false);
-  ERROR:  unrecognized subscription parameter: create_slot
-  \dRs+
-!                                               List of subscriptions
-!   Name   |           Owner           | Enabled |     Publication     | Synchronous commit |       Conninfo       
-! ---------+---------------------------+---------+---------------------+--------------------+----------------------
-!  testsub | regress_subscription_user | f       | {testpub2,testpub3} | off                | dbname=doesnotexist2
-! (1 row)
-  
-  BEGIN;
-  ALTER SUBSCRIPTION testsub ENABLE;
-  \dRs
-!                         List of subscriptions
-!   Name   |           Owner           | Enabled |     Publication     
-! ---------+---------------------------+---------+---------------------
-!  testsub | regress_subscription_user | t       | {testpub2,testpub3}
-! (1 row)
-  
-  ALTER SUBSCRIPTION testsub DISABLE;
-  \dRs
-!                         List of subscriptions
-!   Name   |           Owner           | Enabled |     Publication     
-! ---------+---------------------------+---------+---------------------
-!  testsub | regress_subscription_user | f       | {testpub2,testpub3}
-! (1 row)
-  
-  COMMIT;
-  -- fail - must be owner of subscription
---- 95,128 ----
-  ALTER SUBSCRIPTION testsub SET (create_slot = false);
-  ERROR:  unrecognized subscription parameter: create_slot
-  \dRs+
-!                                                            List of subscriptions
-!    Name    |           Owner           | Enabled |     Publication     | Synchronous commit |                   Conninfo                    
-! -----------+---------------------------+---------+---------------------+--------------------+-----------------------------------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3 | stas                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
-!  testsub   | regress_subscription_user | f       | {testpub2,testpub3} | off                | dbname=doesnotexist2
-! (3 rows)
-  
-  BEGIN;
-  ALTER SUBSCRIPTION testsub ENABLE;
-  \dRs
-!                          List of subscriptions
-!    Name    |           Owner           | Enabled |     Publication     
-! -----------+---------------------------+---------+---------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}
-!  mtm_sub_3 | stas                      | f       | {multimaster}
-!  testsub   | regress_subscription_user | t       | {testpub2,testpub3}
-! (3 rows)
-  
-  ALTER SUBSCRIPTION testsub DISABLE;
-  \dRs
-!                          List of subscriptions
-!    Name    |           Owner           | Enabled |     Publication     
-! -----------+---------------------------+---------+---------------------
-!  mtm_sub_2 | stas                      | f       | {multimaster}
-!  mtm_sub_3 | stas                      | f       | {multimaster}
-!  testsub   | regress_subscription_user | f       | {testpub2,testpub3}
-! (3 rows)
-  
-  COMMIT;
-  -- fail - must be owner of subscription
-***************
-*** 126,136 ****
-  ERROR:  invalid value for parameter "synchronous_commit": "foobar"
-  HINT:  Available values: local, remote_write, remote_apply, on, off.
-  \dRs+
-!                                                 List of subscriptions
-!     Name     |           Owner           | Enabled |     Publication     | Synchronous commit |       Conninfo       
-! -------------+---------------------------+---------+---------------------+--------------------+----------------------
-   testsub_foo | regress_subscription_user | f       | {testpub2,testpub3} | local              | dbname=doesnotexist2
-! (1 row)
-  
-  -- rename back to keep the rest simple
-  ALTER SUBSCRIPTION testsub_foo RENAME TO testsub;
---- 136,148 ----
-  ERROR:  invalid value for parameter "synchronous_commit": "foobar"
-  HINT:  Available values: local, remote_write, remote_apply, on, off.
-  \dRs+
-!                                                             List of subscriptions
-!     Name     |           Owner           | Enabled |     Publication     | Synchronous commit |                   Conninfo                    
-! -------------+---------------------------+---------+---------------------+--------------------+-----------------------------------------------
-!  mtm_sub_2   | stas                      | f       | {multimaster}       | off                | port=55433 host=127.0.0.1 dbname='regression'
-!  mtm_sub_3   | stas                      | f       | {multimaster}       | off                | port=55434 host=127.0.0.1 dbname='regression'
-   testsub_foo | regress_subscription_user | f       | {testpub2,testpub3} | local              | dbname=doesnotexist2
-! (3 rows)
-  
-  -- rename back to keep the rest simple
-  ALTER SUBSCRIPTION testsub_foo RENAME TO testsub;
 
 ======================================================================
 
@@ -2013,6 +2051,28 @@
 
 ======================================================================
 
+*** contrib/mmts/../../src/test/regress/expected/sequence.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/sequence.out	CENSORED
+***************
+*** 23,29 ****
+  CREATE SEQUENCE sequence_testx OWNED BY pg_class_oid_index.oid;  -- not a table
+  ERROR:  referenced relation "pg_class_oid_index" is not a table or foreign table
+  CREATE SEQUENCE sequence_testx OWNED BY pg_class.relname;  -- not same schema
+! ERROR:  sequence must be in same schema as table it is linked to
+  CREATE TABLE sequence_test_table (a int);
+  CREATE SEQUENCE sequence_testx OWNED BY sequence_test_table.b;  -- wrong column
+  ERROR:  column "b" of relation "sequence_test_table" does not exist
+--- 23,29 ----
+  CREATE SEQUENCE sequence_testx OWNED BY pg_class_oid_index.oid;  -- not a table
+  ERROR:  referenced relation "pg_class_oid_index" is not a table or foreign table
+  CREATE SEQUENCE sequence_testx OWNED BY pg_class.relname;  -- not same schema
+! ERROR:  sequence must have same owner as table it is linked to
+  CREATE TABLE sequence_test_table (a int);
+  CREATE SEQUENCE sequence_testx OWNED BY sequence_test_table.b;  -- wrong column
+  ERROR:  column "b" of relation "sequence_test_table" does not exist
+
+======================================================================
+
 *** contrib/mmts/../../src/test/regress/expected/largeobject.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/largeobject.out	CENSORED
 ***************
@@ -2043,9 +2103,9 @@
   	lotest_stash_values s
   	JOIN pg_largeobject_metadata lo ON s.loid = lo.oid
   	JOIN pg_authid rol ON lo.lomowner = rol.oid;
-!  rolname 
-! ---------
-!  stas
+!   rolname   
+! ------------
+!  regression
   (1 row)
   
   -- NOTE: large objects require transactions
