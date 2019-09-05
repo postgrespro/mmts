@@ -428,3 +428,86 @@ table zeroes_test;
 (1 row)
 
 drop table zeroes_test;
+--
+-- check sequences handling
+--
+\c :node1
+create table seq_test(id bigserial primary key);
+-- should be go with step
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node3
+table seq_test;
+ id 
+----
+  1
+  7
+  2
+  8
+(4 rows)
+
+-- break sequence
+alter sequence seq_test_id_seq restart with 100 increment 1;
+insert into seq_test values (default);
+table seq_test;
+ id  
+-----
+   1
+   7
+   2
+   8
+ 100
+(5 rows)
+
+-- both should collide
+\c :node2
+insert into seq_test values (default);
+ERROR:  duplicate key value violates unique constraint "seq_test_pkey"
+DETAIL:  Key (id)=(100) already exists.
+table seq_test;
+ id  
+-----
+   1
+   7
+   2
+   8
+ 100
+(5 rows)
+
+\c :node1
+insert into seq_test values (default);
+ERROR:  duplicate key value violates unique constraint "seq_test_pkey"
+DETAIL:  Key (id)=(100) already exists.
+-- now fix
+select mtm.alter_sequences();
+NOTICE:  Altering step for sequence local_tab_id_seq to 3.
+NOTICE:  Altering step for sequence seq_test_id_seq to 3.
+NOTICE:  Altering step for sequence aaa_copy_version_id_seq to 3.
+ alter_sequences 
+-----------------
+ t
+(1 row)
+
+-- should work
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+\c :node3
+insert into seq_test values (default);
+\c :node1
+table seq_test;
+ id  
+-----
+   1
+   7
+   2
+   8
+ 100
+ 103
+ 104
+ 105
+(8 rows)
+

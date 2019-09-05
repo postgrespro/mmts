@@ -184,29 +184,40 @@ $$
 DECLARE
     seq_class record;
     seq_tuple record;
+    seq_rel record;
     node_id int;
     max_nodes int;
     new_start bigint;
     altered boolean := false;
+    saved_remotes text;
 BEGIN
-    select current_setting('multimaster.max_nodes') into max_nodes;
-    select id, "allNodes" into node_id from mtm.get_cluster_state();
+    select n_nodes into max_nodes node_id from mtm.status();
+    select current_setting('multimaster.remote_functions') into saved_remotes;
+    set multimaster.remote_functions to 'mtm.alter_sequences';
+    select my_node_id into node_id from mtm.status();
     FOR seq_class IN
-        SELECT '"' || ns.nspname || '"."' || seq.relname || '"' as seqname FROM pg_namespace ns,pg_class seq WHERE seq.relkind = 'S' and seq.relnamespace=ns.oid
+        SELECT
+            '"' || ns.nspname || '"."' || seq.relname || '"' as seqname,
+            seq.oid as oid,
+            seq.relname as name
+        FROM pg_namespace ns, pg_class seq
+        WHERE seq.relkind = 'S' and seq.relnamespace = ns.oid
     LOOP
-            EXECUTE 'select * from ' || seq_class.seqname INTO seq_tuple;
-            IF seq_tuple.increment_by != max_nodes THEN
+            EXECUTE 'select * from ' || seq_class.seqname INTO seq_rel;
+            EXECUTE 'select * from pg_sequence where seqrelid = ' || seq_class.oid INTO seq_tuple;
+            IF seq_tuple.seqincrement != max_nodes THEN
                 altered := true;
-                RAISE NOTICE 'Altering step for sequence % to %.', seq_tuple.sequence_name, max_nodes;
+                RAISE NOTICE 'Altering step for sequence % to %.', seq_class.name, max_nodes;
                 EXECUTE 'ALTER SEQUENCE ' || seq_class.seqname || ' INCREMENT BY ' || max_nodes || ';';
             END IF;
-            IF (seq_tuple.last_value % max_nodes) != node_id THEN
+            IF (seq_rel.last_value % max_nodes) != (node_id % max_nodes) THEN
                 altered := true;
-                new_start := (seq_tuple.last_value / max_nodes + 1)*max_nodes + node_id;
-                RAISE NOTICE 'Altering start for sequence % to %.', seq_tuple.sequence_name, new_start;
+                new_start := (seq_rel.last_value / max_nodes + 1)*max_nodes + node_id;
+                RAISE NOTICE 'Altering start for sequence % to %.', seq_class.name, new_start;
                 EXECUTE 'ALTER SEQUENCE ' || seq_class.seqname || ' RESTART WITH ' || new_start || ';';
             END IF;
     END LOOP;
+    EXECUTE 'set multimaster.remote_functions to ''' || saved_remotes || '''';
     IF altered = false THEN
         RAISE NOTICE 'All found sequnces have proper params.';
     END IF;
@@ -214,5 +225,4 @@ BEGIN
 END
 $$
 LANGUAGE plpgsql;
-
 -- select mtm.alter_sequences();

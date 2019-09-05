@@ -308,3 +308,37 @@ table zeroes_test;
 table zeroes_test;
 
 drop table zeroes_test;
+
+--
+-- check sequences handling
+--
+\c :node1
+create table seq_test(id bigserial primary key);
+-- should be go with step
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node3
+table seq_test;
+-- break sequence
+alter sequence seq_test_id_seq restart with 100 increment 1;
+insert into seq_test values (default);
+table seq_test;
+-- both should collide
+\c :node2
+insert into seq_test values (default);
+table seq_test;
+\c :node1
+insert into seq_test values (default);
+-- now fix
+select mtm.alter_sequences();
+-- should work
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+\c :node3
+insert into seq_test values (default);
+\c :node1
+table seq_test;
