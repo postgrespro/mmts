@@ -52,6 +52,7 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 
 # do not show transaction from concurrent backends in pg_prepared_xacts
 $cluster->{nodes}->[0]->safe_psql('regression', q{
+	CREATE ROLE regression LOGIN SUPERUSER;
 	ALTER VIEW pg_prepared_xacts RENAME TO _pg_prepared_xacts;
 	CREATE VIEW pg_prepared_xacts AS
 		select * from _pg_prepared_xacts where gid not like 'MTM-%'
@@ -79,6 +80,7 @@ TestLib::append_to_file('parallel_schedule', $schedule);
 
 TestLib::system_log($ENV{'PG_REGRESS'},
 	'--host=127.0.0.1', "--port=$port",
+	'--user=regression',
 	'--use-existing', '--bindir=',
 	'--schedule=parallel_schedule',
 	'--dlpath=../../src/test/regress',
