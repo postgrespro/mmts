@@ -265,6 +265,29 @@
 
 ======================================================================
 
+*** contrib/mmts/../../src/test/regress/expected/opr_sanity.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/opr_sanity.out	CENSORED
+***************
+*** 871,877 ****
+   xml               | text              |        0 | a
+   xml               | character varying |        0 | a
+   xml               | character         |        0 | a
+! (9 rows)
+  
+  -- **************** pg_conversion ****************
+  -- Look for illegal values in pg_conversion fields.
+--- 871,878 ----
+   xml               | text              |        0 | a
+   xml               | character varying |        0 | a
+   xml               | character         |        0 | a
+!  pg_lsn            | bigint            |        0 | e
+! (10 rows)
+  
+  -- **************** pg_conversion ****************
+  -- Look for illegal values in pg_conversion fields.
+
+======================================================================
+
 *** contrib/mmts/../../src/test/regress/expected/create_table.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/create_table.out	CENSORED
 ***************
