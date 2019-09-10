@@ -18,6 +18,9 @@ services:
       REFEREE_CONNSTR: 'dbname=regression user=pg host=referee'
     ports:
       - "15432:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.1
 
   node2:
     container_name: node2
@@ -35,6 +38,9 @@ services:
       REFEREE_CONNSTR: 'dbname=regression user=pg host=referee'
     ports:
       - "15433:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.2
 
   referee:
     container_name: referee
@@ -49,3 +55,14 @@ services:
       REFEREE: 'on'
     ports:
       - "15435:5432"
+    networks:
+      mtm_bridge:
+        ipv4_address: 192.168.0.3
+
+networks:
+  mtm_bridge:
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 192.168.0.0/24
+         gateway: 192.168.0.254

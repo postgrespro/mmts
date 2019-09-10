@@ -1,6 +1,7 @@
 
 #include "postgres.h"
 #include "access/clog.h"
+#include "access/twophase.h"
 #include "access/transam.h"
 #include "storage/lwlock.h"
 #include "storage/ipc.h"
@@ -11,6 +12,7 @@
 #include "replication/origin.h"
 #include "replication/message.h"
 #include "utils/builtins.h"
+#include "storage/procarray.h"
 
 #include "multimaster.h"
 
@@ -19,6 +21,7 @@
 #include "mm.h"
 #include "state.h"
 #include "logger.h"
+#include "commit.h"
 
 #define LOCK_BY_INDEX(i) ((LWLockId)&ddd_shared->locks[(i)])
 #define EQUAL_GTID(x,y) ((x).node == (y).node && (x).xid == (y).xid)
@@ -293,6 +296,8 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 {
 	xid2GtidEntry   *entry;
 
+	Assert(Mtm->my_node_id != 0);
+
 	LWLockAcquire(LOCK_BY_INDEX(0), LW_SHARED);
 	entry = (xid2GtidEntry *) hash_search(xid2gtid, &xid,
 										  HASH_FIND, NULL);
@@ -302,65 +307,149 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 	}
 	else
 	{
-		// XXX: investigate how this assert happens
-		// Assert(TransactionIdIsInProgress(xid));
-		gtid->node = Mtm->my_node_id;
-		gtid->xid = xid;
+		const char *gid;
+
+		gid = TwoPhaseGetGid(xid);
+		if (gid[0] != '\0')
+		{
+			int tx_node_id = MtmGidParseNodeId(gid);
+
+			if (tx_node_id > 0)
+			{
+				/* ordinary global tx */
+				gtid->node = tx_node_id;
+				gtid->xid = MtmGidParseXid(gid);
+				gtid->my_xid = xid;
+			}
+			else
+			{
+				/* user 2pc */
+				/*
+				 * XXX: that is wrong -- we need to save xid and node_id in
+				 * user 2pc GIDs.
+				 */
+				Assert(tx_node_id == -1);
+				gtid->node = Mtm->my_node_id;
+				gtid->xid = xid;
+				gtid->my_xid = xid;
+			}
+		}
+		else
+		{
+			/*
+			 * That should be local running tx or any recently
+			 * committed tx.
+			 */
+			gtid->node = Mtm->my_node_id;
+			gtid->xid = xid;
+			gtid->my_xid = xid;
+		}
 	}
 	LWLockRelease(LOCK_BY_INDEX(0));
 }
 
+static GlobalTransactionId
+gtid_by_pgproc(PGPROC *proc)
+{
+	GlobalTransactionId gtid;
+	PGXACT	   *pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
+
+	if (TransactionIdIsValid(pgxact->xid))
+		MtmGetGtid(pgxact->xid, &gtid);
+	else
+		gtid = (GlobalTransactionId){Mtm->my_node_id, proc->pgprocno, proc->pgprocno};
+
+	return gtid;
+}
 
 static void
-MtmSerializeLock(PROCLOCK* proclock, void* arg)
+MtmDumpWaitForEdges(LOCK *lock, void *arg)
 {
-	ByteBuffer* buf = (ByteBuffer*)arg;
-	LOCK* lock = proclock->tag.myLock;
-	PGPROC* proc = proclock->tag.myProc;
-	GlobalTransactionId gtid;
-	if (lock != NULL) {
-		PGXACT* srcPgXact = &ProcGlobal->allPgXact[proc->pgprocno];
+	ByteBuffer *buf = (ByteBuffer *) arg;
+	SHM_QUEUE  *procLocks = &(lock->procLocks);
+	PROCLOCK   *src_pl;
+	LockMethod lockMethodTable = GetLocksMethodTable(lock);
+	PROC_QUEUE *waitQueue;
+	PGPROC	   *prev, *curr;
+	int			numLockModes = lockMethodTable->numLockModes;
 
-		if (TransactionIdIsValid(srcPgXact->xid) && proc->waitLock == lock) {
-			LockMethod lockMethodTable = GetLocksMethodTable(lock);
-			int numLockModes = lockMethodTable->numLockModes;
-			int conflictMask = lockMethodTable->conflictTab[proc->waitLockMode];
-			SHM_QUEUE *procLocks = &(lock->procLocks);
-			int lm;
+	/* dump hard edges */
+	for (src_pl = (PROCLOCK *) SHMQueueNext(procLocks, procLocks,
+											offsetof(PROCLOCK, lockLink));
+		 src_pl;
+		 src_pl = (PROCLOCK *) SHMQueueNext(procLocks, &src_pl->lockLink,
+											offsetof(PROCLOCK, lockLink)))
+	{
+		GlobalTransactionId src_gtid;
+		PGPROC	   *src_proc = src_pl->tag.myProc;
+		PROCLOCK   *dst_pl;
+		int			conflictMask;
 
-			MtmGetGtid(srcPgXact->xid, &gtid);	/* waiting transaction */
+		if (src_proc->waitLock != lock)
+			continue;
 
-			ByteBufferAppend(buf, &gtid, sizeof(gtid));
+		conflictMask = lockMethodTable->conflictTab[src_proc->waitLockMode];
 
-			proclock = (PROCLOCK *) SHMQueueNext(procLocks, procLocks,
-												 offsetof(PROCLOCK, lockLink));
-			while (proclock)
+		/* waiting transaction */
+		src_gtid = gtid_by_pgproc(src_proc);
+		ByteBufferAppend(buf, &src_gtid, sizeof(src_gtid));
+
+		for (dst_pl = (PROCLOCK *) SHMQueueNext(procLocks, procLocks,
+											offsetof(PROCLOCK, lockLink));
+			 dst_pl;
+			 dst_pl = (PROCLOCK *) SHMQueueNext(procLocks, &dst_pl->lockLink,
+											offsetof(PROCLOCK, lockLink)))
+		{
+			GlobalTransactionId dst_gtid;
+			int			lm;
+
+			if (src_pl == dst_pl)
+				continue;
+
+			for (lm = 1; lm <= numLockModes; lm++)
 			{
-				if (proc != proclock->tag.myProc) {
-					PGXACT* dstPgXact = &ProcGlobal->allPgXact[proclock->tag.myProc->pgprocno];
-					if (TransactionIdIsValid(dstPgXact->xid)) {
-						Assert(srcPgXact->xid != dstPgXact->xid);
-						for (lm = 1; lm <= numLockModes; lm++)
-						{
-							if ((proclock->holdMask & LOCKBIT_ON(lm)) && (conflictMask & LOCKBIT_ON(lm)))
-							{
-								mtm_log(DeadlockSerialize, "%d: "XID_FMT"(%u) waits for "XID_FMT"(%u)",
-										 MyProcPid, srcPgXact->xid, proc->pid,
-										 dstPgXact->xid, proclock->tag.myProc->pid);
-								MtmGetGtid(dstPgXact->xid, &gtid); /* transaction holding lock */
-								ByteBufferAppend(buf, &gtid, sizeof(gtid));
-								break;
-							}
-						}
-					}
+				if ((dst_pl->holdMask & LOCKBIT_ON(lm)) &&
+					(conflictMask & LOCKBIT_ON(lm)))
+				{
+					/* transaction holding lock */
+					dst_gtid = gtid_by_pgproc(dst_pl->tag.myProc);
+					ByteBufferAppend(buf, &dst_gtid, sizeof(dst_gtid));
+					mtm_log(DeadlockSerialize,
+							"%d:"XID_FMT" ("XID_FMT") -> %d:"XID_FMT" ("XID_FMT")",
+							src_gtid.node, src_gtid.xid, src_gtid.my_xid,
+							dst_gtid.node, dst_gtid.xid, dst_gtid.my_xid);
+					break;
 				}
-				proclock = (PROCLOCK *) SHMQueueNext(procLocks, &proclock->lockLink,
-													 offsetof(PROCLOCK, lockLink));
 			}
-			gtid.node = 0;
-			gtid.xid = 0;
-			ByteBufferAppend(buf, &gtid, sizeof(gtid)); /* end of lock owners list */
 		}
+
+		/* end of lock owners list */
+		ByteBufferAppend(buf, &(GlobalTransactionId){0, 0, 0},
+						 sizeof(GlobalTransactionId));
+	}
+
+	/* dump soft edges */
+	waitQueue = &(lock->waitProcs);
+	prev = (PGPROC *) waitQueue->links.next;
+	curr = (PGPROC *) prev->links.next;
+	while (curr != (PGPROC *) waitQueue->links.next)
+	{
+		GlobalTransactionId src_gtid, dst_gtid;
+
+		src_gtid = gtid_by_pgproc(curr);
+		dst_gtid = gtid_by_pgproc(prev);
+		ByteBufferAppend(buf, &src_gtid, sizeof(src_gtid));
+		ByteBufferAppend(buf, &dst_gtid, sizeof(dst_gtid));
+		ByteBufferAppend(buf, &(GlobalTransactionId){0, 0, 0},
+							sizeof(GlobalTransactionId));
+
+		mtm_log(DeadlockSerialize,
+				"%d:"XID_FMT" ("XID_FMT") ~> %d:"XID_FMT" ("XID_FMT")",
+				src_gtid.node, src_gtid.xid, src_gtid.my_xid,
+				dst_gtid.node, dst_gtid.xid, dst_gtid.my_xid);
+
+		prev = curr;
+		curr = (PGPROC *) curr->links.next;
 	}
 }
 
@@ -376,7 +465,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	Assert(TransactionIdIsValid(xid));
 
 	ByteBufferAlloc(&buf);
-	EnumerateLocks(MtmSerializeLock, &buf);
+	EnumerateLocks(MtmDumpWaitForEdges, &buf);
 
 	Assert(replorigin_session_origin == InvalidRepOriginId);
 	XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
@@ -440,6 +529,9 @@ MtmDetectGlobalDeadLock(PGPROC* proc)
 	PGXACT* pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
 	bool		found;
 	RepOriginId	saved_origin_id = replorigin_session_origin;
+
+	if (!MtmTx.distributed)
+		return false;
 
 	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);
 
