@@ -290,10 +290,10 @@ drop table atx_test1;
 -- replication of statements that have estate->es_processed == 0
 \c :node1
 create table zeroes_test (id integer, comments text);
-insert into zeroes_test values (1, 'тест');
+insert into zeroes_test values (1, 'test');
 -- result of this query would be INSERT 0 0, however update will change row
 with tab as
-  (select 1 id, 'переименовал' as comments),
+  (select 1 id, 'ranamed' as comments),
   upd as (
     update zeroes_test set comments = t.comments
     from tab t
@@ -308,3 +308,37 @@ table zeroes_test;
 table zeroes_test;
 
 drop table zeroes_test;
+
+--
+-- check sequences handling
+--
+\c :node1
+create table seq_test(id bigserial primary key);
+-- should be go with step
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+insert into seq_test values (default);
+\c :node3
+table seq_test;
+-- break sequence
+alter sequence seq_test_id_seq restart with 100 increment 1;
+insert into seq_test values (default);
+table seq_test;
+-- both should collide
+\c :node2
+insert into seq_test values (default);
+table seq_test;
+\c :node1
+insert into seq_test values (default);
+-- now fix
+select mtm.alter_sequences();
+-- should work
+insert into seq_test values (default);
+\c :node2
+insert into seq_test values (default);
+\c :node3
+insert into seq_test values (default);
+\c :node1
+table seq_test;

@@ -2,11 +2,6 @@
 use Cluster;
 use Test::More tests => 2;
 
-# psql and pg_regress which calls psql calculates ascii table header
-# width based on string len which can be different in bytes and utf
-# codepoints
-$ENV{LC_ALL} = 'en_US.UTF-8';
-
 # determenistic ports for expected files
 $PostgresNode::last_port_assigned = 55431;
 
