@@ -7,7 +7,7 @@ $PostgresNode::last_port_assigned = 55431;
 
 my $cluster = new Cluster(3);
 $cluster->init(q{
-	multimaster.volkswagen_mode = on
+	multimaster.volkswagen_mode = off
 	# allow to spoof pg_prepared_xacts view
 	allow_system_table_mods = on
 });
@@ -59,7 +59,8 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 });
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
-	ALTER SYSTEM SET allow_system_table_mods = 'off'
+	ALTER SYSTEM SET allow_system_table_mods = 'off';
+	ALTER SYSTEM SET multimaster.volkswagen_mode = 'on';
 });
 foreach my $node (@{$cluster->{nodes}}){
 	$node->restart;
