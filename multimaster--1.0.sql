@@ -191,7 +191,8 @@ DECLARE
     altered boolean := false;
     saved_remotes text;
 BEGIN
-    select n_nodes into max_nodes node_id from mtm.status();
+    -- with sparce node_id's max(node_id) can be bigger then n_nodes
+    select max(id) into max_nodes from mtm.nodes();
     select current_setting('multimaster.remote_functions') into saved_remotes;
     set multimaster.remote_functions to 'mtm.alter_sequences';
     select my_node_id into node_id from mtm.status();

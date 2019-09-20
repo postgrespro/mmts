@@ -1063,6 +1063,12 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	}
 	PQclear(res);
 
+	/* call mtm.alter_sequences since n_nodes is changed */
+	query = psprintf("select mtm.alter_sequences()");
+	rc = SPI_execute(query, false, 0);
+	if (rc != SPI_OK_SELECT)
+		mtm_log(ERROR, "Failed to alter sequences");
+
 	pfree(cfg);
 	PQfinish(conn);
 	if (SPI_finish() != SPI_OK_FINISH)

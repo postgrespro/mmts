@@ -58,6 +58,12 @@ is($cluster->is_data_identic( (0,1,2) ), 1, "check auto recovery");
 # add basebackuped node
 ################################################################################
 
+# add table with sequence to check sequences after n_nodes change
+$cluster->safe_psql(0, "create table test_seq(id serial primary key)");
+$cluster->safe_psql(0, "insert into test_seq values(DEFAULT)");
+$cluster->safe_psql(1, "insert into test_seq values(DEFAULT)");
+$cluster->safe_psql(2, "insert into test_seq values(DEFAULT)");
+
 my $pgb1= $cluster->pgbench_async(0, ('-N', '-n', -T => '3600', -c => '2') );
 my $pgb2= $cluster->pgbench_async(1, ('-N', '-n', -T => '3600', -c => '2') );
 
@@ -95,6 +101,12 @@ my $bb_keycount = $cluster->safe_psql(3, q{
 });
 
 is($bb_keycount, 0, "basebackup key was deleted");
+
+# check that sequences in proper state
+$cluster->safe_psql(0, "insert into test_seq values(DEFAULT)");
+$cluster->safe_psql(1, "insert into test_seq values(DEFAULT)");
+$cluster->safe_psql(2, "insert into test_seq values(DEFAULT)");
+$cluster->safe_psql(3, "insert into test_seq values(DEFAULT)");
 
 ################################################################################
 # XXX: check remove/add of same node
