@@ -56,7 +56,6 @@ BgwPoolStart(BgwPool* poolDesc, char *poolName, Oid db_id, Oid user_id)
 	strncpy(poolDesc->poolName, poolName, MAX_NAME_LEN);
 	poolDesc->db_id = db_id;
 	poolDesc->user_id = user_id;
-	poolDesc->size = size;
 
 	poolDesc->nWorkers = 0;
 	poolDesc->producerBlocked = false;
@@ -64,7 +63,7 @@ BgwPoolStart(BgwPool* poolDesc, char *poolName, Oid db_id, Oid user_id)
 	poolDesc->tail = 0;
 	poolDesc->active = 0;
 	poolDesc->pending = 0;
-	poolDesc->size = 0;
+	poolDesc->size = size;
 	poolDesc->lastDynamicWorkerStartTime = 0;
 	ConditionVariableInit(&poolDesc->syncpoint_cv);
 	ConditionVariableInit(&poolDesc->available_cv);
@@ -156,7 +155,6 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 
 		CHECK_FOR_INTERRUPTS();
 
-		// XXX: change to LWLock
 		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 
 		/* Empty queue */
@@ -295,17 +293,7 @@ BgwPoolExecute(BgwPool* poolDesc, void* work, int size, MtmReceiverContext *ctx)
 
 	Assert(poolDesc != NULL);
 	Assert(queue != NULL);
-
-	// XXX: align with spill size and assert that
-	if (MSGLEN(size) > poolDesc->size)
-	{
-		/* 
-		 * Size of work is larger than size of shared buffer: 
-		 * run it immediately
-		 */
-		MtmExecutor(work, size, ctx);
-		return;
-	}
+	Assert(MSGLEN(size) <= poolDesc->size);
  
 	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 	while (!ProcDiePending)
