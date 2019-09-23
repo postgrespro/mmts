@@ -26,7 +26,7 @@ my @benches = ();
 foreach (0..$#{$cluster->{nodes}})
 {
 	push @benches, $cluster->pgbench_async($_,
-		('-n', -T => $seconds, -c => $clients, -f => 'tests/deadl.pgb'));
+		('-n', -T => $seconds, -c => $clients, -f => 'tests/deadl.pgb'), -P => 1);
 }
 
 sub isalive {
@@ -41,6 +41,7 @@ my $dead_count = 0;
 while (isalive(\@benches)) {
 	my $trans = $cluster->safe_psql(0,
 		"select count(*) from transactions");
+	printf("tcount --> $trans\n");
 	if($ptrans == 0){
 		$ptrans = $trans;
 	} elsif($ptrans == $trans){

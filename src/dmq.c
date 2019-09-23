@@ -750,12 +750,14 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	bool		found;
 	DmqStreamSubscription *sub;
 	shm_mq_result res;
+	int			msg_offset;
 
 	/*
 	 * Consume stream_name packed as a string and interpret rest of the data
 	 * as message body with unknown format that we are going to send down to
 	 * the subscribed backend.
 	 */
+	msg_offset = msg->cursor;
 	stream_name = pq_getmsgrawstring(msg);
 	body_len = msg->len - msg->cursor;
 	body = pq_getmsgbytes(msg, body_len);
@@ -795,7 +797,8 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 			body_len, sub->procno);
 
 	/* and send it */
-	res = shm_mq_send(mq_handles[sub->procno], body_len, body, false);
+	res = shm_mq_send(mq_handles[sub->procno], msg->len - msg_offset,
+					  msg->data + msg_offset, false);
 	if (res != SHM_MQ_SUCCESS)
 	{
 		mtm_log(WARNING, "[DMQ] can't send to queue %d", sub->procno);
@@ -1269,8 +1272,8 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	pq_send_ascii_string(&buf, stream_name);
 	pq_sendbytes(&buf, payload, len);
 
-	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
-			buf.len, buf.len, buf.data);
+	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%s'",
+			buf.len, buf.data + sizeof(DmqDestinationId));
 
 	// XXX: use sendv instead
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
@@ -1567,7 +1570,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
  * case, *wait is true if it makes sense to retry.
  */
 bool
-dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
+dmq_pop_nb(DmqSenderId *sender_id, const char **stream, StringInfo msg, uint64 mask, bool *wait)
 {
 	shm_mq_result res;
 	int i;
@@ -1595,6 +1598,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 			msg->maxlen = -1;
 			msg->cursor = 0;
 
+			*stream = pq_getmsgrawstring(msg);
 			*sender_id = i;
 			*wait = false;
 

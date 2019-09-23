@@ -614,18 +614,6 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 			MtmApplyDDLMessage(messageBody, true);
 			break;
 		}
-		case 'L':
-		{
-			// XXX: new syncpoints machinery can block receiver, so that we
-			// won't be able to process deadlock messages. If all nodes are doing
-			// syncpoint simultaneously and deadlock happens exactly in this time
-			// we will not be able to resolve it. Proper solution is to move DDD
-			// messages to dmq.
-			mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
-			MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
-			standalone = true;
-			break;
-		}
 		case 'P':
 		{
 			int64 session_id = 0;

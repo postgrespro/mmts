@@ -357,7 +357,7 @@ gtid_by_pgproc(PGPROC *proc)
 	if (TransactionIdIsValid(pgxact->xid))
 		MtmGetGtid(pgxact->xid, &gtid);
 	else
-		gtid = (GlobalTransactionId){Mtm->my_node_id, proc->pgprocno, proc->pgprocno};
+		gtid = (GlobalTransactionId){Mtm->my_node_id, proc->backendId, proc->backendId};
 
 	return gtid;
 }
@@ -460,7 +460,9 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	ByteBuffer buf;
 	MtmGraph graph;
 	GlobalTransactionId gtid;
-	int i;
+	int			dest_id[MTM_MAX_NODES];
+	int			n_dests = 0;
+	int			i;
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -468,7 +470,22 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	EnumerateLocks(MtmDumpWaitForEdges, &buf);
 
 	Assert(replorigin_session_origin == InvalidRepOriginId);
-	XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
+
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		nodemask_t	connected = MtmGetConnectedNodeMask();
+		if (BIT_CHECK(connected, i) && Mtm->my_node_id != i+1)
+		{
+			dest_id[n_dests++] = Mtm->peers[i].dmq_dest_id;
+			Assert(Mtm->peers[i].dmq_dest_id >= 0);
+		}
+	}
+	LWLockRelease(Mtm->lock);
+
+	/* scatter */
+	for (i = 0; i < n_dests; i++)
+		dmq_push_buffer(dest_id[i], "ddd", buf.data, buf.used);
 
 	MtmGraphInit(&graph);
 	MtmGraphAdd(&graph, (GlobalTransactionId*)buf.data, buf.used/sizeof(GlobalTransactionId));

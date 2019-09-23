@@ -21,6 +21,7 @@
 #include "bkb.h"
 #include "state.h"
 #include "logger.h"
+#include "ddd.h"
 
 char const* const MtmNeighborEventMnem[] =
 {
@@ -1208,76 +1209,103 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 }
 
 static void
-check_status_requests(MtmConfig *mtm_cfg)
+handle_tx_request(DmqSenderId sender_id, StringInfo msg)
+{
+	DmqDestinationId dest_id;
+	StringInfoData response_msg;
+	int			sender_node_id;
+	char	   *state_3pc;
+	MtmTxState	state;
+	const char *gid;
+
+	sender_node_id = sender_to_node[sender_id];
+	gid = pq_getmsgrawstring(msg);
+
+	mtm_log(StatusRequest, "got status request for %s from %d",
+			gid, sender_node_id);
+
+	/*
+	 * During recovery we may answer with preliminary "notfound" message
+	 * that woul cause erroneus abort of transaction beeing asked about.
+	 */
+	if (MtmGetCurrentStatus() < MTM_RECOVERED)
+	{
+		mtm_log(StatusRequest,
+				"skipping status request as node is not recovered yet");
+		return;
+	}
+
+	state_3pc = GetLoggedPreparedXactState(gid);
+
+	// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
+	if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxNotFound;
+	else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxPrepared;
+	else if (strncmp(state_3pc, "precommitted", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxPreCommited;
+	else if (strncmp(state_3pc, "preaborted", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxPreAborted;
+	else if (strncmp(state_3pc, "committed", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxCommited;
+	else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
+		state = MtmTxAborted;
+	else
+	{
+		Assert(false);
+	}
+
+	mtm_log(StatusRequest, "responding to %d with %s -> %s",
+			sender_node_id, gid, MtmTxStateMnem(state));
+
+	pfree(state_3pc);
+
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
+	LWLockRelease(Mtm->lock);
+	Assert(dest_id >= 0);
+
+	initStringInfo(&response_msg);
+	pq_send_ascii_string(&response_msg, gid);
+	pq_sendint32(&response_msg, state);
+	dmq_push_buffer(dest_id, "txresp", response_msg.data, response_msg.len);
+
+	mtm_log(StatusRequest, "responded to %d with %s -> %s",
+			sender_node_id, gid, MtmTxStateMnem(state));
+}
+
+static void
+handle_ddd_graph(DmqSenderId sender_id, StringInfo msg)
+{
+	int			body_len;
+	const char *body;
+
+	body_len = msg->len - msg->cursor;
+	body = pq_getmsgbytes(msg, body_len);
+	pq_getmsgend(msg);
+
+	MtmUpdateLockGraph(sender_to_node[sender_id], body, body_len);
+}
+
+static bool
+handle_requests(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
 	StringInfoData msg;
 	bool		wait;
+	const char *stream;
 
-	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
+	while(dmq_pop_nb(&sender_id, &stream, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
-		DmqDestinationId dest_id;
-		StringInfoData response_msg;
-		int			sender_node_id;
-		char	   *state_3pc;
-		MtmTxState	state;
-		const char *gid;
-
-		sender_node_id = sender_to_node[sender_id];
-		gid = pq_getmsgrawstring(&msg);
-
-		mtm_log(StatusRequest, "got status request for %s from %d",
-				gid, sender_node_id);
-
-		/*
-		 * During recovery we may answer with preliminary "notfound" message
-		 * that woul cause erroneus abort of transaction beeing asked about.
-		 */
-		if (MtmGetCurrentStatus() < MTM_RECOVERED)
-		{
-			mtm_log(StatusRequest,
-					"skipping status request as node is not recovered yet");
-			continue;
-		}
-
-		state_3pc = GetLoggedPreparedXactState(gid);
-
-		// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
-		if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxNotFound;
-		else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPrepared;
-		else if (strncmp(state_3pc, "precommitted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPreCommited;
-		else if (strncmp(state_3pc, "preaborted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPreAborted;
-		else if (strncmp(state_3pc, "committed", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxCommited;
-		else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxAborted;
+		if (strcmp(stream, "txreq") == 0)
+			handle_tx_request(sender_id, &msg);
+		else if (strcmp(stream, "ddd") == 0)
+			handle_ddd_graph(sender_id, &msg);
 		else
-		{
 			Assert(false);
-		}
-
-		mtm_log(StatusRequest, "responding to %d with %s -> %s",
-				sender_node_id, gid, MtmTxStateMnem(state));
-
-		pfree(state_3pc);
-
-		LWLockAcquire(Mtm->lock, LW_SHARED);
-		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
-		LWLockRelease(Mtm->lock);
-		Assert(dest_id >= 0);
-
-		initStringInfo(&response_msg);
-		pq_send_ascii_string(&response_msg, gid);
-		pq_sendint32(&response_msg, state);
-		dmq_push_buffer(dest_id, "txresp", response_msg.data, response_msg.len);
-
-		mtm_log(StatusRequest, "responded to %d with %s -> %s",
-				sender_node_id, gid, MtmTxStateMnem(state));
 	}
+
+	return wait;
 }
 
 static bool
@@ -1614,6 +1642,7 @@ MtmMonitor(Datum arg)
 								  (Datum) 0);
 
 	dmq_stream_subscribe("txreq");
+	dmq_stream_subscribe("ddd");
 
 	/* Launch resolver */
 	Assert(resolver == NULL);
@@ -1622,6 +1651,7 @@ MtmMonitor(Datum arg)
 	for (;;)
 	{
 		int rc;
+		bool wait;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1672,14 +1702,15 @@ MtmMonitor(Datum arg)
 			config_valid = true;
 		}
 
-		// XXX: add tx start/stop to clear mcxt?
-		check_status_requests(mtm_cfg);
+		StartTransactionCommand();
+		wait = handle_requests(mtm_cfg);
+		CommitTransactionCommand();
 
 		MtmRefreshClusterStatus();
 
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   1000, PG_WAIT_EXTENSION);
+					   wait ? 1000 : 0, PG_WAIT_EXTENSION);
 
 		/* Emergency bailout if postmaster has died */
 		if (rc & WL_POSTMASTER_DEATH)
