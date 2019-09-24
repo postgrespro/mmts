@@ -123,10 +123,10 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
 
-	pqsignal(SIGINT, ApplyCancelHandler);
+	pqsignal(SIGINT, die);
 	pqsignal(SIGQUIT, BgwShutdownHandler);
 	pqsignal(SIGTERM, BgwShutdownHandler);
-	pqsignal(SIGHUP, ApplyCancelHandler);
+	pqsignal(SIGHUP, PostgresSigHupHandler);
 
 	// XXX: probably we should add static variable that signalizes that
 	// we are between pool->active += 1 and pool->active -= 1, so if
@@ -396,6 +396,8 @@ BgwPoolShutdown(BgwPool* poolDesc)
 			continue;
 		WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
 	}
+	elog(LOG, "Shutdown of the receiver workers pool. Pool name = %s",
+															poolDesc->poolName);
 }
 
 /*
@@ -429,4 +431,6 @@ BgwPoolCancel(BgwPool* poolDesc)
 	poolDesc->pending = 0;
 	poolDesc->producerBlocked = false;
 	memset(poolDesc->bgwhandles, 0, MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
+	elog(LOG, "Cancel of the receiver workers pool. Pool name = %s",
+															poolDesc->poolName);
 }

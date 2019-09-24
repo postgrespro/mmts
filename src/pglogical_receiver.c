@@ -702,7 +702,7 @@ pglogical_receiver_main(Datum main_arg)
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 			{
-				BgwPoolShutdown(&Mtm->pools[nodeId-1]);
+				BgwPoolCancel(&Mtm->pools[nodeId-1]);
 				proc_exit(1);
 			}
 
