@@ -18,15 +18,15 @@
 typedef enum MtmLogTag
 {
 	/* general */
-	MtmTxTrace				= LOG,
-	MtmTxFinish				= LOG,
+	MtmTxTrace				= DEBUG1,
+	MtmTxFinish				= DEBUG1,
 
 	/* dmq */
-	DmqStateIntermediate	= LOG,
+	DmqStateIntermediate	= DEBUG2,
 	DmqStateFinal			= LOG,
-	DmqTraceOutgoing		= LOG,
-	DmqTraceIncoming		= LOG,
-	DmqTraceShmMq			= LOG,
+	DmqTraceOutgoing		= DEBUG2,
+	DmqTraceIncoming		= DEBUG2,
+	DmqTraceShmMq			= DEBUG2,
 	DmqPqTiming				= DEBUG2,
 
 	/* resolver */
@@ -41,9 +41,9 @@ typedef enum MtmLogTag
 	BgwPoolEvent			= LOG,
 
 	/* ddd */
-	DeadlockCheck			= LOG,
-	DeadlockUpdate			= LOG,
-	DeadlockSerialize		= LOG,
+	DeadlockCheck			= DEBUG1,
+	DeadlockUpdate			= DEBUG1,
+	DeadlockSerialize		= DEBUG1,
 
 	/* ddl */
 	DDLStmtOutgoing			= DEBUG1,
@@ -62,9 +62,9 @@ typedef enum MtmLogTag
 
 	/* receiver */
 	MtmReceiverStart		= LOG,
-	MtmReceiverFilter		= LOG,
-	MtmApplyMessage			= LOG,
-	MtmApplyTrace			= LOG,
+	MtmReceiverFilter		= DEBUG1,
+	MtmApplyMessage			= DEBUG2,
+	MtmApplyTrace			= DEBUG2,
 	MtmApplyError			= LOG,
 	MtmApplyBgwFinish		= LOG,
 
