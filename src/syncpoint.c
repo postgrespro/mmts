@@ -188,7 +188,7 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 	else
 		mtm_log(ERROR, "Failed to load saved restart_lsn");
 
-	/* 
+	/*
 	 * XXX: simple delete of restart_lsn < $restart_lsn is not working
 	 */
 	// /* Delete all syncpoints before one with our restart_lsn */

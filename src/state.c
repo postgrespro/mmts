@@ -1568,6 +1568,46 @@ MtmMonitor(Datum arg)
 	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
 	/*
+	 * Online upgrade.
+	 */
+	{
+		int			rc;
+
+		StartTransactionCommand();
+		if (SPI_connect() != SPI_OK_CONNECT)
+			mtm_log(ERROR, "could not connect using SPI");
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/* Add new column to mtm.syncpoints */
+		rc = SPI_execute("select relnatts from pg_class where relname='syncpoints';",
+						 true, 0);
+		if (rc < 0 || rc != SPI_OK_SELECT)
+			mtm_log(ERROR, "Failed to find syncpoints relation");
+		if (SPI_processed > 0)
+		{
+			TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+			HeapTuple	tup = SPI_tuptable->vals[0];
+			bool		isnull;
+			int			relnatts;
+
+			relnatts = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
+			if (relnatts == 3)
+			{
+				rc = SPI_execute("ALTER TABLE mtm.syncpoints ADD COLUMN restart_lsn bigint DEFAULT 0 NOT NULL",
+								 false, 0);
+				if (rc < 0 || rc != SPI_OK_UTILITY)
+					mtm_log(ERROR, "Failed to alter syncpoints relation");
+
+				mtm_log(LOG, "Altering syncpoints to newer schema");
+			}
+		}
+
+		SPI_finish();
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
+
+	/*
 	 * During mtm_init_cluster() our worker is started from transaction that created
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
