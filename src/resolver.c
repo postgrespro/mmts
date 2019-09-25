@@ -489,9 +489,8 @@ handle_responses(void)
 	DmqSenderId sender_id;
 	StringInfoData msg;
 	bool		wait;
-	const char *stream;
 
-	while(dmq_pop_nb(&sender_id, &stream, &msg, MtmGetConnectedNodeMask(), &wait))
+	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		int			node_id;
 		const char *gid;

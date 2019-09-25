@@ -422,9 +422,8 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 		StringInfoData	msg;
 		int			rc;
 		bool		wait;
-		const char *stream;
 
-		ret = dmq_pop_nb(&sender_id, &stream, &msg, participants, &wait);
+		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
 			parse_reply(&messages[*msg_count], &msg);
