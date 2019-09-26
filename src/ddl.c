@@ -1062,10 +1062,12 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 	CmdType operation = queryDesc->operation;
 	EState *estate = queryDesc->estate;
+	PlannedStmt	*pstmt = queryDesc->plannedstmt;
 
 	if (MtmIsEnabled())
 	{
-		if (operation == CMD_INSERT || operation == CMD_UPDATE || operation == CMD_DELETE)
+		if (operation == CMD_INSERT || operation == CMD_UPDATE ||
+			operation == CMD_DELETE || pstmt->hasModifyingCTE)
 		{
 			int i;
 			for (i = 0; i < estate->es_num_result_relations; i++) {
