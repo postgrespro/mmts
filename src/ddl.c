@@ -861,7 +861,9 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			if (!IsTransactionBlock())
 			{
 				skipCommand = true;
-				MtmGucSet(stmt, stmt_string);
+				/*
+				 * Catch GUC assignment after it will be performed, as it still may fail.
+				 */
 			}
 
 			break;
@@ -967,6 +969,16 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		standard_ProcessUtility(pstmt, queryString,
 									context, params, queryEnv,
 									dest, completionTag);
+	}
+
+	/* Catch GUC assignment */
+	if (nodeTag(parsetree) == T_VariableSetStmt)
+	{
+		VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
+		if (!IsTransactionBlock())
+		{
+			MtmGucSet(stmt, stmt_string);
+		}
 	}
 
 	/* Allow replication of functions operating on temporary tables.
