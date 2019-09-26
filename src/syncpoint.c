@@ -258,7 +258,7 @@ SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
 		mtm_log(ERROR, "Failed to save syncpoint");
 
 	/* restart_lsn is invalid for forwarded messages */
-	if (restart_lsn != InvalidXLogRecPtr)
+	if (restart_lsn != InvalidXLogRecPtr && trim_lsn != InvalidXLogRecPtr)
 		AdvanceRecoverySlot(node_id, trim_lsn);
 
 	/* Finish transaction */
