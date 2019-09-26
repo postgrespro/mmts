@@ -251,6 +251,10 @@ rollback;
 
 commit prepared 'y';
 
+begin;
+select 1/0;
+prepare transaction 'noprep';
+
 table twopc_test;
 table twopc_test2;
 

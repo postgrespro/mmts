@@ -483,6 +483,17 @@ MtmExplicitPrepare(char *gid)
 	int			n_messages;
 	int			i;
 
+	/*
+	 * GetTopTransactionId() will fail for aborted tx, but we still need to
+	 * finish it, so handle that manually.
+	 */
+	if (IsAbortedTransactionBlockState())
+	{
+		ret = PrepareTransactionBlock(gid);
+		Assert(!ret);
+		return false;
+	}
+
 	xid = GetTopTransactionId();
 	sprintf(stream, "xid" XID_FMT, xid);
 	dmq_stream_subscribe(stream);

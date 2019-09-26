@@ -349,6 +349,10 @@ commit prepared 'y';
 ERROR:  COMMIT PREPARED cannot run inside a transaction block
 rollback;
 commit prepared 'y';
+begin;
+select 1/0;
+ERROR:  division by zero
+prepare transaction 'noprep';
 table twopc_test;
  i 
 ---
