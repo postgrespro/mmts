@@ -342,24 +342,20 @@ static bool
 build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup)
 {
 	int			attoff;
-	Datum		indclassDatum;
-	Datum		indkeyDatum;
 	bool		isnull;
+	Datum		indclassDatum;
 	oidvector  *opclass;
-	int2vector  *indkey;
+	int2vector *indkey = &idxrel->rd_index->indkey;
 	bool		hasnulls = false;
+
+	Assert(RelationGetReplicaIndex(rel) == RelationGetRelid(idxrel));
 
 	indclassDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
 									Anum_pg_index_indclass, &isnull);
 	Assert(!isnull);
 	opclass = (oidvector *) DatumGetPointer(indclassDatum);
 
-	indkeyDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
-									Anum_pg_index_indkey, &isnull);
-	Assert(!isnull);
-	indkey = (int2vector *) DatumGetPointer(indkeyDatum);
-
-
+	/* Build scankey for every attribute in the index. */
 	for (attoff = 0; attoff < IndexRelationGetNumberOfKeyAttributes(idxrel); attoff++)
 	{
 		Oid			operator;
@@ -367,35 +363,38 @@ build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup
 		RegProcedure regop;
 		int			pkattno = attoff + 1;
 		int			mainattno = indkey->values[attoff];
-		Oid			atttype = attnumTypeId(rel, mainattno);
 		Oid			optype = get_opclass_input_type(opclass->values[attoff]);
 
+		/*
+		 * Load the operator info.  We need this to get the equality operator
+		 * function for the scan key.
+		 */
 		opfamily = get_opclass_family(opclass->values[attoff]);
 
 		operator = get_opfamily_member(opfamily, optype,
 									   optype,
 									   BTEqualStrategyNumber);
-
 		if (!OidIsValid(operator))
-			mtm_log(ERROR,
-				 "could not lookup equality operator for type %u, optype %u in opfamily %u",
-				 atttype, optype, opfamily);
+			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
+				 BTEqualStrategyNumber, optype, optype, opfamily);
 
 		regop = get_opcode(operator);
 
-		/* FIXME: convert type? */
+		/* Initialize the scankey. */
 		ScanKeyInit(&skey[attoff],
 					pkattno,
 					BTEqualStrategyNumber,
 					regop,
 					tup->values[mainattno - 1]);
 
+		/* Check for null value. */
 		if (tup->isnull[mainattno - 1])
 		{
 			hasnulls = true;
 			skey[attoff].sk_flags |= SK_ISNULL;
 		}
 	}
+
 	return hasnulls;
 }
 
@@ -742,7 +741,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 			case 'u': /* unchanged column */
 				tup->isnull[i] = true;
 				tup->changed[i] = false;
-				tup->values[i] = 0xdeadbeef; /* make bad usage more obvious */
+				tup->values[i] = NULL;
 				break;
 
 			case 'b': /* binary format */
@@ -1240,10 +1239,8 @@ process_remote_update(StringInfo s, Relation rel)
 			 action);
 
 	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(oldslot, tupDesc);
-	newslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(newslot, tupDesc);
+	oldslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
 
 	if (action == 'K')
 	{
