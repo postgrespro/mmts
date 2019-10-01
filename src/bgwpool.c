@@ -82,6 +82,7 @@ BgwShutdownHandler(SIGNAL_ARGS)
 {
 	int			save_errno = errno;
 
+	ProcDiePending = true;
 	InterruptPending = true;
 	QueryCancelPending = true;
 
@@ -124,7 +125,7 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 	MtmIsLogicalReceiver = true;
 
 	pqsignal(SIGINT, die);
-	pqsignal(SIGQUIT, BgwShutdownHandler);
+	pqsignal(SIGQUIT, die);
 	pqsignal(SIGTERM, BgwShutdownHandler);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
