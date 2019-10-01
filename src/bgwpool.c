@@ -68,7 +68,7 @@ BgwPoolStart(BgwPool* poolDesc, char *poolName, Oid db_id, Oid user_id)
 	ConditionVariableInit(&poolDesc->syncpoint_cv);
 	ConditionVariableInit(&poolDesc->available_cv);
 	ConditionVariableInit(&poolDesc->overflow_cv);
-	poolDesc->bgwhandles = (BackgroundWorkerHandle **) palloc(MtmMaxWorkers *
+	poolDesc->bgwhandles = (BackgroundWorkerHandle **) palloc0(MtmMaxWorkers *
 											sizeof(BackgroundWorkerHandle *));
 	LWLockInitialize(&poolDesc->lock, LWLockNewTrancheId());
 	LWLockRegisterTranche(poolDesc->lock.tranche, "BGWPOOL_LWLOCK");
@@ -395,7 +395,14 @@ BgwPoolShutdown(BgwPool* poolDesc)
 			GetBackgroundWorkerPid(poolDesc->bgwhandles[i], &pid) != BGWH_STARTED)
 			continue;
 		WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
+		pfree(poolDesc->bgwhandles[i]);
 	}
+
+	/*
+	 * Clear all handlers because at the next iteration of the receiver process
+	 * will launch new pool of workers.
+	 */
+	memset(poolDesc->bgwhandles, 0, MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
 	elog(LOG, "Shutdown of the receiver workers pool. Pool name = %s",
 															poolDesc->poolName);
 }
@@ -423,6 +430,7 @@ BgwPoolCancel(BgwPool* poolDesc)
 		Assert(pid > 0);
 		kill(pid, SIGINT);
 		WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
+		pfree(poolDesc->bgwhandles[i]);
 	}
 
 	/* The pool shared structures can be reused and we need to clean data */

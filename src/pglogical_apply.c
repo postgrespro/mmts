@@ -738,9 +738,8 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 		const char *data;
 		int			len;
 
-		if (att->atttypid == InvalidOid) { 
+		if (att->atttypid == InvalidOid)
 			continue;
-		}
 
 		kind = pq_getmsgbyte(s);
 
@@ -748,12 +747,12 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 		{
 			case 'n': /* null */
 				/* already marked as null */
-				tup->values[i] = 0xdeadbeef;
+				tup->values[i] = PointerGetDatum(NULL);
 				break;
 			case 'u': /* unchanged column */
 				tup->isnull[i] = true;
 				tup->changed[i] = false;
-				tup->values[i] = NULL;
+				tup->values[i] = PointerGetDatum(NULL);
 				break;
 
 			case 'b': /* binary format */
