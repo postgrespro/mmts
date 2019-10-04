@@ -46,8 +46,10 @@ BgwPoolStart(BgwPool* poolDesc, char *poolName, Oid db_id, Oid user_id)
 
 	/* ToDo: remember a segment creation failure (and NULL) case. */
 	seg = dsm_create(size, 0);
-	Assert(seg != NULL);
-	dsm_pin_segment(seg);
+	if (seg == NULL)
+		ereport(FATAL,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				errmsg("BgwPool can't create an DSM segment")));
 
 	poolDesc->dsmhandler = dsm_segment_handle(seg);
 	queue = (char *) dsm_segment_address(seg);
