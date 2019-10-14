@@ -41,10 +41,15 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         # subprocess.check_call(['docker-compose', 'logs'])
 
         # Wait for all nodes to become online
-        [ cls.awaitOnline(dsn) for dsn in cls.dsns ]
+        try:
+            [ cls.awaitOnline(dsn) for dsn in cls.dsns ]
 
-        cls.client = MtmClient(cls.dsns, n_accounts=1000)
-        cls.client.bgrun()
+            cls.client = MtmClient(cls.dsns, n_accounts=1000)
+            cls.client.bgrun()
+        except Exception as e:
+            # collect logs even if fail in setupClass
+            self.collectLogs()
+            raise e
 
     @classmethod
     def tearDownClass(cls):
@@ -52,10 +57,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         cls.client.stop()
 
         time.sleep(TEST_STOP_DELAY)
-        # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
-        subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
-        subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
-        subprocess.run('docker logs node3 &> mmts_node3.log', shell=True)
+        self.collectLogs()
 
         if not cls.client.is_data_identic():
             raise AssertionError('Different data on nodes')
@@ -65,6 +67,12 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
         # XXX: check nodes data identity here
         subprocess.check_call(['docker-compose', 'down'])
+
+    def collectLogs(self):
+        # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
+        subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
+        subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
+        subprocess.run('docker logs node3 &> mmts_node3.log', shell=True)
 
     def setUp(self):
         warnings.simplefilter("ignore", ResourceWarning)
