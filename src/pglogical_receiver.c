@@ -415,6 +415,7 @@ MtmEndSession(int nodeId, bool unlock)
 	}
 }
 
+/* On failure bails out with ERROR. */
 static PGconn *
 receiver_connect(char *conninfo)
 {
@@ -427,11 +428,9 @@ receiver_connect(char *conninfo)
 	status = PQstatus(conn);
 	if (status != CONNECTION_OK)
 	{
-		// XXX: make this error
-		mtm_log(WARNING, "Could not establish connection to '%s': %s",
-				conninfo, PQerrorMessage(conn));
+		char *err = PQerrorMessage(conn);
 		PQfinish(conn);
-		return NULL;
+		mtm_log(ERROR, "Could not establish connection to '%s': %s", conninfo, err);
 	}
 
 	return conn;
@@ -549,12 +548,13 @@ pglogical_receiver_main(Datum main_arg)
 			 receiver_mtm_cfg->my_node_id, nodeId);
 	BgwPoolStart(&Mtm->pools[nodeId-1], worker_proc, db_id, user_id);
 
-	/* This is main loop of logical replication.
-	 * In case of errors we will try to reestablish connection.
-	 * Also reconnect is forced when node is switch to recovery mode
-	 * Leave the cycle in the case of Postmaster die.
+	/*
+	 * This is the main loop of logical replication.
+	 * In case of errors we simply cleanup and die, bgw will be restarted.
+	 * Also reconnect is forced when node is switch to recovery mode.
+	 * Finally, receiver customarily exits on Postmaster death.
 	 */
-	for(;;)
+	PG_TRY();
 	{
 		int			count,
 					counterpart_disable_count;
@@ -571,8 +571,8 @@ pglogical_receiver_main(Datum main_arg)
 
 		/* Acquire recovery rep slot, so we can advance it without search */
 		ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
-									nodeId),
-							true);
+										nodeId),
+							   true);
 
 		LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 		Mtm->peers[nodeId - 1].receiver_pid = MyProcPid;
@@ -584,8 +584,6 @@ pglogical_receiver_main(Datum main_arg)
 
 		/* Establish connection to remote server */
 		conn = receiver_connect(MtmNodeById(receiver_mtm_cfg, nodeId)->conninfo);
-		if (conn ==  NULL)
-			goto OnError;
 
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
@@ -595,7 +593,7 @@ pglogical_receiver_main(Datum main_arg)
 		 * is guaranteed to be uniq on this node.
 		 */
 		receiver_ctx.session_id = ((uint64) receiver_mtm_cfg->my_node_id << 56)
-								  + MtmGetIncreasingTimestamp();
+			+ MtmGetIncreasingTimestamp();
 
 		receiver_ctx.is_recovery = mode == REPLMODE_RECOVERY;
 		receiver_ctx.parallel_allowed = false;
@@ -640,7 +638,7 @@ pglogical_receiver_main(Datum main_arg)
 				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
 				{
 					appendStringInfo(message, "%d: " LSN_FMT "/" LSN_FMT ", ",
-								 i + 1, spvector[i].origin_lsn, spvector[i].local_lsn);
+									 i + 1, spvector[i].origin_lsn, spvector[i].local_lsn);
 				}
 			}
 			appendStringInfo(message, "}");
@@ -651,12 +649,12 @@ pglogical_receiver_main(Datum main_arg)
 		Assert(filter_map && spvector);
 
 		appendPQExpBuffer(query, "START_REPLICATION SLOT \"%s\" LOGICAL %x/%x ("
-									"\"startup_params_format\" '1',"
-									"\"max_proto_version\" '1',"
-									"\"min_proto_version\" '1',"
-									"\"forward_changesets\" '1',"
-									"\"mtm_replication_mode\" '%s',"
-									"\"mtm_session_id\" '"INT64_FORMAT"')",
+						  "\"startup_params_format\" '1',"
+						  "\"max_proto_version\" '1',"
+						  "\"min_proto_version\" '1',"
+						  "\"forward_changesets\" '1',"
+						  "\"mtm_replication_mode\" '%s',"
+						  "\"mtm_session_id\" '"INT64_FORMAT"')",
 						  psprintf(MULTIMASTER_SLOT_PATTERN, receiver_mtm_cfg->my_node_id),
 						  (uint32) (remote_start >> 32),
 						  (uint32) remote_start,
@@ -666,13 +664,12 @@ pglogical_receiver_main(Datum main_arg)
 		res = PQexec(conn, query->data);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
-			elog(WARNING, "Can't find slot on node%d. Shutting down receiver. %s", nodeId, PQresultErrorMessage(res));
-			goto OnError;
+			elog(ERROR, "Can't find slot on node%d. Shutting down receiver. %s", nodeId, PQresultErrorMessage(res));
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);
 
-		for(;;)
+		for(;;) /* main loop, jump out only with ERROR */
 		{
 			int rc, hdr_len;
 
@@ -696,7 +693,7 @@ pglogical_receiver_main(Datum main_arg)
 				/* Process config file */
 				ProcessConfigFile(PGC_SIGHUP);
 				got_sighup = false;
-				ereport(LOG, (MTM_ERRMSG("%s: processed SIGHUP", worker_proc)));
+				ereport(ERROR, (MTM_ERRMSG("%s: processed SIGHUP", worker_proc)));
 			}
 
 			/* Emergency bailout if postmaster has died */
@@ -709,16 +706,13 @@ pglogical_receiver_main(Datum main_arg)
 			CHECK_FOR_INTERRUPTS();
 			AcceptInvalidationMessages();
 
-			if (count != MtmGetRecoveryCount())
-			{
-				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
-				goto OnError;
+			if (count != MtmGetRecoveryCount()) {
+				ereport(ERROR, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
 			}
 
 			if (counterpart_disable_count != MtmGetNodeDisableCount(nodeId))
 			{
-				ereport(LOG, (MTM_ERRMSG("%s: restart WAL receiver because counterpart was disabled", worker_proc)));
-				goto OnError;
+				ereport(ERROR, (MTM_ERRMSG("%s: restart WAL receiver because counterpart was disabled", worker_proc)));
 			}
 
 			/*
@@ -766,9 +760,8 @@ pglogical_receiver_main(Datum main_arg)
 					pos += 8;	/* skip sendTime */
 					if (rc < pos + 1)
 					{
-						ereport(LOG, (MTM_ERRMSG("%s: streaming header too small: %d",
-											 worker_proc, rc)));
-						goto OnError;
+						ereport(ERROR, (MTM_ERRMSG("%s: streaming header too small: %d",
+												 worker_proc, rc)));
 					}
 					replyRequested = copybuf[pos];
 
@@ -794,9 +787,8 @@ pglogical_receiver_main(Datum main_arg)
 				}
 				else if (copybuf[0] != 'w')
 				{
-					ereport(LOG, (MTM_ERRMSG("%s: Incorrect streaming header",
-										 worker_proc)));
-					goto OnError;
+					ereport(ERROR, (MTM_ERRMSG("%s: Incorrect streaming header",
+											   worker_proc)));
 				}
 
 				/* Now fetch the data */
@@ -933,18 +925,15 @@ pglogical_receiver_main(Datum main_arg)
 
 				else if (r < 0)
 				{
-					ereport(LOG, (MTM_ERRMSG("%s: Incorrect status received.",
-										 worker_proc)));
-
-					goto OnError;
+					ereport(ERROR, (MTM_ERRMSG("%s: Incorrect status received.",
+											   worker_proc)));
 				}
 
 				/* Else there is actually data on the socket */
 				if (PQconsumeInput(conn) == 0)
 				{
-					ereport(LOG, (MTM_ERRMSG("%s: Data remaining on the socket.",
-										 worker_proc)));
-					goto OnError;
+					ereport(ERROR, (MTM_ERRMSG("%s: Data remaining on the socket.",
+											   worker_proc)));
 				}
 				continue;
 			}
@@ -952,30 +941,24 @@ pglogical_receiver_main(Datum main_arg)
 			/* End of copy stream */
 			if (rc == -1)
 			{
-				ereport(LOG, (MTM_ERRMSG("%s: COPY Stream has abruptly ended...",
-									 worker_proc)));
-				goto OnError;
+				ereport(ERROR, (MTM_ERRMSG("%s: COPY Stream has abruptly ended...",
+										   worker_proc)));
 			}
 
 			/* Failure when reading copy stream, leave */
 			if (rc == -2)
 			{
-				ereport(LOG, (MTM_ERRMSG("%s: Failure while receiving changes...",
-									 worker_proc)));
-				goto OnError;
+				ereport(ERROR, (MTM_ERRMSG("%s: Failure while receiving changes...",
+										   worker_proc)));
 			}
 		}
-		Assert(false);
-
-	// XXX: catch and re-throw here. Then we just will restart
-	OnError:
-		if (spvector)
-			pfree(spvector);
-		hash_destroy(filter_map);
-		ByteBufferReset(&buf);
+	}
+	PG_CATCH();
+	{
 		PQfinish(conn);
 		ReplicationSlotRelease();
 
+		/* cleanup shared state... */
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_ERROR, false);
 
 		/*
@@ -985,11 +968,15 @@ pglogical_receiver_main(Datum main_arg)
 		 */
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
-	}
 
-	/* Never reach that point */
-	proc_exit(2);
+		/* and die */
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	Assert(false);
 }
+
 
 BackgroundWorkerHandle *
 MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)

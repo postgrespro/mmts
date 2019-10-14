@@ -1628,6 +1628,21 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		mtm_log(MtmApplyError, "Receiver: abort transaction " XID_FMT,
 				current_gtid.xid);
 
+		/*
+		 * If we are in recovery, there is no excuse for refusing the
+		 * transaction. Die and restart the recovery then.
+		 *
+		 * This should never happen under normal circumstances. Yeah, you
+		 * might imagine something like e.g. evil user making local xact which
+		 * makes our xact violating constraint or out of disk space error, but
+		 * in testing this most probably means a bug, so put an assert.
+		 */
+		if (receiver_ctx->is_recovery)
+		{
+			Assert(false);
+			PG_RE_THROW();
+		}
+
 		/* handle only prepare errors here */
 		if (TransactionIdIsValid(current_gtid.my_xid))
 		{
