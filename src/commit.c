@@ -371,7 +371,7 @@ MtmTwoPhaseCommit()
 
 		dmq_stream_subscribe(gid);
 
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, messages, &n_messages);
 
@@ -564,7 +564,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		participants = MtmGetEnabledNodeMask() &
 						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
 
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, messages, &n_messages);
 

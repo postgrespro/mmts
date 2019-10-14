@@ -957,6 +957,8 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	{
 		case PGLOGICAL_PRECOMMIT_PREPARED:
 		{
+			bool precommitted;
+
 			Assert(!query_cancel_allowed);
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MtmBeginSession(origin_node);
@@ -964,17 +966,18 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			if (!IsTransactionState())
 			{
 				StartTransactionCommand();
-				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+				precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
 				CommitTransactionCommand();
 
 				MemoryContextSwitchTo(MtmApplyContext);
 			}
 			else
-				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+				precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
 
-			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+			if (precommitted)
+				mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
-			if (receiver_ctx->parallel_allowed)
+			if (precommitted && receiver_ctx->parallel_allowed)
 			{
 				mtm_send_gid_reply(gid, origin_node, MSG_PRECOMMITTED);
 			}
@@ -1047,7 +1050,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
-			FinishPreparedTransaction(gid, true, false);
+			FinishPreparedTransaction(gid, true, true);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();
 			MemoryContextSwitchTo(MtmApplyContext);
