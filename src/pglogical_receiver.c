@@ -664,7 +664,7 @@ pglogical_receiver_main(Datum main_arg)
 		res = PQexec(conn, query->data);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
-			elog(ERROR, "Can't find slot on node%d. Shutting down receiver. %s", nodeId, PQresultErrorMessage(res));
+			elog(ERROR, "START_REPLICATION_SLOT to node%d failed, shutting down receiver: %s", nodeId, PQresultErrorMessage(res));
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);

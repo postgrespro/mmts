@@ -731,10 +731,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	if (!BIT_CHECK(MtmGetConnectedNodeMask(), MtmReplicationNodeId - 1))
 	{
-		mtm_log(LOG, "Walsender to node %d exits as dmq connection is not yet fully established", MtmReplicationNodeId);
-
-		proc_exit(0);
-		abort();					/* keep the compiler quiet */
+		mtm_log(ERROR, "Walsender to node %d exits as dmq connection is not yet fully established", MtmReplicationNodeId);
 	}
 
 	foreach(param, args->in_params)
