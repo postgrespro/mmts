@@ -48,7 +48,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             cls.client.bgrun()
         except Exception as e:
             # collect logs even if fail in setupClass
-            self.collectLogs()
+            cls.collectLogs()
             raise e
 
     @classmethod
@@ -57,7 +57,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         cls.client.stop()
 
         time.sleep(TEST_STOP_DELAY)
-        self.collectLogs()
+        cls.collectLogs()
 
         if not cls.client.is_data_identic():
             raise AssertionError('Different data on nodes')
@@ -68,7 +68,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         # XXX: check nodes data identity here
         subprocess.check_call(['docker-compose', 'down'])
 
-    def collectLogs(self):
+    @classmethod
+    def collectLogs(cls):
         # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
         subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
         subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
