@@ -1193,7 +1193,7 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART; /* or we can start several receivers */
+	worker.bgw_restart_time = 1;
 	worker.bgw_main_arg = Int32GetDatum(0);
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
@@ -1658,10 +1658,13 @@ MtmMonitor(Datum arg)
 	/* Launch resolver */
 	Assert(resolver == NULL);
 	resolver = ResolverStart(db_id, user_id);
+	mtm_log(MtmStateMessage, "MtmMonitor started");
 
 	for (;;)
 	{
 		int rc;
+		int i;
+		pid_t pid;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1710,6 +1713,29 @@ MtmMonitor(Datum arg)
 			}
 
 			config_valid = true;
+		}
+
+		/*
+		 * Check and restart resolver and receivers if its stopped by any error.
+		 */
+		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
+		{
+			mtm_log(MtmStateMessage, "Restart resolver");
+			resolver = ResolverStart(db_id, user_id);
+		}
+
+		for (i = 0; i < MTM_MAX_NODES; i++)
+		{
+			if (receivers[i] == NULL)
+				continue;
+
+			if (GetBackgroundWorkerPid(receivers[i], &pid) == BGWH_STOPPED)
+			{
+				mtm_log(MtmStateMessage, "Restart receiver for the node%d", i + 1);
+				/* Receiver has finished by some kind of mistake. Start it. */
+				receivers[i] = MtmStartReceiver(i+1, MyDatabaseId,
+														GetUserId(), MyProcPid);
+			}
 		}
 
 		// XXX: add tx start/stop to clear mcxt?

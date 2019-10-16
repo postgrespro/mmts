@@ -547,6 +547,7 @@ pglogical_receiver_main(Datum main_arg)
 	snprintf(worker_proc, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d",
 			 receiver_mtm_cfg->my_node_id, nodeId);
 	BgwPoolStart(&Mtm->pools[nodeId-1], worker_proc, db_id, user_id);
+	mtm_log(MtmReceiverStart, "Receiver %s has started.", worker_proc);
 
 	/*
 	 * This is the main loop of logical replication.
@@ -968,7 +969,7 @@ pglogical_receiver_main(Datum main_arg)
 		 */
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
-
+		mtm_log(MtmApplyError, "Receiver %s catch an error and will die", worker_proc);
 		/* and die */
 		PG_RE_THROW();
 	}
@@ -989,7 +990,7 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
+	worker.bgw_restart_time = BGW_NEVER_RESTART;
 	worker.bgw_main_arg = Int32GetDatum(nodeId);
 	worker.bgw_notify_pid = monitor_pid;
 

@@ -135,7 +135,7 @@ ResolverStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
+	worker.bgw_restart_time = BGW_NEVER_RESTART;
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
 	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
@@ -561,6 +561,7 @@ ResolverMain(Datum main_arg)
 	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
 	resolver_state->pid = MyProcPid;
 	LWLockRelease(resolver_state->lock);
+	mtm_log(ResolverTraceTxMsg, "Resolver started");
 
 	for(;;)
 	{
