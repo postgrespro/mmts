@@ -181,22 +181,6 @@ BgwPoolMainLoop(BgwPool* poolDesc)
 			continue;
 		}
 
-		/*
-		 * If we are in a join state, we need to apply all the pending data and
-		 * go into sleep mode until the end of the join operation.
-		 */
-		if (poolDesc->n_holders > 0 && poolDesc->pending == 0)
-		{
-			ConditionVariablePrepareToSleep(&Mtm->receiver_barrier_cv);
-			LWLockRelease(&poolDesc->lock);
-
-			if (!ProcDiePending)
-				ConditionVariableSleep(&Mtm->receiver_barrier_cv, PG_WAIT_EXTENSION);
-
-			ConditionVariableCancelSleep();
-			continue;
-		}
-
 		size = *(int *) &queue[poolDesc->head];
 		Assert(size < poolDesc->size);
 		work = palloc(size);
@@ -304,7 +288,11 @@ BgwPoolExecute(BgwPool* poolDesc, void* work, int size, MtmReceiverContext *ctx)
  
 	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
 
-	/* Wait for end of the node joining operation */
+	/*
+	 * If we are in a join state, we need to apply all the pending data, wait
+	 * for all active workers and go into sleep mode until the end of the join
+	 * operation.
+	 */
 	while (poolDesc->n_holders > 0 && !ProcDiePending)
 	{
 		ConditionVariablePrepareToSleep(&Mtm->receiver_barrier_cv);

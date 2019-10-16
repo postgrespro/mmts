@@ -499,13 +499,13 @@ MtmAllApplyWorkersFinished()
 	{
 		volatile int ntasks;
 
-		if (Mtm->pools[i].nWorkers <= 0)
+		LWLockAcquire(&Mtm->pools[i].lock, LW_SHARED);
+		if (Mtm->pools[i].nWorkers <= 0 || i == Mtm->my_node_id - 1)
+		{
+			LWLockRelease(&Mtm->pools[i].lock);
 			continue;
+		}
 
-		if (i == Mtm->my_node_id - 1)
-			continue;
-
-		LWLockAcquire(&Mtm->pools[i].lock, LW_EXCLUSIVE);
 		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
 		LWLockRelease(&Mtm->pools[i].lock);
 
