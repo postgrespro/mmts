@@ -867,6 +867,10 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * XXX: In my opinion this interface need to be revised:
+ * manually specified node_id and end_lsn are a source of problems.
+ */
 Datum
 mtm_join_node(PG_FUNCTION_ARGS)
 {
@@ -881,6 +885,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	MtmConfig  *cfg = MtmLoadConfig();
 	XLogRecPtr	curr_lsn;
 	int			i;
+	MtmNode *new_node;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
@@ -895,7 +900,10 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	mtm_nodes = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
 
 	/* connect to a new node */
-	conninfo = MtmNodeById(cfg, new_node_id)->conninfo;
+	new_node = MtmNodeById(cfg, new_node_id);
+	if (new_node == NULL)
+		mtm_log(ERROR, "Node %d not found", new_node_id);
+	conninfo = new_node->conninfo;
 	conn = PQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
