@@ -491,7 +491,7 @@ pglogical_receiver_main(Datum main_arg)
 	int					nodeId = DatumGetInt32(main_arg);
 	/* Variables for replication connection */
 	PQExpBuffer			query;
-	PGconn				*conn;
+	PGconn				*conn = NULL;
 	PGresult			*res;
 	MtmReplicationMode	mode;
 	MtmReceiverContext	receiver_ctx = {nodeId, false, false, 0};
