@@ -236,7 +236,7 @@ CREATE FUNCTION mtm.node_bgwpool_stat() RETURNS bgwpool_result
 AS 'MODULE_PATHNAME','mtm_get_bgwpool_stat'
 LANGUAGE C;
 
-CREATE VIEW mtm_stat_bgwpool AS
+CREATE VIEW mtm.stat_bgwpool AS
 	SELECT	nWorkers,
 			Active,
 			Pending,
