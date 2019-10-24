@@ -3,7 +3,7 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 3;
+use Test::More tests => 4;
 
 my $cluster = new Cluster(3);
 $cluster->init();
@@ -122,6 +122,26 @@ kill -9, $pid0;
 
 $cluster->await_nodes( (0,1,2) );
 is($cluster->is_data_identic( (0,1,2) ), 1, "check consistency after crash");
+
+
+# ##############################################################################
+#
+# [PGPRO-3047] Test ALTER DOMAIN .. CONSTRAINT .. NOT VALID
+#
+# ##############################################################################
+
+$hash0 = $cluster->safe_psql(0, "
+	CREATE DOMAIN things AS INT;
+	CREATE TABLE thethings (stuff things);
+	INSERT INTO thethings (stuff) VALUES (55);
+	ALTER DOMAIN things ADD CONSTRAINT meow CHECK (VALUE < 11) NOT VALID;
+	UPDATE thethings SET stuff = 10;
+	ALTER DOMAIN things VALIDATE CONSTRAINT meow;
+");
+my $result = $cluster->safe_psql(0, "SELECT * FROM thethings");
+note("Value in stuff column of thethings table is $result");
+is( $result , 10, "Check that update not aborted by violation of constraint on old tuple value");
+note("THI: $result");
 
 $cluster->stop();
 
