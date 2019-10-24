@@ -486,6 +486,8 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	gtid->my_xid = GetCurrentTransactionId();
 	MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
 
+	suppress_internal_consistency_checks = true;
+
 	// AcceptInvalidationMessages();
 	// if (!receiver_mtm_cfg_valid)
 	// {
@@ -768,32 +770,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 				else
 					tup->values[i] = PointerGetDatum(data);
 				break;
-			case 's': /* send/recv format */
-				{
-					Oid typreceive;
-					Oid typioparam;
-					StringInfoData buf;
 
-					tup->isnull[i] = false;
-					len = pq_getmsgint(s, 4); /* read length */
-
-					getTypeBinaryInputInfo(att->atttypid,
-										   &typreceive, &typioparam);
-
-					/* create StringInfo pointing into the bigger buffer */
-					initStringInfo(&buf);
-					/* and data */
-					buf.data = (char *) pq_getmsgbytes(s, len);
-					buf.len = len;
-					tup->values[i] = OidReceiveFunctionCall(
-						typreceive, &buf, typioparam, att->atttypmod);
-
-					if (buf.len != buf.cursor)
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-								 MTM_ERRMSG("incorrect binary data format")));
-					break;
-				}
 			case 't': /* text format */
 				{
 					Oid typinput;
@@ -838,7 +815,8 @@ read_rel(StringInfo s, LOCKMODE mode)
 	MemoryContext old_context;
 
 	local_relid = pglogical_relid_map_get(remote_relid);
-	if (local_relid == InvalidOid) { 
+	if (local_relid == InvalidOid)
+	{
 		rv = makeNode(RangeVar);
 
 		nspnamelen = pq_getmsgbyte(s);
@@ -852,7 +830,9 @@ read_rel(StringInfo s, LOCKMODE mode)
 		pglogical_relid_map_put(remote_relid, local_relid);
 		MemoryContextSwitchTo(old_context);
 		return heap_open(local_relid, NoLock);
-	} else { 
+	}
+	else
+	{
 		nspnamelen = pq_getmsgbyte(s);
 		s->cursor += nspnamelen;
 		relnamelen = pq_getmsgbyte(s);
@@ -953,6 +933,8 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 
 	replorigin_session_origin_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
 	Assert(replorigin_session_origin == InvalidRepOriginId);
+
+	suppress_internal_consistency_checks = false;
 
 	switch (event)
 	{

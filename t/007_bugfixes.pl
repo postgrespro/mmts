@@ -8,31 +8,9 @@ use Test::More tests => 4;
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();
+$cluster->create_mm();
 
-foreach (0..$#{$cluster->{nodes}})
-{
-    my $node = $cluster->{nodes}->[$_];
-    $node->{dbname} = 'postgres';
-}
-
-foreach (0..$#{$cluster->{nodes}})
-{
-    my $node = $cluster->{nodes}->[$_];
-
-    note($cluster->connstr($_));
-
-    $cluster->safe_psql($_, qq{
-        create extension multimaster;
-        insert into mtm.cluster_nodes values
-            (2, \$\$@{[ $cluster->connstr(0) ]}\$\$, '@{[ $_ == 0 ? 't' : 'f' ]}', 'f'),
-            (4, \$\$@{[ $cluster->connstr(1) ]}\$\$, '@{[ $_ == 1 ? 't' : 'f' ]}', 'f'),
-            (5, \$\$@{[ $cluster->connstr(2) ]}\$\$, '@{[ $_ == 2 ? 't' : 'f' ]}', 'f');
-    });
-}
-
-$cluster->await_nodes( (0..$#{$cluster->{nodes}}) );
-
-$cluster->safe_psql($_, q{
+$cluster->safe_psql(0, q{
 	CREATE EXTENSION pg_pathman;
 	CREATE SCHEMA test_update_node;
 	SET pg_pathman.enable_partitionrouter = ON;
@@ -138,10 +116,40 @@ $hash0 = $cluster->safe_psql(0, "
 	UPDATE thethings SET stuff = 10;
 	ALTER DOMAIN things VALIDATE CONSTRAINT meow;
 ");
-my $result = $cluster->safe_psql(0, "SELECT * FROM thethings");
-note("Value in stuff column of thethings table is $result");
-is( $result , 10, "Check that update not aborted by violation of constraint on old tuple value");
-note("THI: $result");
+my $result0 = $cluster->safe_psql(0, "SELECT * FROM thethings");
+my $result1 = $cluster->safe_psql(1, "SELECT * FROM thethings");
+my $result2 = $cluster->safe_psql(2, "SELECT * FROM thethings");
+note("Value in the stuff column of thethings table is $result0 at the node1 and match to corresponding values from another nodes: 2 - $result1 and 3 - $result2 ");
+is( (($result0 eq 10) and ($result0 eq $result1) and ($result1 eq $result2)), 1,
+	"Check that update not aborted by violation of constraint on old tuple value");
+
+# ##############################################################################
+#
+# [PGPRO-3047] Check for problems with different OIDs on multimaster nodes
+# during logical replication of tuples contained attribute with domain over
+# arrays of composite.
+#
+# ##############################################################################
+
+# Check that OIDs are different.
+$result0 = $cluster->safe_psql(0,
+					"select oid from pg_class where relname like 'thethings';");
+$result1 = $cluster->safe_psql(1,
+					"select oid from pg_class where relname like 'thethings';");
+$result2 = $cluster->safe_psql(2,
+					"select oid from pg_class where relname like 'thethings';");
+note("OIDS of the thethings relation: node1 - $result0, node2 - $result1, node3 - $result2");
+is( ( ($result0 ne $result1) and ($result0 ne $result2) and ($result1 ne $result2) ), 1,
+	"Check that oid of the thethings relation are different on each node");
+
+# Do the test. Insertion of array type must be passed successfully.
+# Source: regression test domain.sql
+$cluster->safe_psql(0, "
+	CREATE TYPE comptype AS (r float8, i float8);
+	CREATE domain dcomptypea AS comptype[];
+	CREATE table dcomptable (d1 dcomptypea UNIQUE);
+	INSERT INTO dcomptable VALUES (array[row(1,2)]::dcomptypea);
+");
 
 $cluster->stop();
 
