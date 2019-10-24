@@ -11,6 +11,7 @@
 
 #include "postgres.h"
 #include "access/twophase.h"
+#include "access/xact.h"
 #include "access/transam.h"
 #include "storage/proc.h"
 #include "storage/spin.h"
@@ -136,6 +137,9 @@ MtmBeginTransaction()
 {
 	MtmNodeStatus	node_status;
 
+	/* Set this on tx start, to avoid resetting in error handler */
+	AllowTempIn2PC = false;
+
 	// XXX: clean MtmTx on commit and check on begin that it is clean.
 	// That should unveil probable issues with subxacts.
 
@@ -170,8 +174,7 @@ MtmBeginTransaction()
 	}
 
 	/* Reset MtmTx */
-	MtmTx.contains_temp_ddl = false;
-	MtmTx.contains_persistent_ddl = false;
+	MtmTx.contains_ddl = false;
 	MtmTx.contains_dml = false;
 	MtmTx.distributed = true;
 
@@ -263,14 +266,11 @@ MtmTwoPhaseCommit()
 	int			n_messages;
 	int			i;
 
-	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
+	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
 
 	if (!MtmTx.distributed)
 		return false;
-
-	if (MtmTx.contains_temp_ddl)
-		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 
 	if (!IsTransactionBlock())
 	{
@@ -338,6 +338,7 @@ MtmTwoPhaseCommit()
 			return true;
 		}
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
+		AllowTempIn2PC = true;
 		CommitTransactionCommand();
 
 		gather(participants, messages, &n_messages);

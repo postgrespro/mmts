@@ -149,6 +149,10 @@ CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean
 AS 'MODULE_PATHNAME','mtm_check_deadlock'
 LANGUAGE C;
 
+CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void
+AS 'MODULE_PATHNAME','mtm_set_temp_schema'
+LANGUAGE C;
+
 CREATE TABLE mtm.local_tables(
     rel_schema name,
     rel_name name,
@@ -205,7 +209,7 @@ BEGIN
             seq.oid as oid,
             seq.relname as name
         FROM pg_namespace ns, pg_class seq
-        WHERE seq.relkind = 'S' and seq.relnamespace = ns.oid
+        WHERE seq.relkind = 'S' and seq.relnamespace = ns.oid and seq.relpersistence != 't'
     LOOP
             EXECUTE 'select * from ' || seq_class.seqname INTO seq_rel;
             EXECUTE 'select * from pg_sequence where seqrelid = ' || seq_class.oid INTO seq_tuple;

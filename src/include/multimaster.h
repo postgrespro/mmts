@@ -95,8 +95,7 @@ typedef struct
 
 typedef struct
 {
-	bool		contains_temp_ddl;
-	bool		contains_persistent_ddl;
+	bool		contains_ddl;
 	bool		contains_dml;
 	bool		distributed;
 } MtmCurrentTrans;

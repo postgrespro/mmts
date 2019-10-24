@@ -21,6 +21,7 @@
 
 #include "executor/spi.h"
 #include "commands/vacuum.h"
+#include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
@@ -995,6 +996,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		case PGLOGICAL_PREPARE:
 		{
 			bool res;
+			ListCell   *cur_item, *prev_item;
 			TransactionId xid = GetCurrentTransactionIdIfAny();
 
 			Assert(IsTransactionState() && TransactionIdIsValid(xid));
@@ -1013,6 +1015,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			res = PrepareTransactionBlock(gid);
 			mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid="XID_FMT")", gid, xid);
 
+			AllowTempIn2PC = true;
 			CommitTransactionCommand();
 			MemoryContextSwitchTo(MtmApplyContext);
 
@@ -1034,6 +1037,29 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			current_gtid->xid = InvalidTransactionId;
 			current_gtid->my_xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
+
+			/*
+			 * Reset on_commit_actions.
+			 *
+			 * Temp schema is shared between pool workers so we can try to
+			 * truncate tables that were delete by other workers, but still
+			 * exist is pg_on_commit_actions which is static. So clean it up:
+			 * as sata is not replicated for temp tables there is nothing to
+			 * delete anyway.
+			 */
+			prev_item = NULL;
+			cur_item = list_head(pg_on_commit_actions);
+			while (cur_item != NULL)
+			{
+				void *oc = (void *) lfirst(cur_item);
+				pg_on_commit_actions = list_delete_cell(pg_on_commit_actions, cur_item, prev_item);
+				pfree(oc);
+				if (prev_item)
+					cur_item = lnext(prev_item);
+				else
+					cur_item = list_head(pg_on_commit_actions);
+			}
+			Assert(pg_on_commit_actions == NIL);
 
 			MtmEndSession(origin_node, true);
 
