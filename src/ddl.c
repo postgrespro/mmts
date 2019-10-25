@@ -30,6 +30,7 @@
 #include "utils/lsyscache.h"
 #include "catalog/indexing.h"
 #include "commands/tablespace.h"
+#include "commands/typecmds.h"
 #include "parser/parse_utilcmd.h"
 #include "commands/defrem.h"
 #include "utils/regproc.h"
@@ -663,6 +664,15 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 				break;
 			}
 
+			case T_AlterEnumStmt:
+			{
+				AlterEnumStmt *stmt = (AlterEnumStmt *) parsetree;
+				Assert(MtmCapturedDDL == NULL);
+				MtmCapturedDDL = (Node *) copyObject(stmt);
+				captured = true;
+				break;
+			}
+
 			case T_DropStmt:
 			{
 				DropStmt *stmt = (DropStmt *) parsetree;
@@ -1187,6 +1197,10 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 			case T_DropTableSpaceStmt:
 				DropTableSpace((DropTableSpaceStmt *) MtmCapturedDDL);
+				break;
+
+			case T_AlterEnumStmt:
+				AlterEnum((AlterEnumStmt *) MtmCapturedDDL, true);
 				break;
 
 			default:
