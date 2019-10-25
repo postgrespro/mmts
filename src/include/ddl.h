@@ -12,6 +12,7 @@
 #ifndef DML_H
 #define DML_H
 
+#include "fmgr.h"
 #include "utils/relcache.h"
 
 /* GUCs */
@@ -20,6 +21,8 @@ extern char	   *MtmRemoteFunctionsList;
 extern bool		MtmRemoteFunctionsUpdating;
 extern bool		MtmVolksWagenMode;
 extern bool		MtmIgnoreTablesWithoutPk;
+
+extern fmgr_hook_type prev_fmgr_hook;
 
 extern void MtmDDLReplicationInit(void);
 extern void MtmDDLReplicationShmemStartup(void);
@@ -30,5 +33,6 @@ extern void MtmDDLResetApplyState(void);
 extern void MtmSetRemoteFunction(char const* list, void* extra);
 extern void MtmToggleDML(void);
 extern void MtmMakeTableLocal(char const* schema, char const* name, bool locked);
+extern void multimaster_fmgr_hook(FmgrHookEventType event, FmgrInfo *flinfo, Datum *private);
 
 #endif

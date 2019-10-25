@@ -461,6 +461,9 @@ _PG_init(void)
 	 */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = MtmShmemStartup;
+
+	prev_fmgr_hook = fmgr_hook;
+	fmgr_hook = multimaster_fmgr_hook;
 }
 
 /*

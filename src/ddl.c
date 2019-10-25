@@ -83,6 +83,7 @@ bool	MtmMonotonicSequences;
 char   *MtmRemoteFunctionsList;
 bool	MtmIgnoreTablesWithoutPk;
 
+fmgr_hook_type prev_fmgr_hook = NULL;
 
 static char MtmTempSchema[NAMEDATALEN];
 static bool TempDropRegistered;
@@ -1497,4 +1498,38 @@ void
 MtmToggleDML(void)
 {
 	MtmTx.contains_dml = true;
+}
+
+/*
+ * Multimaster need to adjust its preferences with authorization parameters,
+ * provided by SECURITY DEFINER.
+ */
+void
+multimaster_fmgr_hook(FmgrHookEventType event,
+		  FmgrInfo *flinfo, Datum *private)
+{
+	Oid roleid;
+	int sec_context;
+	char *current_role;
+	MemoryContext oldcontext;
+
+	if (prev_fmgr_hook)
+		(*prev_fmgr_hook) (event, flinfo, private);
+
+	switch (event)
+	{
+		case FHET_START:
+		case FHET_END:
+		case FHET_ABORT:
+			oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+			GetUserIdAndSecContext(&roleid, &sec_context);
+			current_role = GetUserNameFromId(roleid, false);
+			MtmGucUpdate("session_authorization", current_role);
+			MemoryContextSwitchTo(oldcontext);
+			break;
+
+		default:
+			elog(ERROR, "unexpected event type: %d", (int) event);
+			break;
+	}
 }
