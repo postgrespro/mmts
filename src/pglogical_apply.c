@@ -1223,11 +1223,6 @@ process_remote_insert(StringInfo s, Relation rel)
 		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
 		MemoryContextSwitchTo(oldctx);
 
-		/* debug output */
-#ifdef VERBOSE_INSERT
-		log_tuple("INSERT:%s", tupDesc, newslot->tts_tuple);
-#endif
-
 		tmp = estate->es_result_relation_info->ri_TrigDesc;
 		estate->es_result_relation_info->ri_TrigDesc = NULL;
 		ExecSimpleRelationInsert(estate, newslot);

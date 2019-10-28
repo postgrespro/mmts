@@ -408,7 +408,7 @@ _PG_init(void)
 		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
 		NULL,
 		&MtmRemoteFunctionsList,
-		"lo_create,lo_unlink,"
+		"lo_creat,lo_create,lo_unlink,lo_open,loread,lowrite,lo_lseek,lo_tell,lo_close,lo_export"
 		"pathman.create_single_range_partition,pathman.drop_partitions,pathman.create_hash_partitions,pathman.create_range_partitions,pathman.split_range_partition,pathman.drop_range_partition,pathman.add_range_partition,pathman.attach_range_partition,pathman.detach_range_partition,pathman.prepend_range_partition,pathman.append_range_partition,pathman.set_auto,pathman.set_enable_parent,pathman.merge_range_partitions,pathman.add_to_pathman_config,pathman.set_spawn_using_bgw,pathman.set_init_callback,pathman.set_interval,pathman.partition_table_concurrently,"
 		"public.create_single_range_partition,public.drop_partitions,public.create_hash_partitions,public.create_range_partitions,public.split_range_partition,public.drop_range_partition,public.add_range_partition,public.attach_range_partition,public.detach_range_partition,public.prepend_range_partition,public.append_range_partition,public.set_auto,public.set_enable_parent,public.merge_range_partitions,public.add_to_pathman_config,public.set_spawn_using_bgw,public.set_init_callback,public.set_interval,public.partition_table_concurrently"
 		,

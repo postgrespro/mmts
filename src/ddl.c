@@ -24,6 +24,7 @@
 #include "tcop/pquery.h"
 #include "utils/snapmgr.h"
 #include "nodes/makefuncs.h"
+#include "nodes/nodeFuncs.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_namespace.h"
 #include "executor/spi.h"
@@ -848,16 +849,14 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 		case T_CreateTableSpaceStmt:
 		case T_DropTableSpaceStmt:
-		{
 			skipCommand = true;
 			MtmProcessDDLCommand(stmt_string, false);
 			break;
-		}
 
 		/*
 		 * Explain will not call ProcessUtility for passed CreateTableAsStmt,
-		 * but will run it manually, so we will not catch it in a standart way.
-		 * So catch it in a non-standart way.
+		 * but will run it manually, so we will not catch it in a standard way.
+		 * So catch it in a non-standard way.
 		 */
 		case T_ExplainStmt:
 		{
@@ -948,7 +947,8 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			DropStmt *stmt = (DropStmt *) parsetree;
 			if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
 			{
-				if (context == PROCESS_UTILITY_TOPLEVEL) {
+				if (context == PROCESS_UTILITY_TOPLEVEL)
+				{
 					MtmProcessDDLCommand(stmt_string, false);
 					skipCommand = true;
 				}
@@ -971,9 +971,9 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 					if (OidIsValid(relid))
 					{
 						Relation rel = heap_open(relid, ShareLock);
-						if (RelationNeedsWAL(rel)) {
+						if (RelationNeedsWAL(rel))
 							MtmTx.contains_dml = true;
-						}
+
 						heap_close(rel, ShareLock);
 					}
 				}
@@ -1032,37 +1032,70 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	}
 }
 
+static bool
+targetList_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, FuncExpr))
+	{
+		Oid func_oid = ((FuncExpr*) node)->funcid;
+
+		if (hash_search(MtmRemoteFunctions, &func_oid, HASH_FIND, NULL))
+			return true;
+	}
+
+	return expression_tree_walker(node, targetList_walker, context);
+}
+
+static bool
+search_for_remote_functions(PlanState *node, void *context)
+{
+	if (node == NULL)
+			return false;
+
+	if (targetList_walker((Node *) node->plan->targetlist, NULL))
+		return true;
+
+	return planstate_tree_walker(node, search_for_remote_functions, NULL);
+}
+
 static void
 MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 {
-	if (!MtmIsLogicalReceiver && !MtmDDLStatement && MtmIsEnabled())
-	{
-		ListCell   *tlist;
-
-		if (!MtmRemoteFunctionsValid)
-			MtmInitializeRemoteFunctionsMap();
-
-		foreach(tlist, queryDesc->plannedstmt->planTree->targetlist)
-		{
-			TargetEntry *tle = (TargetEntry *) lfirst(tlist);
-			if (tle->expr && IsA(tle->expr, FuncExpr))
-			{
-				Oid func_oid = ((FuncExpr*) tle->expr)->funcid;
-
-				if (hash_search(MtmRemoteFunctions, &func_oid, HASH_FIND, NULL))
-				{
-					MtmProcessDDLCommand(queryDesc->sourceText, true);
-					MtmDDLStatement = queryDesc;
-					MtmTx.contains_ddl = true;
-					break;
-				}
-			}
-		}
-	}
 	if (PreviousExecutorStartHook != NULL)
 		PreviousExecutorStartHook(queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
+
+	/*
+	 * Explain can contain remote functions. But we don't need to send it to
+	 * another nodes of multimaster.
+	 */
+	if (eflags & EXEC_FLAG_EXPLAIN_ONLY)
+		return;
+
+	if (!MtmIsLogicalReceiver && !MtmDDLStatement && MtmIsEnabled())
+	{
+		if (!MtmRemoteFunctionsValid)
+			MtmInitializeRemoteFunctionsMap();
+
+		Assert(queryDesc->planstate);
+
+		/*
+		 * If any node contains function from the remote functions list in its
+		 * target list than we will send all query as a DDL command.
+		 */
+		if (search_for_remote_functions(queryDesc->planstate, NULL))
+		{
+			MtmProcessDDLCommand(queryDesc->sourceText, true);
+			MtmDDLStatement = queryDesc;
+			MtmTx.contains_ddl = true;
+		}
+		else
+			mtm_log(DDLProcessingTrace, "The query plan don't contain any remote functions");
+	}
 }
 
 static void
@@ -1082,14 +1115,19 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 			operation == CMD_DELETE || pstmt->hasModifyingCTE)
 		{
 			int i;
-			for (i = 0; i < estate->es_num_result_relations; i++) {
+
+			for (i = 0; i < estate->es_num_result_relations; i++)
+			{
 				Relation rel = estate->es_result_relations[i].ri_RelationDesc;
-				if (RelationNeedsWAL(rel)) {
-					if (MtmIgnoreTablesWithoutPk) {
-						if (!rel->rd_indexvalid) {
+				if (RelationNeedsWAL(rel))
+				{
+					if (MtmIgnoreTablesWithoutPk)
+					{
+						if (!rel->rd_indexvalid)
 							RelationGetIndexList(rel);
-						}
-						if (rel->rd_replidindex == InvalidOid) {
+
+						if (rel->rd_replidindex == InvalidOid)
+						{
 							// XXX
 							MtmMakeRelationLocal(RelationGetRelid(rel), false);
 							continue;
@@ -1417,14 +1455,12 @@ MtmInitializeRemoteFunctionsMap()
 	p = pstrdup(MtmRemoteFunctionsList);
 	do {
 		q = strchr(p, ',');
-		if (q != NULL) {
+		if (q != NULL)
 			*q++ = '\0';
-		}
+
 		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
 		if (clist == NULL)
-		{
 			mtm_log(DEBUG1, "Can't resolve function '%s', postponing that", p);
-		}
 		else
 		{
 			while (clist != NULL)
@@ -1438,9 +1474,8 @@ MtmInitializeRemoteFunctionsMap()
 	} while (p != NULL);
 
 	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true);
-	if (clist != NULL) {
+	if (clist != NULL)
 		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
-	}
 
 	/* restore back current user context */
 	SetUserIdAndSecContext(save_userid, save_sec_context);

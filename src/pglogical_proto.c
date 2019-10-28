@@ -152,10 +152,12 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 
 	Assert(hooks_data->is_recovery || txn->origin_id == InvalidRepOriginId);
 
-	if (++MtmSenderTID == InvalidOid) { 
+	if (++MtmSenderTID == InvalidOid)
+	{
 		pglogical_relid_map_reset();
 		MtmSenderTID += 1; /* skip InvalidOid */
 	}
+
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	MtmIsFilteredTxn = false;
@@ -597,7 +599,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 		transfer_type = decide_datum_transfer(att, typclass,
 											  data->allow_internal_basetypes,
 											  data->allow_binary_basetypes);
-			
+
         pq_sendbyte(out, transfer_type);
 		switch (transfer_type)
 		{
