@@ -12,7 +12,6 @@
 #ifndef DML_H
 #define DML_H
 
-#include "fmgr.h"
 #include "utils/relcache.h"
 
 /* GUCs */
@@ -22,7 +21,6 @@ extern bool		MtmRemoteFunctionsUpdating;
 extern bool		MtmVolksWagenMode;
 extern bool		MtmIgnoreTablesWithoutPk;
 
-extern fmgr_hook_type prev_fmgr_hook;
 
 extern void MtmDDLReplicationInit(void);
 extern void MtmDDLReplicationShmemStartup(void);

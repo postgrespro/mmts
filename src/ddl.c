@@ -69,7 +69,6 @@ typedef struct MtmGucEntry
 {
 	char		key[GUC_KEY_MAXLEN];
 	dlist_node	list_node;
-	char	   *value;
 } MtmGucEntry;
 
 typedef struct {
@@ -82,8 +81,6 @@ bool	MtmVolksWagenMode;
 bool	MtmMonotonicSequences;
 char   *MtmRemoteFunctionsList;
 bool	MtmIgnoreTablesWithoutPk;
-
-fmgr_hook_type prev_fmgr_hook = NULL;
 
 static char MtmTempSchema[NAMEDATALEN];
 static bool TempDropRegistered;
@@ -127,7 +124,7 @@ static void MtmProcessUtilitySender(PlannedStmt *pstmt,
 				QueryEnvironment *queryEnv, DestReceiver *dest,
 				char *completionTag);
 
-static void MtmGucUpdate(const char *key, char *value);
+static void MtmGucUpdate(const char *key);
 static void MtmInitializeRemoteFunctionsMap(void);
 static char *MtmGucSerialize(void);
 static void MtmMakeRelationLocal(Oid relid, bool locked);
@@ -325,23 +322,16 @@ MtmGucInit(void)
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 	current_role = GetConfigOptionByName("session_authorization", NULL, false);
 	// XXX if (current_role && *current_role && strcmp(MtmDatabaseUser, current_role) != 0)
-		MtmGucUpdate("session_authorization", current_role);
+	MtmGucUpdate("session_authorization");
 	MemoryContextSwitchTo(oldcontext);
 }
 
 static void
 MtmGucDiscard()
 {
-	dlist_iter iter;
-
 	if (dlist_is_empty(&MtmGucList))
 		return;
 
-	dlist_foreach(iter, &MtmGucList)
-	{
-		MtmGucEntry *cur_entry = dlist_container(MtmGucEntry, list_node, iter.cur);
-		pfree(cur_entry->value);
-	}
 	dlist_init(&MtmGucList);
 
 	hash_destroy(MtmGucHash);
@@ -349,7 +339,7 @@ MtmGucDiscard()
 }
 
 static inline void
-MtmGucUpdate(const char *key, char *value)
+MtmGucUpdate(const char *key)
 {
 	MtmGucEntry *hentry;
 	bool found;
@@ -359,11 +349,8 @@ MtmGucUpdate(const char *key, char *value)
 
 	hentry = (MtmGucEntry*)hash_search(MtmGucHash, key, HASH_ENTER, &found);
 	if (found)
-	{
-		pfree(hentry->value);
 		dlist_delete(&hentry->list_node);
-	}
-	hentry->value = value;
+
 	dlist_push_tail(&MtmGucList, &hentry->list_node);
 }
 
@@ -379,7 +366,6 @@ MtmGucRemove(const char *key)
 	hentry = (MtmGucEntry*)hash_search(MtmGucHash, key, HASH_FIND, &found);
 	if (found)
 	{
-		pfree(hentry->value);
 		dlist_delete(&hentry->list_node);
 		hash_search(MtmGucHash, key, HASH_REMOVE, NULL);
 	}
@@ -398,7 +384,7 @@ MtmGucSet(VariableSetStmt *stmt, const char *queryStr)
 	switch (stmt->kind)
 	{
 		case VAR_SET_VALUE:
-			MtmGucUpdate(stmt->name, ExtractSetVariableArgs(stmt));
+			MtmGucUpdate(stmt->name);
 			break;
 
 		case VAR_SET_DEFAULT:
@@ -488,6 +474,10 @@ MtmGucSerialize(void)
 	StringInfo serialized_gucs = makeStringInfo();
 	dlist_iter iter;
 	const char *search_path;
+	bool found;
+	Oid ceUserId = GetUserId();
+	Oid csUserId = GetSessionUserId();
+	bool useRole = is_member_of_role(csUserId, ceUserId);
 
 	if (!MtmGucHash)
 		MtmGucInit();
@@ -496,10 +486,34 @@ MtmGucSerialize(void)
 	appendStringInfoString(serialized_gucs, "RESET session_authorization; ");
 	appendStringInfo(serialized_gucs, "select mtm.set_temp_schema('%s'); ", MtmTempSchema);
 
+	hash_search(MtmGucHash, "session_authorization", HASH_FIND, &found);
+	if (found)
+	{
+		MemoryContext oldcontext;
+
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		hash_search(MtmGucHash, "role", HASH_FIND, &found);
+		if ((found) && (ceUserId == csUserId))
+			/*
+			 * We need to do this because SET LOCAL return only WARNING if is used
+			 * out of transaction block. DDL will be passed to another nodes and
+			 * will set "role" variable at current node.
+			 */
+			MtmGucRemove("role");
+		else if ((!found) && (ceUserId != csUserId) && useRole)
+			/*
+			 * We need to do this because SECURITY DEFINER changed current user
+			 * value quietly.
+			 */
+			MtmGucUpdate("role");
+		MemoryContextSwitchTo(oldcontext);
+	}
+
 	dlist_foreach(iter, &MtmGucList)
 	{
 		MtmGucEntry *cur_entry = dlist_container(MtmGucEntry, list_node, iter.cur);
 		struct config_generic *gconf;
+		const char *gucValue;
 
 		if (strcmp(cur_entry->key, "search_path") == 0)
 			continue;
@@ -508,19 +522,27 @@ MtmGucSerialize(void)
 		appendStringInfoString(serialized_gucs, cur_entry->key);
 		appendStringInfoString(serialized_gucs, " TO ");
 
+		/* Current effective user can have more privileges than session user
+		 * (increase in rights by SECURITY DEFINER, for example). In this case
+		 * we need to set session authorization role in the current user value.
+		 */
+		if (strcmp(cur_entry->key, "session_authorization") == 0)
+			gucValue = GetUserNameFromId(useRole ? csUserId : ceUserId, false);
+		else
+			gucValue = GetConfigOption(cur_entry->key, false, true);
+
 		gconf = fing_guc_conf(cur_entry->key);
 		if (gconf && (gconf->vartype == PGC_STRING ||
 					  gconf->vartype == PGC_ENUM ||
 					  (gconf->flags & (GUC_UNIT_MEMORY | GUC_UNIT_TIME))))
 		{
 			appendStringInfoString(serialized_gucs, "'");
-			appendStringInfoString(serialized_gucs, cur_entry->value);
+			appendStringInfoString(serialized_gucs, gucValue);
 			appendStringInfoString(serialized_gucs, "'");
 		}
 		else
-		{
-			appendStringInfoString(serialized_gucs, cur_entry->value);
-		}
+			appendStringInfoString(serialized_gucs, gucValue);
+
 		appendStringInfoString(serialized_gucs, "; ");
 	}
 
@@ -1498,38 +1520,4 @@ void
 MtmToggleDML(void)
 {
 	MtmTx.contains_dml = true;
-}
-
-/*
- * Multimaster need to adjust its preferences with authorization parameters,
- * provided by SECURITY DEFINER.
- */
-void
-multimaster_fmgr_hook(FmgrHookEventType event,
-		  FmgrInfo *flinfo, Datum *private)
-{
-	Oid roleid;
-	int sec_context;
-	char *current_role;
-	MemoryContext oldcontext;
-
-	if (prev_fmgr_hook)
-		(*prev_fmgr_hook) (event, flinfo, private);
-
-	switch (event)
-	{
-		case FHET_START:
-		case FHET_END:
-		case FHET_ABORT:
-			oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-			GetUserIdAndSecContext(&roleid, &sec_context);
-			current_role = GetUserNameFromId(roleid, false);
-			MtmGucUpdate("session_authorization", current_role);
-			MemoryContextSwitchTo(oldcontext);
-			break;
-
-		default:
-			elog(ERROR, "unexpected event type: %d", (int) event);
-			break;
-	}
 }
