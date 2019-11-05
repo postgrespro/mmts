@@ -352,13 +352,19 @@ MtmTwoPhaseCommit()
 			{
 				FinishPreparedTransaction(gid, false, false);
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-				ereport(ERROR,
+				if (MtmVolksWagenMode)
+					ereport(ERROR,
 						(errcode(messages[i].errcode),
-						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								MtmVolksWagenMode ? "MTM-REGRESS" : gid, messages[i].node_id),
+						 errmsg("[multimaster] failed to prepare transaction at peer node"),
 						 errdetail("sqlstate %s (%s)",
 								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
-
+				else
+					ereport(ERROR,
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								gid, messages[i].node_id),
+						 errdetail("sqlstate %s (%s)",
+								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 			}
 		}
 
@@ -513,15 +519,22 @@ MtmExplicitPrepare(char *gid)
 
 		if (messages[i].status == MSG_ABORTED)
 		{
-
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-			ereport(ERROR,
+
+			if (MtmVolksWagenMode)
+				ereport(ERROR,
 					(errcode(messages[i].errcode),
-					 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-							MtmVolksWagenMode ? "MTM-REGRESS" : gid, messages[i].node_id),
-					 errdetail("sqlstate %s (%s)",
+						errmsg("[multimaster] failed to prepare transaction at peer node"),
+						errdetail("sqlstate %s (%s)",
+							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+			else
+				ereport(ERROR,
+					(errcode(messages[i].errcode),
+						errmsg("[multimaster] failed to prepare transaction %s at node %d",
+							gid, messages[i].node_id),
+						errdetail("sqlstate %s (%s)",
 							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 		}
 	}
