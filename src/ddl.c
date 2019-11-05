@@ -1486,7 +1486,18 @@ AdjustCreateSequence(List *options)
 
 	if (!has_increment)
 	{
-		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(MTM_MAX_NODES), -1);
+		MtmConfig  *mtm_cfg = MtmLoadConfig();
+		int			i;
+		int			max_node;
+
+		max_node = mtm_cfg->my_node_id;
+		for (i = 0; i < mtm_cfg->n_nodes; i++)
+		{
+			if (max_node < mtm_cfg->nodes[i].node_id)
+				max_node = mtm_cfg->nodes[i].node_id;
+		}
+
+		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(max_node), -1);
 		options = lappend(options, defel);
 	}
 
