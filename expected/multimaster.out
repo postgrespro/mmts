@@ -78,24 +78,24 @@ begin;
 insert into box_temp values('(45,55,45,49)');
 insert into box_persistent values('(45,55,45,49)');
 commit;
-ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 table box_temp;
        f1        
 -----------------
  (45,55),(45,49)
-(1 row)
+ (45,55),(45,49)
+(2 rows)
 
 table box_persistent;
        f1        
 -----------------
  (45,55),(45,49)
-(1 row)
+ (45,55),(45,49)
+(2 rows)
 
 begin;
 create temporary table sp_test_t(i serial primary key);
 create table sp_test(i int primary key);
 commit;
-ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 create temporary table sp_test_t1(i serial primary key);
 create table sp_test1(i int primary key);
 \c :node2
@@ -107,7 +107,8 @@ table box_persistent;
        f1        
 -----------------
  (45,55),(45,49)
-(1 row)
+ (45,55),(45,49)
+(2 rows)
 
 table sp_test1;
  i 
@@ -121,19 +122,20 @@ begin;
 insert into t_tempddl_mix values(42);
 create temp table tempddl(id int);
 commit;
-ERROR:  cannot PREPARE a transaction that has operated on temporary tables
 table t_tempddl_mix;
  id 
 ----
   1
-(1 row)
+ 42
+(2 rows)
 
 \c :node2
 table t_tempddl_mix;
  id 
 ----
   1
-(1 row)
+ 42
+(2 rows)
 
 -- test CTA replication inside explain
 \c :node1
@@ -308,6 +310,7 @@ ERROR:  no schema has been selected to create in
 LINE 1: create table sp_test(i int primary key);
                      ^
 create table public.sp_test(i int primary key);
+ERROR:  relation "sp_test" already exists
 reset search_path;
 drop table sp_test;
 create table sp_test(i int primary key);
@@ -448,9 +451,9 @@ table seq_test;
  id 
 ----
   1
-  7
+  4
   2
-  8
+  5
 (4 rows)
 
 -- break sequence
@@ -460,9 +463,9 @@ table seq_test;
  id  
 -----
    1
-   7
+   4
    2
-   8
+   5
  100
 (5 rows)
 
@@ -475,9 +478,9 @@ table seq_test;
  id  
 -----
    1
-   7
+   4
    2
-   8
+   5
  100
 (5 rows)
 
@@ -487,9 +490,7 @@ ERROR:  duplicate key value violates unique constraint "seq_test_pkey"
 DETAIL:  Key (id)=(100) already exists.
 -- now fix
 select mtm.alter_sequences();
-NOTICE:  Altering step for sequence local_tab_id_seq to 3.
 NOTICE:  Altering step for sequence seq_test_id_seq to 3.
-NOTICE:  Altering step for sequence aaa_copy_version_id_seq to 3.
  alter_sequences 
 -----------------
  t
@@ -506,9 +507,9 @@ table seq_test;
  id  
 -----
    1
-   7
+   4
    2
-   8
+   5
  100
  103
  104
