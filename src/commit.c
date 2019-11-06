@@ -11,8 +11,10 @@
 
 #include "postgres.h"
 #include "access/twophase.h"
+#include "access/xact.h"
 #include "access/transam.h"
 #include "storage/proc.h"
+#include "storage/spin.h"
 #include "utils/guc.h"
 #include "utils/syscache.h"
 #include "utils/snapmgr.h"
@@ -135,6 +137,9 @@ MtmBeginTransaction()
 {
 	MtmNodeStatus	node_status;
 
+	/* Set this on tx start, to avoid resetting in error handler */
+	AllowTempIn2PC = false;
+
 	// XXX: clean MtmTx on commit and check on begin that it is clean.
 	// That should unveil probable issues with subxacts.
 
@@ -169,8 +174,7 @@ MtmBeginTransaction()
 	}
 
 	/* Reset MtmTx */
-	MtmTx.contains_temp_ddl = false;
-	MtmTx.contains_persistent_ddl = false;
+	MtmTx.contains_ddl = false;
 	MtmTx.contains_dml = false;
 	MtmTx.distributed = true;
 
@@ -262,14 +266,11 @@ MtmTwoPhaseCommit()
 	int			n_messages;
 	int			i;
 
-	if (!MtmTx.contains_persistent_ddl && !MtmTx.contains_dml)
+	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
 
 	if (!MtmTx.distributed)
 		return false;
-
-	if (MtmTx.contains_temp_ddl)
-		MyXactFlags |= XACT_FLAGS_ACCESSEDTEMPREL;
 
 	if (!IsTransactionBlock())
 	{
@@ -337,6 +338,7 @@ MtmTwoPhaseCommit()
 			return true;
 		}
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
+		AllowTempIn2PC = true;
 		CommitTransactionCommand();
 
 		gather(participants, messages, &n_messages);
@@ -350,27 +352,25 @@ MtmTwoPhaseCommit()
 			{
 				FinishPreparedTransaction(gid, false, false);
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-				if (!MtmVolksWagenMode)
-				{
+				if (MtmVolksWagenMode)
 					ereport(ERROR,
-							(errcode(messages[i].errcode),
-							 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-									gid, messages[i].node_id),
-							 errdetail("sqlstate %s (%s)",
-									unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
-				}
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction at peer node"),
+						 errdetail("sqlstate %s (%s)",
+								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 				else
-				{
 					ereport(ERROR,
-							(errcode(messages[i].errcode),
-							 errmsg("[multimaster] failed to prepare transaction at peer node")));
-				}
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								gid, messages[i].node_id),
+						 errdetail("sqlstate %s (%s)",
+								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 			}
 		}
 
 		dmq_stream_subscribe(gid);
 
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, messages, &n_messages);
 
@@ -406,7 +406,7 @@ MtmTwoPhaseCommit()
 	dmq_stream_unsubscribe(gid);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);
 
-	MaybeLogSyncpoint(false);
+	MaybeLogSyncpoint();
 
 	return true;
 }
@@ -483,6 +483,17 @@ MtmExplicitPrepare(char *gid)
 	int			n_messages;
 	int			i;
 
+	/*
+	 * GetTopTransactionId() will fail for aborted tx, but we still need to
+	 * finish it, so handle that manually.
+	 */
+	if (IsAbortedTransactionBlockState())
+	{
+		ret = PrepareTransactionBlock(gid);
+		Assert(!ret);
+		return false;
+	}
+
 	xid = GetTopTransactionId();
 	sprintf(stream, "xid" XID_FMT, xid);
 	dmq_stream_subscribe(stream);
@@ -508,25 +519,23 @@ MtmExplicitPrepare(char *gid)
 
 		if (messages[i].status == MSG_ABORTED)
 		{
-
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-			if (!MtmVolksWagenMode)
-			{
+
+			if (MtmVolksWagenMode)
 				ereport(ERROR,
-						(errcode(messages[i].errcode),
-						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i].node_id),
-						 errdetail("sqlstate %s (%s)",
-								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
-			}
+					(errcode(messages[i].errcode),
+						errmsg("[multimaster] failed to prepare transaction at peer node"),
+						errdetail("sqlstate %s (%s)",
+							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 			else
-			{
 				ereport(ERROR,
-						(errcode(messages[i].errcode),
-						errmsg("[multimaster] failed to prepare transaction at peer node")));
-			}
+					(errcode(messages[i].errcode),
+						errmsg("[multimaster] failed to prepare transaction %s at node %d",
+							gid, messages[i].node_id),
+						errdetail("sqlstate %s (%s)",
+							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 		}
 	}
 
@@ -552,7 +561,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		participants = MtmGetEnabledNodeMask() &
 						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
 
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, messages, &n_messages);
 

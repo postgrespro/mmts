@@ -95,8 +95,7 @@ typedef struct
 
 typedef struct
 {
-	bool		contains_temp_ddl;
-	bool		contains_persistent_ddl;
+	bool		contains_ddl;
 	bool		contains_dml;
 	bool		distributed;
 } MtmCurrentTrans;
@@ -174,8 +173,9 @@ typedef struct
 		pid_t				sender_pid;
 		pid_t				receiver_pid;
 		int					dmq_dest_id;
+		XLogRecPtr			trim_lsn;
 	} peers[MTM_MAX_NODES];
-	BgwPool		pools[FLEXIBLE_ARRAY_MEMBER];		/* [Mtm->nAllNodes]: per-node data */
+	BgwPool	pools[MTM_MAX_NODES];		/* [Mtm->nAllNodes]: per-node data */
 } MtmShared;
 
 extern MtmShared *Mtm;
@@ -198,7 +198,6 @@ extern int	MtmHeartbeatSendTimeout;
 extern int	MtmHeartbeatRecvTimeout;
 extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
-extern int	MtmMaxNodes;
 extern bool	MtmBreakConnection;
 
 extern void MtmSleep(int64 interval);

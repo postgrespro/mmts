@@ -5,6 +5,7 @@ services:
   node1:
     container_name: node1
     build: ../..
+    shm_size: '512mb'
     privileged: true
     ulimits:
       core: 14294967296
@@ -20,11 +21,12 @@ services:
       - "15432:5432"
     networks:
       mtm_bridge:
-        ipv4_address: 192.168.0.1
+        ipv4_address: 192.168.253.1
 
   node2:
     container_name: node2
     build: ../..
+    shm_size: '512mb'
     privileged: true
     ulimits:
       core: 14294967296
@@ -40,11 +42,12 @@ services:
       - "15433:5432"
     networks:
       mtm_bridge:
-        ipv4_address: 192.168.0.2
+        ipv4_address: 192.168.253.2
 
   referee:
     container_name: referee
     build: ../..
+    shm_size: '512mb'
     privileged: true
     ulimits:
       core: 14294967296
@@ -57,12 +60,12 @@ services:
       - "15435:5432"
     networks:
       mtm_bridge:
-        ipv4_address: 192.168.0.3
+        ipv4_address: 192.168.253.3
 
 networks:
   mtm_bridge:
     driver: bridge
     ipam:
      config:
-       - subnet: 192.168.0.0/24
-         gateway: 192.168.0.254
+       - subnet: 192.168.253.0/24
+         gateway: 192.168.253.254

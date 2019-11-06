@@ -168,11 +168,16 @@ class MtmClient(object):
             cur.close()
             con.close()
 
+        connstr = " "
+        for i in range(len(self.dsns)-1):
+        	connstr = connstr + "\"dbname=regression user=pg host=192.168.253." + str(i+2) + "\""
+        	if (i < len(self.dsns) - 2):
+        		connstr = connstr + ", "
+
         conn = psycopg2.connect(self.dsns[0])
         cur = conn.cursor()
         cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
-            ("dbname=regression user=pg host=192.168.0.1",
-            '"dbname=regression user=pg host=192.168.0.2", "dbname=regression user=pg host=192.168.0.3"'))
+            ("dbname=regression user=pg host=192.168.253.1", connstr))
         conn.commit()
         cur.close()
         conn.close()

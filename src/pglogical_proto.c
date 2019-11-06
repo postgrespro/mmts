@@ -109,9 +109,9 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 
 	relid = RelationGetRelid(rel);
 
-	if (relid == MtmLastRelId) { 
+	if (relid == MtmLastRelId)
 		return;
-	}
+
 	MtmLastRelId = relid;
 
 	pq_sendbyte(out, 'R');		/* sending RELATION */	
@@ -122,7 +122,9 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 	if (tid == MtmSenderTID) { /* this relation was already sent in this transaction */
 		pq_sendbyte(out, 0); /* do not need to send relation namespace and name in this case */
 		pq_sendbyte(out, 0);
-	} else { 
+	}
+	else
+	{
 		pglogical_relid_map_put(relid, MtmSenderTID);
 		nspname = get_namespace_name(rel->rd_rel->relnamespace);
 		if (nspname == NULL)
@@ -152,10 +154,12 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 
 	Assert(hooks_data->is_recovery || txn->origin_id == InvalidRepOriginId);
 
-	if (++MtmSenderTID == InvalidOid) { 
+	if (++MtmSenderTID == InvalidOid)
+	{
 		pglogical_relid_map_reset();
 		MtmSenderTID += 1; /* skip InvalidOid */
 	}
+
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	MtmIsFilteredTxn = false;
@@ -597,7 +601,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 		transfer_type = decide_datum_transfer(att, typclass,
 											  data->allow_internal_basetypes,
 											  data->allow_binary_basetypes);
-			
+
         pq_sendbyte(out, transfer_type);
 		switch (transfer_type)
 		{
@@ -646,21 +650,6 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 
 				break;
 
-			case 's': /* binary send/recv data follows */
-				{
-					bytea	   *outputbytes;
-					int			len;
-
-					outputbytes = OidSendFunctionCall(typclass->typsend,
-													  values[i]);
-
-					len = VARSIZE(outputbytes) - VARHDRSZ;
-					pq_sendint(out, len, 4); /* length */
-					pq_sendbytes(out, VARDATA(outputbytes), len); /* data */
-					pfree(outputbytes);
-				}
-				break;
-
 			default:
 				{
 					char   	   *outputstr;
@@ -697,19 +686,6 @@ decide_datum_transfer(Form_pg_attribute att, Form_pg_type typclass,
 	{
 		return 'b';
 	}
-	/*
-	 * Use send/recv, if allowed, if the type is plain or builtin.
-	 *
-	 * XXX: we can't use send/recv for array or composite types for now due to
-	 * the embedded oids.
-	 */
-	else if (allow_binary_basetypes &&
-			 OidIsValid(typclass->typreceive) &&
-			 (att->atttypid < FirstNormalObjectId || typclass->typtype != 'c') &&
-			 (att->atttypid < FirstNormalObjectId || typclass->typelem == InvalidOid))
-	{
-		return 's';
-	}
 
 	return 't';
 }
@@ -731,10 +707,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	if (!BIT_CHECK(MtmGetConnectedNodeMask(), MtmReplicationNodeId - 1))
 	{
-		mtm_log(LOG, "Walsender to node %d exits as dmq connection is not yet fully established", MtmReplicationNodeId);
-
-		proc_exit(0);
-		abort();					/* keep the compiler quiet */
+		mtm_log(ERROR, "Walsender to node %d exits as dmq connection is not yet fully established", MtmReplicationNodeId);
 	}
 
 	foreach(param, args->in_params)

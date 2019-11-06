@@ -149,6 +149,10 @@ CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean
 AS 'MODULE_PATHNAME','mtm_check_deadlock'
 LANGUAGE C;
 
+CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void
+AS 'MODULE_PATHNAME','mtm_set_temp_schema'
+LANGUAGE C;
+
 CREATE TABLE mtm.local_tables(
     rel_schema name,
     rel_name name,
@@ -171,10 +175,13 @@ CREATE TABLE mtm.config(
 
 CREATE CAST (pg_lsn AS bigint) WITHOUT FUNCTION;
 
+-- XXX: we need some kind of migration here
+
 CREATE TABLE mtm.syncpoints(
     node_id int not null,
     origin_lsn bigint not null,
     local_lsn  bigint not null,
+    restart_lsn  bigint not null,
     primary key(node_id, origin_lsn)
 );
 
@@ -191,7 +198,8 @@ DECLARE
     altered boolean := false;
     saved_remotes text;
 BEGIN
-    select n_nodes into max_nodes node_id from mtm.status();
+    -- with sparce node_id's max(node_id) can be bigger then n_nodes
+    select max(id) into max_nodes from mtm.nodes();
     select current_setting('multimaster.remote_functions') into saved_remotes;
     set multimaster.remote_functions to 'mtm.alter_sequences';
     select my_node_id into node_id from mtm.status();
@@ -201,7 +209,7 @@ BEGIN
             seq.oid as oid,
             seq.relname as name
         FROM pg_namespace ns, pg_class seq
-        WHERE seq.relkind = 'S' and seq.relnamespace = ns.oid
+        WHERE seq.relkind = 'S' and seq.relnamespace = ns.oid and seq.relpersistence != 't'
     LOOP
             EXECUTE 'select * from ' || seq_class.seqname INTO seq_rel;
             EXECUTE 'select * from pg_sequence where seqrelid = ' || seq_class.oid INTO seq_tuple;
@@ -225,4 +233,21 @@ BEGIN
 END
 $$
 LANGUAGE plpgsql;
+
+CREATE TYPE bgwpool_result AS (nWorkers INT, Active INT, Pending INT, Size INT,
+								Head INT, Tail INT, ReceiverName TEXT);
+CREATE FUNCTION mtm.node_bgwpool_stat() RETURNS bgwpool_result
+AS 'MODULE_PATHNAME','mtm_get_bgwpool_stat'
+LANGUAGE C;
+
+CREATE VIEW mtm.stat_bgwpool AS
+	SELECT	nWorkers,
+			Active,
+			Pending,
+			Size,
+			Head,
+			Tail,
+			ReceiverName
+	FROM mtm.node_bgwpool_stat();
+
 -- select mtm.alter_sequences();

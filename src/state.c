@@ -1193,7 +1193,7 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART; /* or we can start several receivers */
+	worker.bgw_restart_time = 1;
 	worker.bgw_main_arg = Int32GetDatum(0);
 
 	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
@@ -1540,6 +1540,46 @@ MtmMonitor(Datum arg)
 	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
 
 	/*
+	 * Online upgrade.
+	 */
+	{
+		int			rc;
+
+		StartTransactionCommand();
+		if (SPI_connect() != SPI_OK_CONNECT)
+			mtm_log(ERROR, "could not connect using SPI");
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/* Add new column to mtm.syncpoints */
+		rc = SPI_execute("select relnatts from pg_class where relname='syncpoints';",
+						 true, 0);
+		if (rc < 0 || rc != SPI_OK_SELECT)
+			mtm_log(ERROR, "Failed to find syncpoints relation");
+		if (SPI_processed > 0)
+		{
+			TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+			HeapTuple	tup = SPI_tuptable->vals[0];
+			bool		isnull;
+			int			relnatts;
+
+			relnatts = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
+			if (relnatts == 3)
+			{
+				rc = SPI_execute("ALTER TABLE mtm.syncpoints ADD COLUMN restart_lsn bigint DEFAULT 0 NOT NULL",
+								 false, 0);
+				if (rc < 0 || rc != SPI_OK_UTILITY)
+					mtm_log(ERROR, "Failed to alter syncpoints relation");
+
+				mtm_log(LOG, "Altering syncpoints to newer schema");
+			}
+		}
+
+		SPI_finish();
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+	}
+
+	/*
 	 * During mtm_init_cluster() our worker is started from transaction that created
 	 * mtm config, so we can get here before this transaction is committed,
 	 * so we won't see config yet. Just wait for it to became visible.
@@ -1618,10 +1658,13 @@ MtmMonitor(Datum arg)
 	/* Launch resolver */
 	Assert(resolver == NULL);
 	resolver = ResolverStart(db_id, user_id);
+	mtm_log(MtmStateMessage, "MtmMonitor started");
 
 	for (;;)
 	{
 		int rc;
+		int i;
+		pid_t pid;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1670,6 +1713,29 @@ MtmMonitor(Datum arg)
 			}
 
 			config_valid = true;
+		}
+
+		/*
+		 * Check and restart resolver and receivers if its stopped by any error.
+		 */
+		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
+		{
+			mtm_log(MtmStateMessage, "Restart resolver");
+			resolver = ResolverStart(db_id, user_id);
+		}
+
+		for (i = 0; i < MTM_MAX_NODES; i++)
+		{
+			if (receivers[i] == NULL)
+				continue;
+
+			if (GetBackgroundWorkerPid(receivers[i], &pid) == BGWH_STOPPED)
+			{
+				mtm_log(MtmStateMessage, "Restart receiver for the node%d", i + 1);
+				/* Receiver has finished by some kind of mistake. Start it. */
+				receivers[i] = MtmStartReceiver(i+1, MyDatabaseId,
+														GetUserId(), MyProcPid);
+			}
 		}
 
 		// XXX: add tx start/stop to clear mcxt?

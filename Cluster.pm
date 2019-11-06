@@ -87,6 +87,41 @@ sub create_mm
 		}
 	}
 
+	foreach (0..$#{$self->{nodes}})
+	{
+		my $nnodes = $_;
+
+		# Simulate OID skew between multimaster nodes
+		foreach (0..$nnodes)
+		{
+			# On pg_database oids
+			$self->safe_psql($_, "CREATE DATABASE dummydatabase;");
+			$self->safe_psql($_, "DROP DATABASE dummydatabase;");
+
+			# On pg_class oids
+			$self->safe_psql($_, "CREATE TABLE dummytable (r INT);");
+			$self->safe_psql($_, "DROP TABLE dummytable;");
+
+			# On pg_type oids
+			$self->safe_psql($_, "CREATE TYPE dummytype AS (r INT);");
+			$self->safe_psql($_, "DROP TYPE dummytype;");
+
+			# On pg_authid oids
+			$self->safe_psql($_, "CREATE ROLE dummyrole;");
+			$self->safe_psql($_, "DROP ROLE dummyrole;");
+
+			# On pg_am oids
+			$self->safe_psql($_, "CREATE ACCESS METHOD dummygist TYPE INDEX HANDLER gisthandler;");
+			$self->safe_psql($_, "DROP ACCESS METHOD dummygist;");
+
+			# On pg_namespace oids
+			$self->safe_psql($_, "CREATE SCHEMA dummynsp;");
+			$self->safe_psql($_, "DROP SCHEMA dummynsp;");
+
+			# XXX: pg_tablespace
+		}
+	}
+
 	(my $my_connstr, my @peers) = map {
 		$_->connstr($_->{dbname})
 	} @{$self->{nodes}};

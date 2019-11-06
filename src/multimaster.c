@@ -63,6 +63,7 @@ PG_FUNCTION_INFO_V1(mtm_after_node_create);
 PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 PG_FUNCTION_INFO_V1(mtm_join_node);
 PG_FUNCTION_INFO_V1(mtm_init_cluster);
+PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
 
 static size_t MtmGetTransactionStateSize(void);
 static void	  MtmSerializeTransactionState(void* ctx);
@@ -101,15 +102,17 @@ static TransactionManager MtmTM =
 // XXX
 bool  MtmBackgroundWorker;
 int	  MtmReplicationNodeId;
-int	  MtmMaxNodes;
 
-int	  MtmTransSpillThreshold; // XXX: align with receiver buffer size
+/*
+ * Maximal size of transaction after which transaction is written to the disk.
+ * Also defines bgwpool shared queue size (See BgwPoolStart routine).
+ */
+int	  MtmTransSpillThreshold;
+
 int	  MtmHeartbeatSendTimeout;
 int	  MtmHeartbeatRecvTimeout;
 char* MtmRefereeConnStr;
 bool  MtmBreakConnection;
-
-static int	 MtmQueueSize;
 
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
@@ -233,7 +236,7 @@ MtmSharedShmemStartup()
 		SpinLockInit(&mtm_time->mutex);
 	}
 
-	Mtm = (MtmShared*)ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared) + sizeof(BgwPool)*(MtmMaxNodes), &found);
+	Mtm = (MtmShared*) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared), &found);
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmShared));
@@ -246,14 +249,12 @@ MtmSharedShmemStartup()
 		ConditionVariableInit(&Mtm->commit_barrier_cv);
 		ConditionVariableInit(&Mtm->receiver_barrier_cv);
 
-		for (i = 0; i < MtmMaxNodes; i++)
+		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
 			Mtm->peers[i].receiver_pid = InvalidPid;
 			Mtm->peers[i].sender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
-
-			// XXX: change to dsa and make it per-receiver
-			BgwPoolInit(&Mtm->pools[i], MtmQueueSize, 0);
+			Mtm->peers[i].trim_lsn = InvalidXLogRecPtr;
 		}
 	}
 
@@ -269,7 +270,7 @@ MtmShmemStartup(void)
 	if (PreviousShmemStartupHook)
 		PreviousShmemStartupHook();
 
-	MtmDeadlockDetectorShmemStartup(MtmMaxNodes);
+	MtmDeadlockDetectorShmemStartup(MTM_MAX_NODES);
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
 	MtmSharedShmemStartup();
@@ -313,22 +314,6 @@ _PG_init(void)
 		1,
 		INT_MAX,
 		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
-
-	// XXX
-	DefineCustomIntVariable(
-		"multimaster.max_nodes",
-		"Maximal number of cluster nodes",
-		"This parameters allows to add new nodes to the cluster, default value 0 restricts number of nodes to one specified in multimaster.conn_strings",
-		&MtmMaxNodes,
-		6,
-		0,
-		MTM_MAX_NODES,
-		PGC_POSTMASTER,
 		0,
 		NULL,
 		NULL,
@@ -418,28 +403,12 @@ _PG_init(void)
 		NULL
 	);
 
-	// XXX
-	DefineCustomIntVariable(
-		"multimaster.queue_size",
-		"Multimaster queue size",
-		NULL,
-		&MtmQueueSize,
-		10*1024*1024,
-		1024*1024,
-		INT_MAX,
-		PGC_BACKEND,
-		GUC_NO_SHOW_ALL,
-		NULL,
-		NULL,
-		NULL
-	);
-
 	DefineCustomStringVariable(
 		"multimaster.remote_functions",
 		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
 		NULL,
 		&MtmRemoteFunctionsList,
-		"lo_create,lo_unlink,"
+		"lo_creat,lo_create,lo_unlink,lo_open,loread,lowrite,lo_lseek,lo_tell,lo_close,lo_export"
 		"pathman.create_single_range_partition,pathman.drop_partitions,pathman.create_hash_partitions,pathman.create_range_partitions,pathman.split_range_partition,pathman.drop_range_partition,pathman.add_range_partition,pathman.attach_range_partition,pathman.detach_range_partition,pathman.prepend_range_partition,pathman.append_range_partition,pathman.set_auto,pathman.set_enable_parent,pathman.merge_range_partitions,pathman.add_to_pathman_config,pathman.set_spawn_using_bgw,pathman.set_init_callback,pathman.set_interval,pathman.partition_table_concurrently,"
 		"public.create_single_range_partition,public.drop_partitions,public.create_hash_partitions,public.create_range_partitions,public.split_range_partition,public.drop_range_partition,public.add_range_partition,public.attach_range_partition,public.detach_range_partition,public.prepend_range_partition,public.append_range_partition,public.set_auto,public.set_enable_parent,public.merge_range_partitions,public.add_to_pathman_config,public.set_spawn_using_bgw,public.set_init_callback,public.set_interval,public.partition_table_concurrently"
 		,
@@ -463,14 +432,14 @@ _PG_init(void)
 		NULL
 	);
 
-	MtmDeadlockDetectorInit(MtmMaxNodes);
+	MtmDeadlockDetectorInit(MTM_MAX_NODES);
 
 	/*
 	 * Request additional shared resources.	 (These are no-ops if we're not in
 	 * the postmaster process.)	 We'll allocate or attach to the shared
 	 * resources in mtm_shmem_startup().
 	 */
-	RequestAddinShmemSpace(MTM_SHMEM_SIZE + MtmMaxNodes*MtmQueueSize + sizeof(MtmTime));
+	RequestAddinShmemSpace(MTM_SHMEM_SIZE + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
 
 	dmq_init(MtmHeartbeatSendTimeout);
@@ -526,16 +495,19 @@ MtmAllApplyWorkersFinished()
 {
 	int i;
 
-	for (i = 0; i < MtmMaxNodes; i++)
+	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		volatile int ntasks;
 
-		if (i == Mtm->my_node_id - 1)
+		LWLockAcquire(&Mtm->pools[i].lock, LW_SHARED);
+		if (Mtm->pools[i].nWorkers <= 0 || i == Mtm->my_node_id - 1)
+		{
+			LWLockRelease(&Mtm->pools[i].lock);
 			continue;
+		}
 
-		SpinLockAcquire(&Mtm->pools[i].lock);
 		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
-		SpinLockRelease(&Mtm->pools[i].lock);
+		LWLockRelease(&Mtm->pools[i].lock);
 
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
 
@@ -556,15 +528,10 @@ MtmAllApplyWorkersFinished()
  * Check correctness of multimaster configuration
  */
 static bool
-check_config()
+check_config(int node_id)
 {
-	bool ok = true;
-
-	if (MtmMaxNodes < 1)
-	{
-		mtm_log(WARNING, "multimaster requires multimaster.max_nodes > 0");
-		ok = false;
-	}
+	bool	ok = true;
+	int		workers_required;
 
 	if (max_prepared_xacts < 1)
 	{
@@ -574,15 +541,21 @@ check_config()
 		ok = false;
 	}
 
+	if (node_id <= 0 || node_id > MTM_MAX_NODES)
 	{
-		int workers_required = 2 * MtmMaxNodes + 1;
-		if (max_worker_processes < workers_required)
-		{
-			mtm_log(WARNING,
-				 "multimaster requires max_worker_processes >= %d",
-				 workers_required);
-			ok = false;
-		}
+		mtm_log(WARNING,
+			"node_id should be in range from 1 to %d, but %d is given",
+			MTM_MAX_NODES, node_id);
+		ok = false;
+	}
+
+	workers_required = 2 * node_id + 1;
+	if (max_worker_processes < workers_required)
+	{
+		mtm_log(WARNING,
+			 "multimaster requires max_worker_processes >= %d",
+			 workers_required);
+		ok = false;
 	}
 
 	if (wal_level != WAL_LEVEL_LOGICAL)
@@ -593,19 +566,19 @@ check_config()
 		ok = false;
 	}
 
-	if (max_wal_senders < MtmMaxNodes)
+	if (max_wal_senders < node_id)
 	{
 		mtm_log(WARNING,
 			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
+			 node_id);
 		ok = false;
 	}
 
-	if (max_replication_slots < MtmMaxNodes)
+	if (max_replication_slots < node_id)
 	{
 		mtm_log(WARNING,
 			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
-			 MtmMaxNodes);
+			 node_id);
 		ok = false;
 	}
 
@@ -763,12 +736,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 							 &is_self_isnull));
 	Assert(!is_self_isnull);
 
-	if (node_id <= 0 || node_id > MTM_MAX_NODES)
-		mtm_log(ERROR,
-			"node_id should be in range from 1 to %d, but %d is given",
-			MTM_MAX_NODES, node_id);
-
-	if (!check_config())
+	if (!check_config(node_id))
 		mtm_log(ERROR, "multimaster can't start with current configs");
 
 	mtm_log(NodeMgmt, "Creating node%d", node_id);
@@ -896,6 +864,10 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 	PG_RETURN_VOID();
 }
 
+/*
+ * XXX: In my opinion this interface need to be revised:
+ * manually specified node_id and end_lsn are a source of problems.
+ */
 Datum
 mtm_join_node(PG_FUNCTION_ARGS)
 {
@@ -910,6 +882,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	MtmConfig  *cfg = MtmLoadConfig();
 	XLogRecPtr	curr_lsn;
 	int			i;
+	MtmNode *new_node;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
@@ -924,7 +897,10 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	mtm_nodes = SPI_getvalue(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1);
 
 	/* connect to a new node */
-	conninfo = MtmNodeById(cfg, new_node_id)->conninfo;
+	new_node = MtmNodeById(cfg, new_node_id);
+	if (new_node == NULL)
+		mtm_log(ERROR, "Node %d not found", new_node_id);
+	conninfo = new_node->conninfo;
 	conn = PQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
@@ -947,7 +923,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PQclear(res);
 
 	res = PQexec(conn, psprintf("insert into mtm.syncpoints values "
-				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint)",
+				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint, pg_current_wal_lsn()::bigint)",
 				cfg->my_node_id, end_lsn));
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
@@ -963,7 +939,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	 * recovered replication connections.
 	 */
 
-	/* Hold all receivers */
+	/* Hold all apply workers */
 	for (i = 0; i < cfg->n_nodes; i++)
 	{
 		int			node_id = cfg->nodes[i].node_id;
@@ -971,9 +947,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 		Mtm->pools[node_id-1].n_holders += 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 
 	/* Await for workers finish and create syncpoints */
@@ -1022,9 +998,10 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			if (node_id == cfg->my_node_id)
 				continue;
 
-			SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+
+			LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 			Mtm->pools[node_id-1].n_holders -= 1;
-			SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+			LWLockRelease(&Mtm->pools[node_id - 1].lock);
 		}
 		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 		PG_RE_THROW();
@@ -1039,9 +1016,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		if (node_id == cfg->my_node_id)
 			continue;
 
-		SpinLockAcquire(&Mtm->pools[node_id - 1].lock);
+		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 		Mtm->pools[node_id-1].n_holders -= 1;
-		SpinLockRelease(&Mtm->pools[node_id - 1].lock);
+		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 
@@ -1062,6 +1039,12 @@ mtm_join_node(PG_FUNCTION_ARGS)
 				conninfo, msg);
 	}
 	PQclear(res);
+
+	/* call mtm.alter_sequences since n_nodes is changed */
+	query = psprintf("select mtm.alter_sequences()");
+	rc = SPI_execute(query, false, 0);
+	if (rc != SPI_OK_SELECT)
+		mtm_log(ERROR, "Failed to alter sequences");
 
 	pfree(cfg);
 	PQfinish(conn);
@@ -1112,7 +1095,7 @@ MtmLoadConfig()
 	if (rc < 0 || rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to load saved nodes");
 
-	Assert(SPI_processed <= MtmMaxNodes);
+	Assert(SPI_processed <= MTM_MAX_NODES);
 
 	cfg->n_nodes = 0;
 	cfg->my_node_id = 0;
@@ -1383,4 +1366,57 @@ launcher_main(Datum main_arg)
 	heap_close(rel, AccessShareLock);
 
 	CommitTransactionCommand();
+}
+
+#define BGWPOOL_STAT_COLS	(7)
+Datum
+mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
+{
+	TupleDesc	tupdesc;
+	Tuplestorestate *tupstore;
+	Datum		values[BGWPOOL_STAT_COLS];
+	bool		nulls[BGWPOOL_STAT_COLS];
+	int i;
+
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	MemoryContext per_query_ctx;
+	MemoryContext oldcontext;
+
+	/* Build a tuple descriptor for our result type */
+		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
+	oldcontext = MemoryContextSwitchTo(per_query_ctx);
+
+	tupstore = tuplestore_begin_heap(true, false, work_mem);
+	rsinfo->returnMode = SFRM_Materialize;
+	rsinfo->setResult = tupstore;
+	rsinfo->setDesc = tupdesc;
+	MemoryContextSwitchTo(oldcontext);
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (Mtm->pools[i].nWorkers == 0)
+		{
+			continue;
+		}
+
+		MemSet(values, 0, sizeof(values));
+		MemSet(nulls, 0, sizeof(nulls));
+
+		values[0] = Int32GetDatum(Mtm->pools[i].nWorkers);
+		values[1] = Int32GetDatum(Mtm->pools[i].active);
+		values[2] = Int32GetDatum(Mtm->pools[i].pending);
+		values[3] = Int32GetDatum(Mtm->pools[i].size);
+		values[4] = Int32GetDatum(Mtm->pools[i].head);
+		values[5] = Int32GetDatum(Mtm->pools[i].tail);
+		values[6] = CStringGetDatum(Mtm->pools[i].poolName);
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/* clean up and return the tuplestore */
+	tuplestore_donestoring(tupstore);
+
+	return (Datum) 0;
 }

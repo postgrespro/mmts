@@ -21,6 +21,7 @@
 
 #include "executor/spi.h"
 #include "commands/vacuum.h"
+#include "commands/tablecmds.h"
 #include "commands/tablespace.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
@@ -122,6 +123,9 @@ MtmHandleApplyError(void)
 	FreeErrorData(edata);
 }
 
+/*
+ * Handler of receiver worker for SIGINT and SIGHUP signals
+ */
 void
 ApplyCancelHandler(SIGNAL_ARGS)
 {
@@ -142,7 +146,8 @@ ApplyCancelHandler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
+static bool
+find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
 {
 	HeapTuple	  tuple;
 	HeapScanDesc  scan;
@@ -150,16 +155,13 @@ bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lo
 	TransactionId xwait;
 	TupleDesc     tupDesc =  RelationGetDescr(rel);
 	int           natts = tupDesc->natts;
-	Datum*        values = (Datum*)palloc(natts*sizeof(Datum));
-	bool*         nulls = (bool*)palloc(natts*sizeof(bool));
+	Datum*        values = (Datum*) palloc(natts * sizeof(Datum));
+	bool*         nulls = (bool*) palloc(natts * sizeof(bool));
 	bool		  found = false;
 	int           i;
 
 	InitDirtySnapshot(snap);
-	scan = heap_beginscan(rel,
-						  &snap,
-						  0,
-						  NULL);
+	scan = heap_beginscan(rel, &snap, 0, NULL);
 retry:
 	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 	{
@@ -176,14 +178,18 @@ retry:
 
 			if (nulls[i] && tup->isnull[i]) /* both nulls */
 				continue;
+
 			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not null */
 				break;
+
 			else if (!(att->attlen == -1
 					   ? datumIsEqual(PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(tup->values[i]))),
 									  PointerGetDatum(heap_tuple_untoast_attr((struct varlena *)DatumGetPointer(values[i]))), att->attbyval, -1)
 					   : datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen)))
+				/* Corresponding attributes are not identical */
 				break;
 		}
+
 		if (i == natts)
 		{
 			/* FIXME: Improve TupleSlot to not require copying the whole tuple */
@@ -253,7 +259,7 @@ retry:
  * If a matching tuple is found setup 'tid' to point to it and return true,
  * false is returned otherwise.
  */
-bool
+static bool
 find_pkey_tuple(ScanKey skey, Relation rel, Relation idxrel,
 				TupleTableSlot *slot, bool lock, LockTupleMode mode)
 {
@@ -342,24 +348,20 @@ static bool
 build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup)
 {
 	int			attoff;
-	Datum		indclassDatum;
-	Datum		indkeyDatum;
 	bool		isnull;
+	Datum		indclassDatum;
 	oidvector  *opclass;
-	int2vector  *indkey;
+	int2vector *indkey = &idxrel->rd_index->indkey;
 	bool		hasnulls = false;
+
+	Assert(RelationGetReplicaIndex(rel) == RelationGetRelid(idxrel));
 
 	indclassDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
 									Anum_pg_index_indclass, &isnull);
 	Assert(!isnull);
 	opclass = (oidvector *) DatumGetPointer(indclassDatum);
 
-	indkeyDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
-									Anum_pg_index_indkey, &isnull);
-	Assert(!isnull);
-	indkey = (int2vector *) DatumGetPointer(indkeyDatum);
-
-
+	/* Build scankey for every attribute in the index. */
 	for (attoff = 0; attoff < IndexRelationGetNumberOfKeyAttributes(idxrel); attoff++)
 	{
 		Oid			operator;
@@ -367,35 +369,38 @@ build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup
 		RegProcedure regop;
 		int			pkattno = attoff + 1;
 		int			mainattno = indkey->values[attoff];
-		Oid			atttype = attnumTypeId(rel, mainattno);
 		Oid			optype = get_opclass_input_type(opclass->values[attoff]);
 
+		/*
+		 * Load the operator info.  We need this to get the equality operator
+		 * function for the scan key.
+		 */
 		opfamily = get_opclass_family(opclass->values[attoff]);
 
 		operator = get_opfamily_member(opfamily, optype,
 									   optype,
 									   BTEqualStrategyNumber);
-
 		if (!OidIsValid(operator))
-			mtm_log(ERROR,
-				 "could not lookup equality operator for type %u, optype %u in opfamily %u",
-				 atttype, optype, opfamily);
+			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
+				 BTEqualStrategyNumber, optype, optype, opfamily);
 
 		regop = get_opcode(operator);
 
-		/* FIXME: convert type? */
+		/* Initialize the scankey. */
 		ScanKeyInit(&skey[attoff],
 					pkattno,
 					BTEqualStrategyNumber,
 					regop,
 					tup->values[mainattno - 1]);
 
+		/* Check for null value. */
 		if (tup->isnull[mainattno - 1])
 		{
 			hasnulls = true;
 			skey[attoff].sk_flags |= SK_ISNULL;
 		}
 	}
+
 	return hasnulls;
 }
 
@@ -481,6 +486,8 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 	gtid->my_xid = GetCurrentTransactionId();
 	MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
 
+	suppress_internal_consistency_checks = true;
+
 	// AcceptInvalidationMessages();
 	// if (!receiver_mtm_cfg_valid)
 	// {
@@ -505,6 +512,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	int			origin_node;
 	XLogRecPtr	origin_lsn,
 				local_lsn,
+				restart_lsn = InvalidXLogRecPtr,
 				trim_lsn;
 
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
@@ -520,23 +528,30 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 * allow previous transactions to proceed. This way we will not delay
 	 * application of transaction bodies, just prepare record itself.
 	 */
+	LWLockAcquire(&Mtm->pools[rctx->node_id-1].lock, LW_EXCLUSIVE);
 	for(;;)
 	{
 		int ntasks;
 
-		SpinLockAcquire(&Mtm->pools[rctx->node_id-1].lock);
+		if (Mtm->pools[rctx->node_id-1].nWorkers <= 0)
+		{
+			LWLockRelease(&Mtm->pools[rctx->node_id-1].lock);
+			break;
+		}
+
 		ntasks = Mtm->pools[rctx->node_id-1].active +
 				 Mtm->pools[rctx->node_id-1].pending;
-		SpinLockRelease(&Mtm->pools[rctx->node_id-1].lock);
+		ConditionVariablePrepareToSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv);
+		LWLockRelease(&Mtm->pools[rctx->node_id-1].lock);
 
 		Assert(ntasks >= 0);
 		if (ntasks == 0)
 			break;
 
 		ConditionVariableSleep(&Mtm->pools[rctx->node_id-1].syncpoint_cv,
-			PG_WAIT_EXTENSION);
+															PG_WAIT_EXTENSION);
+		LWLockAcquire(&Mtm->pools[rctx->node_id-1].lock, LW_EXCLUSIVE);
 	}
-	ConditionVariableCancelSleep();
 
 	/*
 	 * Postgres decoding API doesn't disclose origin info about logical messages,
@@ -547,6 +562,8 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 */
 	if (msg[0] == 'F')
 	{
+		Assert(rctx->is_recovery == true);
+
 		/* forwarded, parse and save as is */
 		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
 					&origin_lsn, &trim_lsn);
@@ -569,6 +586,24 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		Assert(rc == 1);
 		Assert(origin_node != Mtm->my_node_id);
 
+		/* load restart_lsn before taking local_lsn */
+		{
+			char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN, origin_node);
+			int			i;
+
+			LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+			for (i = 0; i < max_replication_slots; i++)
+			{
+				ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+				if (s->in_use && strcmp(slot_name, NameStr(s->data.name)) == 0)
+					restart_lsn = s->data.restart_lsn;
+			}
+			LWLockRelease(ReplicationSlotControlLock);
+
+			pfree(slot_name);
+		}
+
 		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
 						   origin_node, origin_lsn, trim_lsn);
 		local_lsn = LogLogicalMessage("S", new_msg, strlen(new_msg) + 1, false);
@@ -577,7 +612,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 
 	Assert(rctx->is_recovery || rctx->node_id == origin_node);
 
-	SyncpointRegister(origin_node, origin_lsn, local_lsn, trim_lsn);
+	SyncpointRegister(origin_node, origin_lsn, local_lsn, restart_lsn, trim_lsn);
 
 	MtmUpdateLsnMapping(origin_node, origin_lsn);
 }
@@ -706,9 +741,8 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 		const char *data;
 		int			len;
 
-		if (att->atttypid == InvalidOid) { 
+		if (att->atttypid == InvalidOid)
 			continue;
-		}
 
 		kind = pq_getmsgbyte(s);
 
@@ -716,12 +750,12 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 		{
 			case 'n': /* null */
 				/* already marked as null */
-				tup->values[i] = 0xdeadbeef;
+				tup->values[i] = PointerGetDatum(NULL);
 				break;
 			case 'u': /* unchanged column */
 				tup->isnull[i] = true;
 				tup->changed[i] = false;
-				tup->values[i] = 0xdeadbeef; /* make bad usage more obvious */
+				tup->values[i] = PointerGetDatum(NULL);
 				break;
 
 			case 'b': /* binary format */
@@ -736,32 +770,7 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 				else
 					tup->values[i] = PointerGetDatum(data);
 				break;
-			case 's': /* send/recv format */
-				{
-					Oid typreceive;
-					Oid typioparam;
-					StringInfoData buf;
 
-					tup->isnull[i] = false;
-					len = pq_getmsgint(s, 4); /* read length */
-
-					getTypeBinaryInputInfo(att->atttypid,
-										   &typreceive, &typioparam);
-
-					/* create StringInfo pointing into the bigger buffer */
-					initStringInfo(&buf);
-					/* and data */
-					buf.data = (char *) pq_getmsgbytes(s, len);
-					buf.len = len;
-					tup->values[i] = OidReceiveFunctionCall(
-						typreceive, &buf, typioparam, att->atttypmod);
-
-					if (buf.len != buf.cursor)
-						ereport(ERROR,
-								(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION),
-								 MTM_ERRMSG("incorrect binary data format")));
-					break;
-				}
 			case 't': /* text format */
 				{
 					Oid typinput;
@@ -806,7 +815,8 @@ read_rel(StringInfo s, LOCKMODE mode)
 	MemoryContext old_context;
 
 	local_relid = pglogical_relid_map_get(remote_relid);
-	if (local_relid == InvalidOid) { 
+	if (local_relid == InvalidOid)
+	{
 		rv = makeNode(RangeVar);
 
 		nspnamelen = pq_getmsgbyte(s);
@@ -820,7 +830,9 @@ read_rel(StringInfo s, LOCKMODE mode)
 		pglogical_relid_map_put(remote_relid, local_relid);
 		MemoryContextSwitchTo(old_context);
 		return heap_open(local_relid, NoLock);
-	} else { 
+	}
+	else
+	{
 		nspnamelen = pq_getmsgbyte(s);
 		s->cursor += nspnamelen;
 		relnamelen = pq_getmsgbyte(s);
@@ -922,25 +934,33 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	replorigin_session_origin_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
 	Assert(replorigin_session_origin == InvalidRepOriginId);
 
+	suppress_internal_consistency_checks = false;
+
 	switch (event)
 	{
 		case PGLOGICAL_PRECOMMIT_PREPARED:
 		{
+			bool precommitted;
+
 			Assert(!query_cancel_allowed);
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			MtmBeginSession(origin_node);
 
-			if (!IsTransactionState()) {
+			if (!IsTransactionState())
+			{
 				StartTransactionCommand();
-				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
+				precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
 				CommitTransactionCommand();
-				MemoryContextSwitchTo(MtmApplyContext);
-			} else {
-				SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
-			}
-			mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
-			if (receiver_ctx->parallel_allowed)
+				MemoryContextSwitchTo(MtmApplyContext);
+			}
+			else
+				precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
+
+			if (precommitted)
+				mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+
+			if (precommitted && receiver_ctx->parallel_allowed)
 			{
 				mtm_send_gid_reply(gid, origin_node, MSG_PRECOMMITTED);
 			}
@@ -958,6 +978,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 		case PGLOGICAL_PREPARE:
 		{
 			bool res;
+			ListCell   *cur_item, *prev_item;
 			TransactionId xid = GetCurrentTransactionIdIfAny();
 
 			Assert(IsTransactionState() && TransactionIdIsValid(xid));
@@ -976,6 +997,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			res = PrepareTransactionBlock(gid);
 			mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid="XID_FMT")", gid, xid);
 
+			AllowTempIn2PC = true;
 			CommitTransactionCommand();
 			MemoryContextSwitchTo(MtmApplyContext);
 
@@ -998,6 +1020,28 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			current_gtid->my_xid = InvalidTransactionId;
 			MtmDeadlockDetectorRemoveXact(xid);
 
+			/*
+			 * Reset on_commit_actions.
+			 *
+			 * Temp schema is shared between pool workers so we can try to
+			 * truncate tables that were delete by other workers, but still
+			 * exist is pg_on_commit_actions which is static. So clean it up:
+			 * as sata is not replicated for temp tables there is nothing to
+			 * delete anyway.
+			 */
+			prev_item = NULL;
+			cur_item = list_head(pg_on_commit_actions);
+			while (cur_item != NULL)
+			{
+				void *oc = (void *) lfirst(cur_item);
+				pg_on_commit_actions = list_delete_cell(pg_on_commit_actions, cur_item, prev_item);
+				pfree(oc);
+				if (prev_item)
+					cur_item = lnext(prev_item);
+				else
+					cur_item = list_head(pg_on_commit_actions);
+			}
+			Assert(pg_on_commit_actions == NIL);
 
 			MtmEndSession(origin_node, true);
 
@@ -1014,7 +1058,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 			strncpy(gid, pq_getmsgstring(in), sizeof gid);
 			StartTransactionCommand();
 			MtmBeginSession(origin_node);
-			FinishPreparedTransaction(gid, true, false);
+			FinishPreparedTransaction(gid, true, true);
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 			CommitTransactionCommand();
 			MemoryContextSwitchTo(MtmApplyContext);
@@ -1050,7 +1094,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 	if (!receiver_ctx->is_recovery)
 	{
 		Assert(replorigin_session_origin == InvalidRepOriginId);
-		MaybeLogSyncpoint(false);
+		MaybeLogSyncpoint();
 	}
 }
 
@@ -1066,22 +1110,17 @@ pq_peekmsgbyte(StringInfo msg)
 static void
 process_remote_insert(StringInfo s, Relation rel)
 {
-	EState *estate;
-	TupleData new_tuple;
-	TupleTableSlot *newslot;
-	TupleTableSlot *oldslot;
-	ResultRelInfo *relinfo;
-	int	i;
-	TupleDesc tupDesc = RelationGetDescr(rel);
-	HeapTuple tup;
+	EState			*estate;
+	TupleData		new_tuple;
+	TupleTableSlot	*newslot;
+	ResultRelInfo	*relinfo;
+	int				i;
+	TupleDesc		tupDesc = RelationGetDescr(rel);
+	HeapTuple		tup;
 
 	PushActiveSnapshot(GetTransactionSnapshot());
-
 	estate = create_rel_estate(rel);
-	newslot = ExecInitExtraTupleSlot(estate, NULL);
-	oldslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(newslot, tupDesc);
-	ExecSetSlotDescriptor(oldslot, tupDesc);
+	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
 
 	ExecOpenIndices(estate->es_result_relation_info, false);
 	relinfo = estate->es_result_relation_info;
@@ -1091,27 +1130,29 @@ process_remote_insert(StringInfo s, Relation rel)
 	if (pq_peekmsgbyte(s) == 'I')
 	{
 		/* Use bulk insert */
-		BulkInsertState bistate = GetBulkInsertState();
-		HeapTuple bufferedTuples[MAX_BUFFERED_TUPLES];
-		MemoryContext oldcontext;
-		int nBufferedTuples = 1;
-		size_t bufferedTuplesSize;
-		CommandId	mycid = GetCurrentCommandId(true);
+		BulkInsertState	bistate = GetBulkInsertState();
+		HeapTuple		bufferedTuples[MAX_BUFFERED_TUPLES];
+		MemoryContext	oldcontext;
+		int				nBufferedTuples = 1;
+		size_t			bufferedTuplesSize;
+		CommandId		mycid = GetCurrentCommandId(true);
 
 		bufferedTuples[0] = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
 		bufferedTuplesSize = bufferedTuples[0]->t_len;
 
 		while (nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE)
 		{
-			int action = pq_getmsgbyte(s);
+			int	action = pq_getmsgbyte(s);
+
 			Assert(action == 'I');
 			read_tuple_parts(s, rel, &new_tuple);
 			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
-															  new_tuple.values, new_tuple.isnull);
+											new_tuple.values, new_tuple.isnull);
 			bufferedTuplesSize += bufferedTuples[nBufferedTuples++]->t_len;
 			if (pq_peekmsgbyte(s) != 'I')
 				break;
 		}
+
 		/*
 		 * heap_multi_insert leaks memory, so switch to short-lived memory context
 		 * before calling it.
@@ -1152,23 +1193,26 @@ process_remote_insert(StringInfo s, Relation rel)
 		}
 
 	    FreeBulkInsertState(bistate);
-	} else {
-        /* Insert single tuple */
+	}
+	else
+	{
+		MemoryContext	oldctx;
+		TriggerDesc		*tmp;
 
-	    tup = heap_form_tuple(tupDesc,
-							  new_tuple.values, new_tuple.isnull);
+		/* Insert single tuple */
+		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		tup = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
 		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
+		MemoryContextSwitchTo(oldctx);
 
-		/* debug output */
-#ifdef VERBOSE_INSERT
-		log_tuple("INSERT:%s", tupDesc, newslot->tts_tuple);
-#endif
-
-		simple_heap_insert(rel, newslot->tts_tuple);
-		UserTableUpdateOpenIndexes(estate, newslot);
+		tmp = estate->es_result_relation_info->ri_TrigDesc;
+		estate->es_result_relation_info->ri_TrigDesc = NULL;
+		ExecSimpleRelationInsert(estate, newslot);
+		estate->es_result_relation_info->ri_TrigDesc = tmp;
 
 		/* AFTER ROW INSERT Triggers */
-		if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
+		if (strcmp(get_namespace_name(RelationGetNamespace(rel)),
+			MULTIMASTER_SCHEMA_NAME) == 0)
 		{
 			ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
 							NIL, NULL);
@@ -1197,19 +1241,19 @@ process_remote_insert(StringInfo s, Relation rel)
 static void
 process_remote_update(StringInfo s, Relation rel)
 {
-	char		action;
-	EState	   *estate;
-	TupleTableSlot *newslot;
-	TupleTableSlot *oldslot;
-	bool		    pkey_sent;
-	bool		    found_tuple;
-	TupleData       old_tuple;
-	TupleData       new_tuple;
-	Oid			    idxoid = InvalidOid;
-	Relation	    idxrel = NULL;
-	TupleDesc	    tupDesc = RelationGetDescr(rel);
-	ScanKeyData     skey[INDEX_MAX_KEYS];
-	HeapTuple	    remote_tuple = NULL;
+	char			action;
+	EState			*estate;
+	TupleTableSlot	*newslot;
+	TupleTableSlot	*oldslot;
+	bool			pkey_sent;
+	bool			found_tuple;
+	TupleData		old_tuple;
+	TupleData		new_tuple;
+	Oid				idxoid = InvalidOid;
+	Relation		idxrel = NULL;
+	TupleDesc		tupDesc = RelationGetDescr(rel);
+	ScanKeyData		skey[INDEX_MAX_KEYS];
+	HeapTuple		remote_tuple = NULL;
 
 	action = pq_getmsgbyte(s);
 
@@ -1219,10 +1263,8 @@ process_remote_update(StringInfo s, Relation rel)
 			 action);
 
 	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(oldslot, tupDesc);
-	newslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(newslot, tupDesc);
+	oldslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
 
 	if (action == 'K')
 	{
@@ -1253,9 +1295,7 @@ process_remote_update(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	if (!OidIsValid(idxoid))
-	{
 		found_tuple = find_heap_tuple(pkey_sent ? &old_tuple : &new_tuple, rel, oldslot, true);
-	}
 	else
 	{
 		/* open index, so we can build scan key for row */
@@ -1269,7 +1309,7 @@ process_remote_update(StringInfo s, Relation rel)
 
 		/* look for tuple identified by the (old) primary key */
 		found_tuple = find_pkey_tuple(skey, rel, idxrel, oldslot, true,
-									  pkey_sent ? LockTupleExclusive : LockTupleNoKeyExclusive);
+					pkey_sent ? LockTupleExclusive : LockTupleNoKeyExclusive);
 
 	}
 	if (found_tuple)
@@ -1346,9 +1386,7 @@ process_remote_delete(StringInfo s, Relation rel)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	if (!OidIsValid(idxoid))
-	{
 		found_old = find_heap_tuple(&oldtup, rel, oldslot, true);
-	}
 	else
 	{
 		/* Now open the primary key index */
@@ -1409,89 +1447,89 @@ process_remote_delete(StringInfo s, Relation rel)
 void
 MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 {
-    StringInfoData s;
-    Relation rel = NULL;
-	int spill_file = -1;
-	int save_cursor = 0;
-	int save_len = 0;
-	MemoryContext old_context;
-	MemoryContext top_context;
-	GlobalTransactionId current_gtid = {0, InvalidTransactionId};
+	StringInfoData		s;
+	Relation			rel = NULL;
+	int					spill_file = -1;
+	int					save_cursor = 0;
+	int					save_len = 0;
+	MemoryContext		old_context;
+	MemoryContext		top_context;
+	GlobalTransactionId	current_gtid = {0, InvalidTransactionId};
 
     s.data = work;
     s.len = size;
     s.maxlen = -1;
 	s.cursor = 0;
-	
-    if (MtmApplyContext == NULL) {
-        MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
+
+	if (MtmApplyContext == NULL)
+		MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
 												"ApplyContext",
 												ALLOCSET_DEFAULT_SIZES);
-    }
+
 	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
 
 	PG_TRY();
-
-	AcceptInvalidationMessages();
-	if (!receiver_mtm_cfg_valid)
 	{
-		if (receiver_mtm_cfg)
-			pfree(receiver_mtm_cfg);
-
-		receiver_mtm_cfg = MtmLoadConfig();
-
-		if (receiver_mtm_cfg->my_node_id == 0 ||
-			MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL) //XXX
-			proc_exit(0);
-
-		receiver_mtm_cfg_valid = true;
-	}
-
-	StartTransactionCommand();
-	SetPGVariable("session_authorization", NIL, false);
-	ResetAllOptions();
-	CommitTransactionCommand();
-
-    {    
 		bool inside_transaction = true;
-        do { 
-            char action = pq_getmsgbyte(&s);
-			old_context = MemoryContextSwitchTo(MtmApplyContext);
 
+		AcceptInvalidationMessages();
+
+		/* Clear authorization settings */
+		StartTransactionCommand();
+		SetPGVariable("session_authorization", NIL, false);
+		ResetAllOptions();
+		CommitTransactionCommand();
+
+		if (!receiver_mtm_cfg_valid)
+		{
+			if (receiver_mtm_cfg)
+				pfree(receiver_mtm_cfg);
+			receiver_mtm_cfg = MtmLoadConfig();
+			if (receiver_mtm_cfg->my_node_id == 0 ||
+				MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL) //XXX
+				proc_exit(0);
+
+			receiver_mtm_cfg_valid = true;
+		}
+
+		do {
+			char action = pq_getmsgbyte(&s);
+
+			old_context = MemoryContextSwitchTo(MtmApplyContext);
 			mtm_log(MtmApplyTrace, "got action '%c'", action);
 
 			switch (action)
 			{
-                /* BEGIN */
-            case 'B':
-			    inside_transaction = process_remote_begin(&s, &current_gtid);
+				/* BEGIN */
+			case 'B':
+				inside_transaction = process_remote_begin(&s, &current_gtid);
 				break;
-                /* COMMIT */
-            case 'C':
-  			    close_rel(rel);
+				/* COMMIT */
+			case 'C':
+				close_rel(rel);
 				process_remote_commit(&s, &current_gtid, receiver_ctx);
 				inside_transaction = false;
-                break;
-                /* INSERT */
-            case 'I':
+				break;
+				/* INSERT */
+			case 'I':
 				Assert(rel);
-			    process_remote_insert(&s, rel);
-                break;
-                /* UPDATE */
-            case 'U':
+				process_remote_insert(&s, rel);
+				break;
+				/* UPDATE */
+			case 'U':
 				Assert(rel);
-                process_remote_update(&s, rel);
-                break;
-                /* DELETE */
-            case 'D':
+				process_remote_update(&s, rel);
+				break;
+				/* DELETE */
+			case 'D':
 				Assert(rel);
-                process_remote_delete(&s, rel);
-                break;
-            case 'R':
-  			    close_rel(rel);
-                rel = read_rel(&s, RowExclusiveLock);
-                break;
+				process_remote_delete(&s, rel);
+				break;
+			case 'R':
+				close_rel(rel);
+				rel = read_rel(&s, RowExclusiveLock);
+				break;
 			case 'F':
 			{
 				int node_id = pq_getmsgint(&s, 4);
@@ -1500,9 +1538,10 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				spill_file = MtmOpenSpillFile(node_id, file_id);
 				break;
 			}
- 		    case '(':
+			case '(':
 			{
-			    size_t size = pq_getmsgint(&s, 4);    
+				size_t size = pq_getmsgint(&s, 4);
+
 				s.data = MemoryContextAlloc(TopMemoryContext, size);
 				save_cursor = s.cursor;
 				save_len = s.len;
@@ -1511,14 +1550,12 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				MtmReadSpillFile(spill_file, s.data, size);
 				break;
 			}
-  		    case ')':
-			{
-  			    pfree(s.data);
+			case ')':
+				pfree(s.data);
 				s.data = work;
-  			    s.cursor = save_cursor;
+				s.cursor = save_cursor;
 				s.len = save_len;
 				break;
-			}
 			case 'N':
 			{
 				int64 next;
@@ -1531,17 +1568,15 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 				AdjustSequence(relid, next);
 				break;
 			}
-		    case '0':
-			    Assert(rel != NULL);
-			    heap_truncate_one_rel(rel);
+			case '0':
+				Assert(rel != NULL);
+				heap_truncate_one_rel(rel);
 				break;
 			case 'M':
-			{
-  			    close_rel(rel);
+				close_rel(rel);
 				rel = NULL;
 				inside_transaction = !process_remote_message(&s, receiver_ctx);
 				break;
-			}
 			case 'Z':
 			{
 				int			rc;
@@ -1599,6 +1634,21 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		mtm_log(MtmApplyError, "Receiver: abort transaction " XID_FMT,
 				current_gtid.xid);
 
+		/*
+		 * If we are in recovery, there is no excuse for refusing the
+		 * transaction. Die and restart the recovery then.
+		 *
+		 * This should never happen under normal circumstances. Yeah, you
+		 * might imagine something like e.g. evil user making local xact which
+		 * makes our xact violating constraint or out of disk space error, but
+		 * in testing this most probably means a bug, so put an assert.
+		 */
+		if (receiver_ctx->is_recovery)
+		{
+			Assert(false);
+			PG_RE_THROW();
+		}
+
 		/* handle only prepare errors here */
 		if (TransactionIdIsValid(current_gtid.my_xid))
 		{
@@ -1612,10 +1662,6 @@ MtmExecutor(void* work, size_t size, MtmReceiverContext *receiver_ctx)
 		AbortCurrentTransaction();
 	}
 	PG_END_TRY();
-
-	// Assert(s.cursor == s.len);
-	// only non-error scenario
-	// Assert(s.data == work);
 
 	if (s.data != work)
 		pfree(s.data);

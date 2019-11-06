@@ -992,7 +992,6 @@ dmq_receiver_at_exit(int status, Datum receiver)
 		dmq_receiver_stop_hook(sender_name);
 }
 
-
 Datum
 dmq_receiver_loop(PG_FUNCTION_ARGS)
 {
