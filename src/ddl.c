@@ -103,6 +103,10 @@ static ExecutorFinish_hook_type PreviousExecutorFinishHook;
 static ProcessUtility_hook_type PreviousProcessUtilityHook;
 static seq_nextval_hook_t PreviousSeqNextvalHook;
 
+
+/* Set given temp namespace in receiver */
+PG_FUNCTION_INFO_V1(mtm_set_temp_schema);
+
 static void MtmSeqNextvalHook(Oid seqid, int64 next);
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
@@ -113,7 +117,7 @@ static void MtmProcessUtility(PlannedStmt *pstmt,
 				QueryEnvironment *queryEnv, DestReceiver *dest,
 				char *completionTag);
 
-static void MtmProcessUtilityReciever(PlannedStmt *pstmt,
+static void MtmProcessUtilityReceiver(PlannedStmt *pstmt,
 				const char *queryString,
 				ProcessUtilityContext context, ParamListInfo params,
 				QueryEnvironment *queryEnv, DestReceiver *dest,
@@ -265,8 +269,6 @@ temp_schema_init(void)
 	}
 }
 
-/* Set given temp namespace in receiver */
-PG_FUNCTION_INFO_V1(mtm_set_temp_schema);
 Datum
 mtm_set_temp_schema(PG_FUNCTION_ARGS)
 {
@@ -302,7 +304,6 @@ static void
 MtmGucInit(void)
 {
 	HASHCTL		hash_ctl;
-	char	   *current_role;
 	MemoryContext oldcontext;
 
 	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
@@ -321,7 +322,6 @@ MtmGucInit(void)
 	 * XXX: try to avoid using MtmDatabaseUser somehow
 	 */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-	current_role = GetConfigOptionByName("session_authorization", NULL, false);
 	// XXX if (current_role && *current_role && strcmp(MtmDatabaseUser, current_role) != 0)
 	MtmGucUpdate("session_authorization");
 	MemoryContextSwitchTo(oldcontext);
@@ -606,7 +606,7 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 {
 	if (MtmIsLogicalReceiver)
 	{
-		MtmProcessUtilityReciever(pstmt, queryString, context, params,
+		MtmProcessUtilityReceiver(pstmt, queryString, context, params,
 								  queryEnv, dest, completionTag);
 	}
 	else
@@ -633,7 +633,7 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
  * receiver (e.g calling DDL from trigger) this hook does nothing.
  */
 static void
-MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
+MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 				  ProcessUtilityContext context, ParamListInfo params,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  char *completionTag)
@@ -647,7 +647,7 @@ MtmProcessUtilityReciever(PlannedStmt *pstmt, const char *queryString,
 		bool		captured = false;
 
 		mtm_log(DDLProcessingTrace,
-				"MtmProcessUtilityReciever: tag=%s, context=%d, issubtrans=%d,  statement=%s",
+				"MtmProcessUtilityReceiver: tag=%s, context=%d, issubtrans=%d,  statement=%s",
 				CreateCommandTag(parsetree), context, IsSubTransaction(), queryString);
 
 		Assert(oldMemContext != MtmApplyContext);
@@ -883,7 +883,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		{
 			DiscardStmt *stmt = (DiscardStmt *) parsetree;
 
-			if (stmt->type == DISCARD_TEMP)
+			if (stmt->target == DISCARD_TEMP)
 				temp_schema_reset();
 
 			if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
@@ -1504,15 +1504,17 @@ MtmSeqNextvalHook(Oid seqid, int64 next)
 static List *
 AdjustCreateSequence(List *options)
 {
-	bool has_increment = false, has_start = false;
-	ListCell   *option;
+	bool has_increment = false;
+	bool has_start = false;
+	ListCell	*option;
+	DefElem		*defel;
 
 	if (!MtmIsEnabled())
 		return options;
 
 	foreach(option, options)
 	{
-		DefElem    *defel = (DefElem *) lfirst(option);
+		defel = (DefElem *) lfirst(option);
 		if (strcmp(defel->defname, "increment") == 0)
 			has_increment = true;
 		else if (strcmp(defel->defname, "start") == 0)
@@ -1532,13 +1534,13 @@ AdjustCreateSequence(List *options)
 				max_node = mtm_cfg->nodes[i].node_id;
 		}
 
-		DefElem *defel = makeDefElem("increment", (Node *) makeInteger(max_node), -1);
+		defel = makeDefElem("increment", (Node *) makeInteger(max_node), -1);
 		options = lappend(options, defel);
 	}
 
 	if (!has_start)
 	{
-		DefElem *defel = makeDefElem("start", (Node *) makeInteger(Mtm->my_node_id), -1);
+		defel = makeDefElem("start", (Node *) makeInteger(Mtm->my_node_id), -1);
 		options = lappend(options, defel);
 	}
 
