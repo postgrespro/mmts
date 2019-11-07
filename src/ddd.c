@@ -380,7 +380,7 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 		 src_pl = (PROCLOCK *) SHMQueueNext(procLocks, &src_pl->lockLink,
 											offsetof(PROCLOCK, lockLink)))
 	{
-		GlobalTransactionId src_gtid;
+		GlobalTransactionId src_gtid, zero_gtid = {0, 0, 0};
 		PGPROC	   *src_proc = src_pl->tag.myProc;
 		PROCLOCK   *dst_pl;
 		int			conflictMask;
@@ -424,8 +424,7 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 		}
 
 		/* end of lock owners list */
-		ByteBufferAppend(buf, &(GlobalTransactionId){0, 0, 0},
-						 sizeof(GlobalTransactionId));
+		ByteBufferAppend(buf, &zero_gtid, sizeof(GlobalTransactionId));
 	}
 
 	/* dump soft edges */
@@ -434,13 +433,13 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 	curr = (PGPROC *) prev->links.next;
 	while (curr != (PGPROC *) waitQueue->links.next)
 	{
-		GlobalTransactionId src_gtid, dst_gtid;
+		GlobalTransactionId src_gtid, dst_gtid, zero_gtid = {0, 0, 0};
 
 		src_gtid = gtid_by_pgproc(curr);
 		dst_gtid = gtid_by_pgproc(prev);
 		ByteBufferAppend(buf, &src_gtid, sizeof(src_gtid));
 		ByteBufferAppend(buf, &dst_gtid, sizeof(dst_gtid));
-		ByteBufferAppend(buf, &(GlobalTransactionId){0, 0, 0},
+		ByteBufferAppend(buf, &zero_gtid,
 							sizeof(GlobalTransactionId));
 
 		mtm_log(DeadlockSerialize,
