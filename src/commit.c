@@ -355,9 +355,7 @@ MtmTwoPhaseCommit()
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
 						(errcode(messages[i].errcode),
-						 errmsg("[multimaster] failed to prepare transaction at peer node"),
-						 errdetail("sqlstate %s (%s)",
-								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+						 errmsg("[multimaster] failed to prepare transaction at peer node")));
 				else
 					ereport(ERROR,
 						(errcode(messages[i].errcode),
@@ -526,9 +524,7 @@ MtmExplicitPrepare(char *gid)
 			if (MtmVolksWagenMode)
 				ereport(ERROR,
 					(errcode(messages[i].errcode),
-						errmsg("[multimaster] failed to prepare transaction at peer node"),
-						errdetail("sqlstate %s (%s)",
-							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+						errmsg("[multimaster] failed to prepare transaction at peer node")));
 			else
 				ereport(ERROR,
 					(errcode(messages[i].errcode),
