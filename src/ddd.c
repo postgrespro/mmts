@@ -493,21 +493,6 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	hasDeadlock = MtmGraphFindLoop(&graph, &gtid);
 	mtm_log(DeadlockCheck, "Distributed deadlock check by backend %d for %u:" XID_FMT " = %d",
 		MyProcPid, gtid.node, gtid.xid, hasDeadlock);
-	// if (!hasDeadlock) {
-	// 	/* There is no deadlock loop in graph, but deadlock can be caused by lack of apply workers: if all of them are busy, then some transactions
-	// 	 * can not be appied just because there are no vacant workers and it cause additional dependency between transactions which is not
-	// 	 * refelected in lock graph
-	// 	 */
-	// 	timestamp_t lastPeekTime = minBgwGetLastPeekTime(&Mtm->pool);
-	// 	if (lastPeekTime != 0 && MtmGetSystemTime() - lastPeekTime >= MSEC_TO_USEC(DeadlockTimeout)) {
-	// 		hasDeadlock = true;
-	// 		MTM_ELOG(WARNING, "Apply workers were blocked more than %d msec",
-	// 			 (int)USEC_TO_MSEC(MtmGetSystemTime() - lastPeekTime));
-	// 	} else {
-	// 		MTM_LOG1("Enable deadlock timeout in backend %d for transaction %llu", MyProcPid, (long64)xid);
-	// 		enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-	// 	}
-	// }
 
 	if (!hasDeadlock)
 	{

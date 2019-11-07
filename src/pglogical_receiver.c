@@ -780,7 +780,6 @@ pglogical_receiver_main(Datum main_arg)
 					{
 						int64 now = feGetCurrentTimestamp();
 
-						// MtmUpdateLsnMapping(nodeId, walEnd);
 						/* Leave if feedback is not sent properly */
 						sendFeedback(conn, now, nodeId);
 					}

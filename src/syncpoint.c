@@ -189,16 +189,9 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 
 	/*
 	 * XXX: simple delete of restart_lsn < $restart_lsn is not working
+	 * 
+	 * Need to delete old syncpoints.
 	 */
-	// /* Delete all syncpoints before one with our restart_lsn */
-	// sql = psprintf("delete from mtm.syncpoints "
-	// 			   "where node_id = %d and restart_lsn < "UINT64_FORMAT,
-	// 	node_id,
-	// 	trim_lsn
-	// );
-	// rc = SPI_execute(sql, false, 0);
-	// if (rc < 0)
-	// 	mtm_log(ERROR, "Failed to trim syncpoints");
 
 	/* Update trim_lsn for current node and calculate min_trim_lsn */
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);

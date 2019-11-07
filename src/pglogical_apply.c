@@ -487,20 +487,6 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 
 	suppress_internal_consistency_checks = true;
 
-	// AcceptInvalidationMessages();
-	// if (!receiver_mtm_cfg_valid)
-	// {
-	// 	if (receiver_mtm_cfg)
-	// 		pfree(receiver_mtm_cfg);
-
-	// 	receiver_mtm_cfg = MtmLoadConfig();
-
-	// 	if (receiver_mtm_cfg->my_node_id == 0)
-	// 		proc_exit(0);
-
-	// 	receiver_mtm_cfg_valid = true;
-	// }
-
 	return true;
 }
 

@@ -657,7 +657,6 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 		{
 			case T_CreateTableSpaceStmt:
 			case T_DropTableSpaceStmt:
-			// case T_VacuumStmt:
 				Assert(MtmCapturedDDL == NULL);
 				MtmCapturedDDL = copyObject(parsetree);
 				captured = true;
@@ -1205,11 +1204,6 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 		switch (nodeTag(MtmCapturedDDL))
 		{
-			// case T_VacuumStmt:
-			// {
-			// 	ExecVacuum((VacuumStmt *) MtmCapturedDDL, 1);
-			// 	break;
-			// }
 			case T_IndexStmt:
 			{
 				IndexStmt *indexStmt = (IndexStmt *) MtmCapturedDDL;

@@ -269,7 +269,6 @@ dmq_init(int send_timeout)
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = dmq_shmem_startup_hook;
 
-	// on_proc_exit(dmq_at_exit, 0);
 }
 
 static Size
@@ -291,14 +290,6 @@ dmq_toc_size()
  * Sender
  *
  *****************************************************************************/
-
-// static void
-// fe_close(PGconn *conn)
-// {
-// 	PQputCopyEnd(conn, NULL);
-// 	PQflush(conn);
-// 	PQfinish(conn);
-// }
 
 static int
 fe_send(PGconn *conn, char *msg, size_t len)
@@ -448,9 +439,7 @@ dmq_sender_main(Datum main_arg)
 
 					if (ret < 0)
 					{
-						// Assert(PQstatus(conns[conn_id].pgconn) != CONNECTION_OK);
 						conns[conn_id].state = Idle;
-						// DeleteWaitEvent(set, conns[conn_id].pos);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] failed to send message to %s: %s",
@@ -568,8 +557,6 @@ dmq_sender_main(Datum main_arg)
 					if (ret < 0)
 					{
 						conns[conn_id].state = Idle;
-						// DeleteWaitEvent(set, conns[conn_id].pos);
-						// Assert(PQstatus(conns[i].pgconn) != CONNECTION_OK);
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] failed to send heartbeat to %s: %s",
@@ -1205,7 +1192,6 @@ ensure_outq_handle()
 	if (dmq_local.mq_outh != NULL)
 		return;
 
-	// Assert(dmq_state->handle != DSM_HANDLE_INVALID);
 	seg = dsm_attach(dmq_state->out_dsm);
 	if (seg == NULL)
 		ereport(ERROR,
@@ -1222,8 +1208,6 @@ ensure_outq_handle()
 
 	outq = shm_toc_lookup(toc, MyProc->pgprocno, false);
 	shm_mq_set_sender(outq, MyProc);
-
-	// elog(LOG, "XXXshm_mq_set_sender %d", MyProc->pgprocno);
 
 	oldctx = MemoryContextSwitchTo(TopMemoryContext);
 	dmq_local.mq_outh = shm_mq_attach(outq, seg, NULL);
@@ -1431,7 +1415,6 @@ dmq_detach_receiver(char *sender_name)
 
 	if (dmq_local.inhandles[handle_id].dsm_seg)
 	{
-		// dsm_unpin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
 		dmq_local.inhandles[handle_id].dsm_seg =  NULL;
 	}
@@ -1542,7 +1525,6 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 					*sender_id = i;
 					return false;
 				}
-				// mtm_log(ERROR, "[DMQ] dmq_pop: failed to reattach");
 			}
 		}
 

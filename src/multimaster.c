@@ -600,9 +600,6 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	PGconn	  **peer_conns;
 	StringInfoData local_query;
 
-	// if (!check_config())
-	// 	mtm_log(ERROR, "Multimaster config is not ok, refusing to work");
-
 	/* parse array with peer connstrings */
 	Assert(ARR_ELEMTYPE(peers_arr) == TEXTOID);
 	Assert(ARR_NDIM(peers_arr) == 1);
