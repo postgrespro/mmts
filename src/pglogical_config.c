@@ -46,18 +46,19 @@ typedef enum PGLogicalOutputParamType
 
 /* param parsing */
 static Datum get_param_value(DefElem *elem, bool null_ok,
-		PGLogicalOutputParamType type);
+				PGLogicalOutputParamType type);
 
 static Datum get_param(List *options, const char *name, bool missing_ok,
-					   bool null_ok, PGLogicalOutputParamType type,
-					   bool *found);
+		  bool null_ok, PGLogicalOutputParamType type,
+		  bool *found);
 static bool parse_param_bool(DefElem *elem);
 static uint32 parse_param_uint32(DefElem *elem);
 
 static void
-process_parameters_v1(List *options, PGLogicalOutputData *data);
+			process_parameters_v1(List *options, PGLogicalOutputData *data);
 
-enum {
+enum
+{
 	PARAM_UNRECOGNISED,
 	PARAM_MAX_PROTOCOL_VERSION,
 	PARAM_MIN_PROTOCOL_VERSION,
@@ -77,11 +78,12 @@ enum {
 	PARAM_FORWARD_CHANGESETS,
 	PARAM_HOOKS_SETUP_FUNCTION,
 	PARAM_NO_TXINFO
-} OutputPluginParamKey;
+}			OutputPluginParamKey;
 
-typedef struct {
-	const char * const paramname;
-	int paramkey;
+typedef struct
+{
+	const char *const paramname;
+	int			paramkey;
 } OutputPluginParam;
 
 /* Oh, if only C had switch on strings */
@@ -112,11 +114,12 @@ static OutputPluginParam param_lookup[] = {
  * param, or PARAM_UNRECOGNISED if not found.
  */
 static int
-get_param_key(const char * const param_name)
+get_param_key(const char *const param_name)
 {
 	OutputPluginParam *param = &param_lookup[0];
 
-	do {
+	do
+	{
 		if (strcmp(param->paramname, param_name) == 0)
 			return param->paramkey;
 		param++;
@@ -130,15 +133,15 @@ void
 process_parameters_v1(List *options, PGLogicalOutputData *data)
 {
 	Datum		val;
-	bool    	found;
-	ListCell	*lc;
+	bool		found;
+	ListCell   *lc;
 
 	/*
-	 * max_proto_version and min_proto_version are specified
-	 * as required, and must be parsed before anything else.
+	 * max_proto_version and min_proto_version are specified as required, and
+	 * must be parsed before anything else.
 	 *
-	 * TODO: We should still parse them as optional and
-	 * delay the ERROR until after the startup reply.
+	 * TODO: We should still parse them as optional and delay the ERROR until
+	 * after the startup reply.
 	 */
 	val = get_param(options, "max_proto_version", false, false,
 					OUTPUT_PARAM_TYPE_UINT32, &found);
@@ -156,7 +159,7 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 		Assert(elem->arg == NULL || IsA(elem->arg, String));
 
 		/* Check each param, whether or not we recognise it */
-		switch(get_param_key(elem->defname))
+		switch (get_param_key(elem->defname))
 		{
 
 			case PARAM_BINARY_BIGENDIAN:
@@ -214,11 +217,12 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 				break;
 
 			case PARAM_FORWARD_CHANGESETS:
+
 				/*
 				 * Check to see if the client asked for changeset forwarding
 				 *
-				 * Note that we cannot support this on 9.4. We'll tell the client
-				 * in the startup reply message.
+				 * Note that we cannot support this on 9.4. We'll tell the
+				 * client in the startup reply message.
 				 */
 				val = get_param_value(elem, false, OUTPUT_PARAM_TYPE_BOOL);
 				data->client_forward_changesets_set = true;
@@ -246,7 +250,7 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 
 			case PARAM_HOOKS_SETUP_FUNCTION:
 				val = get_param_value(elem, false, OUTPUT_PARAM_TYPE_QUALIFIED_NAME);
-				data->hooks_setup_funcname = (List*) PointerGetDatum(val);
+				data->hooks_setup_funcname = (List *) PointerGetDatum(val);
 				break;
 
 			case PARAM_NO_TXINFO:
@@ -273,9 +277,9 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 int
 process_parameters(List *options, PGLogicalOutputData *data)
 {
-	Datum	val;
-	bool    found;
-	int		params_format;
+	Datum		val;
+	bool		found;
+	int			params_format;
 
 	val = get_param(options, "startup_params_format", false, false,
 					OUTPUT_PARAM_TYPE_UINT32, &found);
@@ -329,7 +333,7 @@ static Datum
 get_param(List *options, const char *name, bool missing_ok, bool null_ok,
 		  PGLogicalOutputParamType type, bool *found)
 {
-	ListCell	   *option;
+	ListCell   *option;
 
 	*found = false;
 
@@ -365,7 +369,7 @@ parse_param_bool(DefElem *elem)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 MTM_ERRMSG("could not parse boolean value \"%s\" for parameter \"%s\"",
-						strVal(elem->arg), elem->defname)));
+							strVal(elem->arg), elem->defname)));
 
 	return res;
 }
@@ -379,33 +383,33 @@ parse_param_uint32(DefElem *elem)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 MTM_ERRMSG("could not parse integer value \"%s\" for parameter \"%s\"",
-						strVal(elem->arg), elem->defname)));
+							strVal(elem->arg), elem->defname)));
 
 	if (res > PG_UINT32_MAX || res < 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 MTM_ERRMSG("value \"%s\" out of range for parameter \"%s\"",
-						strVal(elem->arg), elem->defname)));
+							strVal(elem->arg), elem->defname)));
 
 	return (uint32) res;
 }
 
-static List*
+static List *
 add_startup_msg_s(List *l, char *key, char *val)
 {
-	return lappend(l, makeDefElem(key, (Node*)makeString(val), 0));
+	return lappend(l, makeDefElem(key, (Node *) makeString(val), 0));
 }
 
-static List*
+static List *
 add_startup_msg_i(List *l, char *key, int val)
 {
-	return lappend(l, makeDefElem(key, (Node*)makeString(psprintf("%d", val)), 0));
+	return lappend(l, makeDefElem(key, (Node *) makeString(psprintf("%d", val)), 0));
 }
 
-static List*
+static List *
 add_startup_msg_b(List *l, char *key, bool val)
 {
-	return lappend(l, makeDefElem(key, (Node*)makeString(val ? "t" : "f"), 0));
+	return lappend(l, makeDefElem(key, (Node *) makeString(val ? "t" : "f"), 0));
 }
 
 /*
@@ -429,8 +433,8 @@ add_startup_msg_b(List *l, char *key, bool val)
 List *
 prepare_startup_message(PGLogicalOutputData *data)
 {
-	ListCell *lc;
-	List *l = NIL;
+	ListCell   *lc;
+	List	   *l = NIL;
 
 	l = add_startup_msg_s(l, "max_proto_version", "1");
 	l = add_startup_msg_s(l, "min_proto_version", "1");
@@ -443,23 +447,23 @@ prepare_startup_message(PGLogicalOutputData *data)
 	l = add_startup_msg_s(l, "pg_version", PG_VERSION);
 	l = add_startup_msg_i(l, "pg_catversion", CATALOG_VERSION_NO);
 
-	l = add_startup_msg_s(l, "database_encoding", (char*)GetDatabaseEncodingName());
+	l = add_startup_msg_s(l, "database_encoding", (char *) GetDatabaseEncodingName());
 
-	l = add_startup_msg_s(l, "encoding", (char*)pg_encoding_to_char(data->field_datum_encoding));
+	l = add_startup_msg_s(l, "encoding", (char *) pg_encoding_to_char(data->field_datum_encoding));
 
 	l = add_startup_msg_b(l, "forward_changesets",
-			data->forward_changesets);
+						  data->forward_changesets);
 	l = add_startup_msg_b(l, "forward_changeset_origins",
-			data->forward_changeset_origins);
+						  data->forward_changeset_origins);
 
 	/* binary options enabled */
 	l = add_startup_msg_b(l, "binary.internal_basetypes",
-			data->allow_internal_basetypes);
+						  data->allow_internal_basetypes);
 	l = add_startup_msg_b(l, "binary.binary_basetypes",
-			data->allow_binary_basetypes);
+						  data->allow_binary_basetypes);
 
 	/* Binary format characteristics of server */
-	l = add_startup_msg_i(l, "binary.basetypes_major_version", PG_VERSION_NUM/100);
+	l = add_startup_msg_i(l, "binary.basetypes_major_version", PG_VERSION_NUM / 100);
 	l = add_startup_msg_i(l, "binary.sizeof_int", sizeof(int));
 	l = add_startup_msg_i(l, "binary.sizeof_long", sizeof(long));
 	l = add_startup_msg_i(l, "binary.sizeof_datum", sizeof(Datum));
@@ -470,7 +474,7 @@ prepare_startup_message(PGLogicalOutputData *data)
 	l = add_startup_msg_b(l, "binary.integer_datetimes", server_integer_datetimes());
 	/* We don't know how to send in anything except our host's format */
 	l = add_startup_msg_i(l, "binary.binary_pg_version",
-			PG_VERSION_NUM/100);
+						  PG_VERSION_NUM / 100);
 
 	l = add_startup_msg_b(l, "no_txinfo", data->client_no_txinfo);
 
@@ -479,21 +483,22 @@ prepare_startup_message(PGLogicalOutputData *data)
 	 * Confirm that we've enabled any requested hook functions.
 	 */
 	l = add_startup_msg_b(l, "hooks.startup_hook_enabled",
-			data->hooks.startup_hook != NULL);
+						  data->hooks.startup_hook != NULL);
 	l = add_startup_msg_b(l, "hooks.shutdown_hook_enabled",
-			data->hooks.shutdown_hook != NULL);
+						  data->hooks.shutdown_hook != NULL);
 	l = add_startup_msg_b(l, "hooks.row_filter_enabled",
-			data->hooks.row_filter_hook != NULL);
+						  data->hooks.row_filter_hook != NULL);
 	l = add_startup_msg_b(l, "hooks.transaction_filter_enabled",
-			data->hooks.txn_filter_hook != NULL);
+						  data->hooks.txn_filter_hook != NULL);
 
 	/*
-	 * Output any extra params supplied by a startup hook by appending
-	 * them verbatim to the params list.
+	 * Output any extra params supplied by a startup hook by appending them
+	 * verbatim to the params list.
 	 */
 	foreach(lc, data->extra_startup_params)
 	{
-		DefElem *param = (DefElem*)lfirst(lc);
+		DefElem    *param = (DefElem *) lfirst(lc);
+
 		Assert(IsA(param->arg, String) && strVal(param->arg) != NULL);
 		l = lappend(l, param);
 	}

@@ -62,7 +62,7 @@
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
 
-bool MtmIsReceiver;
+bool		MtmIsReceiver;
 
 typedef struct MtmFlushPosition
 {
@@ -72,22 +72,27 @@ typedef struct MtmFlushPosition
 	XLogRecPtr	remote_end;
 } MtmFlushPosition;
 
-char const* const MtmReplicationModeName[] =
+char const *const MtmReplicationModeName[] =
 {
-	"recovery",    /* perform recorvery of the node by applying all data from theslot from specified point */
-	"recovered"    /* recovery of node is completed so drop old slot and restart replication from the current position in WAL */
+	"recovery",					/* perform recorvery of the node by applying
+								 * all data from theslot from specified point */
+	"recovered"					/* recovery of node is completed so drop old
+								 * slot and restart replication from the
+								 * current position in WAL */
 };
 
 static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
 
-MtmConfig	*receiver_mtm_cfg;
+MtmConfig  *receiver_mtm_cfg;
 bool		receiver_mtm_cfg_valid;
 
 /* Signal handling */
 static volatile sig_atomic_t got_sighup = false;
 
 /* GUC variables */
-static bool receiver_sync_mode = true; /* We need sync mode to have up-to-date values of catalog_xmin in replication slots */
+static bool receiver_sync_mode = true;	/* We need sync mode to have
+										 * up-to-date values of catalog_xmin
+										 * in replication slots */
 
 /* Worker name */
 static char worker_proc[BGW_MAXLEN];
@@ -99,13 +104,14 @@ static XLogRecPtr output_written_lsn = InvalidXLogRecPtr;
 static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
-void pglogical_receiver_main(Datum main_arg);
+void		pglogical_receiver_main(Datum main_arg);
 static XLogRecPtr MtmGetFlushPosition(int nodeId);
 
 static void
 receiver_raw_sighup(SIGNAL_ARGS)
 {
-	int save_errno = errno;
+	int			save_errno = errno;
+
 	got_sighup = true;
 	if (MyProc)
 		SetLatch(&MyProc->procLatch);
@@ -119,9 +125,9 @@ static bool
 sendFeedback(PGconn *conn, int64 now, int node_id)
 {
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
-	int		 len = 0;
-	XLogRecPtr output_applied_lsn = output_written_lsn;
-	XLogRecPtr output_flushed_lsn = MtmGetFlushPosition(node_id);
+	int			len = 0;
+	XLogRecPtr	output_applied_lsn = output_written_lsn;
+	XLogRecPtr	output_flushed_lsn = MtmGetFlushPosition(node_id);
 
 	replybuf[len] = 'r';
 	len += 1;
@@ -141,7 +147,7 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
 		ereport(LOG, (MTM_ERRMSG("%s: could not send feedback packet: %s",
-							 worker_proc, PQerrorMessage(conn))));
+								 worker_proc, PQerrorMessage(conn))));
 		return false;
 	}
 
@@ -154,7 +160,7 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 static void
 fe_sendint64(int64 i, char *buf)
 {
-	uint32	  n32;
+	uint32		n32;
 
 	/* High order half first, since we're doing MSB-first */
 	n32 = (uint32) (i >> 32);
@@ -173,9 +179,9 @@ fe_sendint64(int64 i, char *buf)
 static int64
 fe_recvint64(char *buf)
 {
-	int64	   result;
-	uint32	  h32;
-	uint32	  l32;
+	int64		result;
+	uint32		h32;
+	uint32		l32;
 
 	memcpy(&h32, buf, 4);
 	memcpy(&l32, buf + 4, 4);
@@ -192,7 +198,7 @@ fe_recvint64(char *buf)
 static int64
 feGetCurrentTimestamp(void)
 {
-	int64	   result;
+	int64		result;
 	struct timeval tp;
 
 	gettimeofday(&tp, NULL);
@@ -209,7 +215,7 @@ static void
 feTimestampDifference(int64 start_time, int64 stop_time,
 					  long *secs, int *microsecs)
 {
-	int64	   diff = stop_time - start_time;
+	int64		diff = stop_time - start_time;
 
 	if (diff <= 0)
 	{
@@ -227,15 +233,16 @@ static XLogRecPtr
 MtmGetFlushPosition(int node_id)
 {
 	dlist_mutable_iter iter;
-	XLogRecPtr flush_lsn = InvalidXLogRecPtr;
-	XLogRecPtr local_flush = GetFlushRecPtr();
+	XLogRecPtr	flush_lsn = InvalidXLogRecPtr;
+	XLogRecPtr	local_flush = GetFlushRecPtr();
 
 	dlist_foreach_modify(iter, &MtmLsnMapping)
 	{
 		MtmFlushPosition *flushpos;
+
 		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
 
-		// XXX: probably it's better just not write this
+		/* XXX: probably it's better just not write this */
 		if (node_id != flushpos->node_id)
 			continue;
 
@@ -265,7 +272,7 @@ MtmGetFlushPosition(int node_id)
 void
 MtmUpdateLsnMapping(int node_id, XLogRecPtr end_lsn)
 {
-	MtmFlushPosition* flushpos;
+	MtmFlushPosition *flushpos;
 	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
 
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
@@ -283,15 +290,15 @@ MtmUpdateLsnMapping(int node_id, XLogRecPtr end_lsn)
 }
 
 static void
-MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
+MtmExecute(void *work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 {
 	/* parallel_allowed should never be set during recovery */
-	Assert( !(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed) );
+	Assert(!(receiver_ctx->is_recovery && receiver_ctx->parallel_allowed));
 
 	if (receiver_ctx->is_recovery || !receiver_ctx->parallel_allowed || no_pool)
 		MtmExecutor(work, size, receiver_ctx);
 	else
-		BgwPoolExecute(&Mtm->pools[MtmReplicationNodeId-1], work, size, receiver_ctx);
+		BgwPoolExecute(&Mtm->pools[MtmReplicationNodeId - 1], work, size, receiver_ctx);
 
 }
 
@@ -306,15 +313,15 @@ MtmExecute(void* work, int size, MtmReceiverContext *receiver_ctx, bool no_pool)
 static bool
 MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_map)
 {
-	StringInfoData	s;
-	uint8			event;
-	XLogRecPtr		origin_lsn;
-	XLogRecPtr		end_lsn;
-	XLogRecPtr		tx_lsn;
-	int				replication_node;
-	int				origin_node;
-	char const*		gid = "";
-	char			msgtype PG_USED_FOR_ASSERTS_ONLY;
+	StringInfoData s;
+	uint8		event;
+	XLogRecPtr	origin_lsn;
+	XLogRecPtr	end_lsn;
+	XLogRecPtr	tx_lsn;
+	int			replication_node;
+	int			origin_node;
+	char const *gid = "";
+	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
 
 	s.data = record;
 	s.len = size;
@@ -324,11 +331,11 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 	/* read fields */
 	msgtype = pq_getmsgbyte(&s);
 	Assert(msgtype == 'C');
-	event = pq_getmsgbyte(&s); /* event */
+	event = pq_getmsgbyte(&s);	/* event */
 	replication_node = pq_getmsgbyte(&s);
-	pq_getmsgint64(&s); /* commit_lsn */
-	end_lsn = pq_getmsgint64(&s); /* end_lsn */
-	pq_getmsgint64(&s); /* commit_time */
+	pq_getmsgint64(&s);			/* commit_lsn */
+	end_lsn = pq_getmsgint64(&s);	/* end_lsn */
+	pq_getmsgint64(&s);			/* commit_time */
 
 	origin_node = pq_getmsgbyte(&s);
 	origin_lsn = pq_getmsgint64(&s);
@@ -349,24 +356,24 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 			gid = pq_getmsgstring(&s);
 			break;
 		default:
-			// XXX: notreached?
+			/* XXX: notreached? */
 			break;
 	}
 
 	Assert(replication_node == MtmReplicationNodeId);
 	tx_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
 
-	if (tx_lsn <= spvector[origin_node-1].origin_lsn)
+	if (tx_lsn <= spvector[origin_node - 1].origin_lsn)
 	{
 		mtm_log(MtmReceiverFilter,
-				"Filter transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%"INT64_MODIFIER"x)",
+				"Filter transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%" INT64_MODIFIER "x)",
 				gid, replication_node, event,
-				spvector[origin_node-1].origin_lsn, tx_lsn);
+				spvector[origin_node - 1].origin_lsn, tx_lsn);
 		return true;
 	}
 	else
 	{
-		FilterEntry	entry;
+		FilterEntry entry;
 		bool		found;
 
 		memset(&entry, '\0', sizeof(FilterEntry));
@@ -376,9 +383,9 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 		hash_search(filter_map, &entry, HASH_FIND, &found);
 
 		mtm_log(MtmReceiverFilter,
-			"Filter (map) transaction %s from node %d event=%x (restrt=%"INT64_MODIFIER"x, tx=%d/%"INT64_MODIFIER"x) -> %d",
-			gid, replication_node, event,
-			spvector[origin_node-1].origin_lsn, origin_node, tx_lsn, found);
+				"Filter (map) transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%d/%" INT64_MODIFIER "x) -> %d",
+				gid, replication_node, event,
+				spvector[origin_node - 1].origin_lsn, origin_node, tx_lsn, found);
 
 		return found;
 	}
@@ -396,7 +403,7 @@ MtmBeginSession(int nodeId)
 	replorigin_session_origin = MtmNodeById(receiver_mtm_cfg, nodeId)->origin_id;
 	Assert(replorigin_session_origin != InvalidRepOriginId);
 
-	// XXX: that is expensive! better to switch only in recovery
+	/* XXX: that is expensive! better to switch only in recovery */
 	replorigin_session_setup(replorigin_session_origin);
 }
 
@@ -419,16 +426,17 @@ MtmEndSession(int nodeId, bool unlock)
 static PGconn *
 receiver_connect(char *conninfo)
 {
-	PGconn			*conn;
-	ConnStatusType	status;
-	const char		*keys[] = {"dbname", "replication", NULL};
-	const char		*vals[] = {conninfo, "database", NULL};
+	PGconn	   *conn;
+	ConnStatusType status;
+	const char *keys[] = {"dbname", "replication", NULL};
+	const char *vals[] = {conninfo, "database", NULL};
 
 	conn = PQconnectdbParams(keys, vals, /* expand_dbname = */ true);
 	status = PQstatus(conn);
 	if (status != CONNECTION_OK)
 	{
-		char *err = PQerrorMessage(conn);
+		char	   *err = PQerrorMessage(conn);
+
 		PQfinish(conn);
 		mtm_log(ERROR, "Could not establish connection to '%s': %s", conninfo, err);
 	}
@@ -442,9 +450,9 @@ receiver_connect(char *conninfo)
 void
 MtmReceiverCreateSlot(char *conninfo, int my_node_id)
 {
-	StringInfoData	cmd;
-	PGresult		*res;
-	PGconn			*conn = receiver_connect(conninfo);
+	StringInfoData cmd;
+	PGresult   *res;
+	PGconn	   *conn = receiver_connect(conninfo);
 
 	if (!conn)
 		mtm_log(ERROR, "Could not connect to '%s'", conninfo);
@@ -455,7 +463,8 @@ MtmReceiverCreateSlot(char *conninfo, int my_node_id)
 	res = PQexec(conn, cmd.data);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
-		char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+		char	   *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+
 		if (!sqlstate || strcmp(sqlstate, ERRCODE_DUPLICATE_OBJECT_STR) != 0)
 		{
 			PQclear(res);
@@ -478,7 +487,7 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 pglogical_receiver_at_exit(int status, Datum arg)
 {
-	int node_id = DatumGetInt32(arg);
+	int			node_id = DatumGetInt32(arg);
 
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].receiver_pid = InvalidPid;
@@ -488,28 +497,30 @@ pglogical_receiver_at_exit(int status, Datum arg)
 void
 pglogical_receiver_main(Datum main_arg)
 {
-	int					nodeId = DatumGetInt32(main_arg);
+	int			nodeId = DatumGetInt32(main_arg);
+
 	/* Variables for replication connection */
-	PQExpBuffer			query;
-	PGconn				*conn = NULL;
-	PGresult			*res;
-	MtmReplicationMode	mode;
-	MtmReceiverContext	receiver_ctx = {nodeId, false, false, 0};
+	PQExpBuffer query;
+	PGconn	   *conn = NULL;
+	PGresult   *res;
+	MtmReplicationMode mode;
+	MtmReceiverContext receiver_ctx = {nodeId, false, false, 0};
 
-	ByteBuffer			buf;
+	ByteBuffer	buf;
+
 	/* Buffer for COPY data */
-	char				*copybuf = NULL;
-	int					spill_file = -1;
-	StringInfoData		spill_info;
-	static PortalData	fakePortal;
+	char	   *copybuf = NULL;
+	int			spill_file = -1;
+	StringInfoData spill_info;
+	static PortalData fakePortal;
 
-	Oid					db_id;
-	Oid					user_id;
+	Oid			db_id;
+	Oid			user_id;
 
 	on_shmem_exit(pglogical_receiver_at_exit, Int32GetDatum(nodeId));
 
 	MtmIsReceiver = true;
-	// XXX: get rid of that
+	/* XXX: get rid of that */
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
 
@@ -546,27 +557,28 @@ pglogical_receiver_main(Datum main_arg)
 
 	snprintf(worker_proc, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d",
 			 receiver_mtm_cfg->my_node_id, nodeId);
-	BgwPoolStart(&Mtm->pools[nodeId-1], worker_proc, db_id, user_id);
+	BgwPoolStart(&Mtm->pools[nodeId - 1], worker_proc, db_id, user_id);
 	mtm_log(MtmReceiverStart, "Receiver %s has started.", worker_proc);
 
 	/*
-	 * This is the main loop of logical replication.
-	 * In case of errors we simply cleanup and die, bgw will be restarted.
-	 * Also reconnect is forced when node is switch to recovery mode.
-	 * Finally, receiver customarily exits on Postmaster death.
+	 * This is the main loop of logical replication. In case of errors we
+	 * simply cleanup and die, bgw will be restarted. Also reconnect is forced
+	 * when node is switch to recovery mode. Finally, receiver customarily
+	 * exits on Postmaster death.
 	 */
 	PG_TRY();
 	{
 		int			count,
 					counterpart_disable_count;
 		XLogRecPtr	remote_start = InvalidXLogRecPtr;
-		Syncpoint	*spvector = NULL;
-		HTAB		*filter_map = NULL;
+		Syncpoint  *spvector = NULL;
+		HTAB	   *filter_map = NULL;
 
 		/*
-		 * Determine when and how we should open replication slot.
-		 * During recovery we need to open only one replication slot from which node should receive all transactions.
-		 * Slots at other nodes should be removed
+		 * Determine when and how we should open replication slot. During
+		 * recovery we need to open only one replication slot from which node
+		 * should receive all transactions. Slots at other nodes should be
+		 * removed
 		 */
 		mode = MtmGetReplicationMode(nodeId);
 
@@ -625,13 +637,13 @@ pglogical_receiver_main(Datum main_arg)
 
 		/* log our intentions */
 		{
-			int		i;
-			StringInfo message = makeStringInfo();
+			int			i;
+			StringInfo	message = makeStringInfo();
 
 			appendStringInfoString(message, "%s starting receiver:\n");
 			appendStringInfo(message, "\t replication_node = %d\n", receiver_ctx.node_id);
 			appendStringInfo(message, "\t mode = %s\n", MtmReplicationModeName[mode]);
-			appendStringInfo(message, "\t remote_start = %"INT64_MODIFIER"x\n", remote_start);
+			appendStringInfo(message, "\t remote_start = %" INT64_MODIFIER "x\n", remote_start);
 
 			appendStringInfo(message, "\t syncpoint_vector (origin/local) = {");
 			for (i = 0; i < MTM_MAX_NODES; i++)
@@ -655,7 +667,7 @@ pglogical_receiver_main(Datum main_arg)
 						  "\"min_proto_version\" '1',"
 						  "\"forward_changesets\" '1',"
 						  "\"mtm_replication_mode\" '%s',"
-						  "\"mtm_session_id\" '"INT64_FORMAT"')",
+						  "\"mtm_session_id\" '" INT64_FORMAT "')",
 						  psprintf(MULTIMASTER_SLOT_PATTERN, receiver_mtm_cfg->my_node_id),
 						  (uint32) (remote_start >> 32),
 						  (uint32) remote_start,
@@ -670,13 +682,14 @@ pglogical_receiver_main(Datum main_arg)
 		PQclear(res);
 		resetPQExpBuffer(query);
 
-		for(;;) /* main loop, jump out only with ERROR */
+		for (;;)				/* main loop, jump out only with ERROR */
 		{
-			int rc, hdr_len;
+			int			rc,
+						hdr_len;
 
 			if (ProcDiePending)
 			{
-				BgwPoolShutdown(&Mtm->pools[nodeId-1]);
+				BgwPoolShutdown(&Mtm->pools[nodeId - 1]);
 				proc_exit(0);
 			}
 
@@ -700,14 +713,15 @@ pglogical_receiver_main(Datum main_arg)
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
 			{
-				BgwPoolCancel(&Mtm->pools[nodeId-1]);
+				BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 				proc_exit(1);
 			}
 
 			CHECK_FOR_INTERRUPTS();
 			AcceptInvalidationMessages();
 
-			if (count != MtmGetRecoveryCount()) {
+			if (count != MtmGetRecoveryCount())
+			{
 				ereport(ERROR, (MTM_ERRMSG("%s: restart WAL receiver because node was recovered", worker_proc)));
 			}
 
@@ -721,8 +735,8 @@ pglogical_receiver_main(Datum main_arg)
 			 */
 			while (true)
 			{
-				XLogRecPtr walEnd;
-				char* stmt;
+				XLogRecPtr	walEnd;
+				char	   *stmt;
 
 				/* Some cleanup */
 				if (copybuf != NULL)
@@ -736,9 +750,8 @@ pglogical_receiver_main(Datum main_arg)
 					break;
 
 				/*
-				 * Check message received from server:
-				 * - 'k', keepalive message
-				 * - 'w', check for streaming header
+				 * Check message received from server: - 'k', keepalive
+				 * message - 'w', check for streaming header
 				 */
 				if (copybuf[0] == 'k')
 				{
@@ -746,15 +759,15 @@ pglogical_receiver_main(Datum main_arg)
 					bool		replyRequested;
 
 					/*
-					 * Parse the keepalive message, enclosed in the CopyData message.
-					 * We just check if the server requested a reply, and ignore the
-					 * rest.
+					 * Parse the keepalive message, enclosed in the CopyData
+					 * message. We just check if the server requested a reply,
+					 * and ignore the rest.
 					 */
 					pos = 1;	/* skip msgtype 'k' */
 
 					/*
-					 * In this message is the latest WAL position that server has
-					 * considered as sent to this receiver.
+					 * In this message is the latest WAL position that server
+					 * has considered as sent to this receiver.
 					 */
 					walEnd = fe_recvint64(&copybuf[pos]);
 					pos += 8;	/* read walEnd */
@@ -762,7 +775,7 @@ pglogical_receiver_main(Datum main_arg)
 					if (rc < pos + 1)
 					{
 						ereport(ERROR, (MTM_ERRMSG("%s: streaming header too small: %d",
-												 worker_proc, rc)));
+												   worker_proc, rc)));
 					}
 					replyRequested = copybuf[pos];
 
@@ -772,13 +785,13 @@ pglogical_receiver_main(Datum main_arg)
 					/*
 					 * If the server requested an immediate reply, send one.
 					 * If sync mode is sent reply in all cases to ensure that
-					 * server knows how far replay has been done.
-					 * In recovery mode also always send reply to provide master with more precise information
-					 * about recovery progress
+					 * server knows how far replay has been done. In recovery
+					 * mode also always send reply to provide master with more
+					 * precise information about recovery progress
 					 */
 					if (replyRequested || receiver_sync_mode || MtmGetCurrentStatus() == MTM_RECOVERY)
 					{
-						int64 now = feGetCurrentTimestamp();
+						int64		now = feGetCurrentTimestamp();
 
 						/* Leave if feedback is not sent properly */
 						sendFeedback(conn, now, nodeId);
@@ -792,26 +805,31 @@ pglogical_receiver_main(Datum main_arg)
 				}
 
 				/* Now fetch the data */
-				hdr_len = 1;		/* msgtype 'w' */
+				hdr_len = 1;	/* msgtype 'w' */
 				fe_recvint64(&copybuf[hdr_len]);
-				hdr_len += 8;		/* dataStart */
+				hdr_len += 8;	/* dataStart */
 				walEnd = fe_recvint64(&copybuf[hdr_len]);
-				hdr_len += 8;		/* WALEnd */
-				hdr_len += 8;		/* sendTime */
+				hdr_len += 8;	/* WALEnd */
+				hdr_len += 8;	/* sendTime */
 
-				/*ereport(LOG, (MTM_ERRMSG("%s: receive message %c length %d", worker_proc, copybuf[hdr_len], rc - hdr_len)));*/
+				/*
+				 * ereport(LOG, (MTM_ERRMSG("%s: receive message %c length
+				 * %d", worker_proc, copybuf[hdr_len], rc - hdr_len)));
+				 */
 
 				Assert(rc >= hdr_len);
 
 				if (rc > hdr_len)
 				{
-					int msg_len = rc - hdr_len;
+					int			msg_len = rc - hdr_len;
+
 					stmt = copybuf + hdr_len;
-					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold*1024L)
+					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold * 1024L)
 					{
 						if (spill_file < 0)
 						{
-							int file_id;
+							int			file_id;
+
 							spill_file = MtmCreateSpillFile(nodeId, &file_id);
 							pq_sendbyte(&spill_info, 'F');
 							pq_sendint(&spill_info, nodeId, 4);
@@ -824,14 +842,21 @@ pglogical_receiver_main(Datum main_arg)
 						ByteBufferReset(&buf);
 					}
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
-							stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S' )))
+															  stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S')))
 					{
 						if (stmt[0] == 'M' && stmt[1] == 'C')
-							/* concurrent DDL should be executed by parallel workers */
+
+							/*
+							 * concurrent DDL should be executed by parallel
+							 * workers
+							 */
 							MtmExecute(stmt, msg_len, &receiver_ctx, false);
 						else
 						{
-							/* all other messages should be processed by receiver itself */
+							/*
+							 * all other messages should be processed by
+							 * receiver itself
+							 */
 							MtmExecute(stmt, msg_len, &receiver_ctx, true);
 						}
 					}
@@ -874,20 +899,20 @@ pglogical_receiver_main(Datum main_arg)
 			if (rc == 0)
 			{
 				/*
-				 * In async mode, and no data available. We block on reading but
-				 * not more than the specified timeout, so that we can send a
-				 * response back to the client.
+				 * In async mode, and no data available. We block on reading
+				 * but not more than the specified timeout, so that we can
+				 * send a response back to the client.
 				 */
-				int				r;
-				fd_set			input_mask;
-				int64	   		message_target = 0;
-				int64			fsync_target = 0;
-				struct timeval	timeout;
-				struct timeval	*timeoutptr = NULL;
-				int64			targettime;
-				long			secs;
-				int				usecs;
-				int64			now;
+				int			r;
+				fd_set		input_mask;
+				int64		message_target = 0;
+				int64		fsync_target = 0;
+				struct timeval timeout;
+				struct timeval *timeoutptr = NULL;
+				int64		targettime;
+				long		secs;
+				int			usecs;
+				int64		now;
 
 				FD_ZERO(&input_mask);
 				FD_SET(PQsocket(conn), &input_mask);
@@ -910,16 +935,17 @@ pglogical_receiver_main(Datum main_arg)
 							 PQisRsocket(conn));
 				if (r == 0)
 				{
-					int64 now = feGetCurrentTimestamp();
+					int64		now = feGetCurrentTimestamp();
 
 					MtmUpdateLsnMapping(nodeId, InvalidXLogRecPtr);
 					sendFeedback(conn, now, nodeId);
 				}
 				else if (r < 0 && errno == EINTR)
+
 					/*
 					 * Got a timeout or signal. Continue the loop and either
-					 * deliver a status packet to the server or just go back into
-					 * blocking.
+					 * deliver a status packet to the server or just go back
+					 * into blocking.
 					 */
 					continue;
 
@@ -962,9 +988,10 @@ pglogical_receiver_main(Datum main_arg)
 		MtmStateProcessNeighborEvent(nodeId, MTM_NEIGHBOR_WAL_RECEIVER_ERROR, false);
 
 		/*
-		 * Some of the workers may stuck on lock and survive until node will come
-		 * back and prepare stuck transaction when it was aborted long time ago.
-		 * Force all workers to cancel stmt to ensure this will not happen.
+		 * Some of the workers may stuck on lock and survive until node will
+		 * come back and prepare stuck transaction when it was aborted long
+		 * time ago. Force all workers to cancel stmt to ensure this will not
+		 * happen.
 		 */
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
@@ -981,13 +1008,13 @@ pglogical_receiver_main(Datum main_arg)
 BackgroundWorkerHandle *
 MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 {
-	BackgroundWorker		worker;
-	BackgroundWorkerHandle	*handle;
-	pid_t pid;
-	BgwHandleStatus	status;
+	BackgroundWorker worker;
+	BackgroundWorkerHandle *handle;
+	pid_t		pid;
+	BgwHandleStatus status;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
 	worker.bgw_main_arg = Int32GetDatum(nodeId);

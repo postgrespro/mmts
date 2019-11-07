@@ -57,32 +57,32 @@
 #include "logger.h"
 #include "state.h"
 
-extern void		_PG_output_plugin_init(OutputPluginCallbacks *cb);
+extern void _PG_output_plugin_init(OutputPluginCallbacks *cb);
 
 /* These must be available to pg_dlsym() */
-static void pg_decode_startup(LogicalDecodingContext * ctx,
-							  OutputPluginOptions *opt, bool is_init);
-static void pg_decode_shutdown(LogicalDecodingContext * ctx);
+static void pg_decode_startup(LogicalDecodingContext *ctx,
+				  OutputPluginOptions *opt, bool is_init);
+static void pg_decode_shutdown(LogicalDecodingContext *ctx);
 static void pg_decode_begin_txn(LogicalDecodingContext *ctx,
 					ReorderBufferTXN *txn);
 static void pg_decode_commit_txn(LogicalDecodingContext *ctx,
 					 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
 
 static void pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn);
+					  XLogRecPtr lsn);
 static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn);
+							  XLogRecPtr lsn);
 static void pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn);
+							 XLogRecPtr lsn);
 
 static bool pg_filter_decode_txn(LogicalDecodingContext *ctx,
 					 ReorderBufferTXN *txn);
 
 static bool pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 TransactionId xid, const char *gid);
+				  TransactionId xid, const char *gid);
 
 static void pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr abort_lsn);
+					XLogRecPtr abort_lsn);
 
 static void pg_decode_change(LogicalDecodingContext *ctx,
 				 ReorderBufferTXN *txn, Relation rel,
@@ -92,25 +92,27 @@ static bool pg_decode_origin_filter(LogicalDecodingContext *ctx,
 						RepOriginId origin_id);
 
 static void pg_decode_message(LogicalDecodingContext *ctx,
-							  ReorderBufferTXN *txn, XLogRecPtr message_lsn,
-							  bool transactional, const char *prefix,
-							  Size sz, const char *message);
+				  ReorderBufferTXN *txn, XLogRecPtr message_lsn,
+				  bool transactional, const char *prefix,
+				  Size sz, const char *message);
 static void pg_decode_caughtup(LogicalDecodingContext *ctx);
 
 static void send_startup_message(LogicalDecodingContext *ctx,
-		PGLogicalOutputData *data, bool last_message);
+					 PGLogicalOutputData *data, bool last_message);
 
 static bool startup_message_sent = false;
 
-#define OUTPUT_BUFFER_SIZE (16*1024*1024) 
+#define OUTPUT_BUFFER_SIZE (16*1024*1024)
 
-void MtmOutputPluginWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
+void
+MtmOutputPluginWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
 {
 	if (flush)
 		OutputPluginWrite(ctx, last_write);
 }
 
-void MtmOutputPluginPrepareWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
+void
+MtmOutputPluginPrepareWrite(LogicalDecodingContext *ctx, bool last_write, bool flush)
 {
 	if (!ctx->prepared_write)
 		OutputPluginPrepareWrite(ctx, last_write);
@@ -206,10 +208,10 @@ check_binary_compatibility(PGLogicalOutputData *data)
 
 /* initialize this plugin */
 static void
-pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
+pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 				  bool is_init)
 {
-	PGLogicalOutputData  *data = palloc0(sizeof(PGLogicalOutputData));
+	PGLogicalOutputData *data = palloc0(sizeof(PGLogicalOutputData));
 
 	data->context = AllocSetContextCreate(TopMemoryContext,
 										  "pglogical conversion context",
@@ -227,68 +229,69 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 	 */
 	if (!is_init)
 	{
-		int		params_format;
+		int			params_format;
 
-		 /*
-		 * Ideally we'd send the startup message immediately. That way
-		 * it'd arrive before any error we emit if we see incompatible
-		 * options sent by the client here. That way the client could
-		 * possibly adjust its options and reconnect. It'd also make
-		 * sure the client gets the startup message in a timely way if
-		 * the server is idle, since otherwise it could be a while
-		 * before the next callback.
+		/*
+		 * Ideally we'd send the startup message immediately. That way it'd
+		 * arrive before any error we emit if we see incompatible options sent
+		 * by the client here. That way the client could possibly adjust its
+		 * options and reconnect. It'd also make sure the client gets the
+		 * startup message in a timely way if the server is idle, since
+		 * otherwise it could be a while before the next callback.
 		 *
-		 * The decoding plugin API doesn't let us write to the stream
-		 * from here, though, so we have to delay the startup message
-		 * until the first change processed on the stream, in a begin
-		 * callback.
+		 * The decoding plugin API doesn't let us write to the stream from
+		 * here, though, so we have to delay the startup message until the
+		 * first change processed on the stream, in a begin callback.
 		 *
-		 * If we ERROR there, the startup message is buffered but not
-		 * sent since the callback didn't finish. So we'd have to send
-		 * the startup message, finish the callback and check in the
-		 * next callback if we need to ERROR.
+		 * If we ERROR there, the startup message is buffered but not sent
+		 * since the callback didn't finish. So we'd have to send the startup
+		 * message, finish the callback and check in the next callback if we
+		 * need to ERROR.
 		 *
-		 * That's a bit much hoop jumping, so for now ERRORs are
-		 * immediate. A way to emit a message from the startup callback
-		 * is really needed to change that.
+		 * That's a bit much hoop jumping, so for now ERRORs are immediate. A
+		 * way to emit a message from the startup callback is really needed to
+		 * change that.
 		 */
 		startup_message_sent = false;
 
-		/* Now parse the rest of the params and ERROR if we see any we don't recognise */
+		/*
+		 * Now parse the rest of the params and ERROR if we see any we don't
+		 * recognise
+		 */
 		params_format = process_parameters(ctx->output_plugin_options, data);
 
 		if (params_format != 1)
 			ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 MTM_ERRMSG("client sent startup parameters in format %d but we only support format 1",
-					params_format)));
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 MTM_ERRMSG("client sent startup parameters in format %d but we only support format 1",
+								params_format)));
 
 		if (data->client_min_proto_version > PG_LOGICAL_PROTO_VERSION_NUM)
 			ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 MTM_ERRMSG("client sent min_proto_version=%d but we only support protocol %d or lower",
-					 data->client_min_proto_version, PG_LOGICAL_PROTO_VERSION_NUM)));
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 MTM_ERRMSG("client sent min_proto_version=%d but we only support protocol %d or lower",
+								data->client_min_proto_version, PG_LOGICAL_PROTO_VERSION_NUM)));
 
 		if (data->client_max_proto_version < PG_LOGICAL_PROTO_MIN_VERSION_NUM)
 			ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 MTM_ERRMSG("client sent max_proto_version=%d but we only support protocol %d or higher",
-				 	data->client_max_proto_version, PG_LOGICAL_PROTO_MIN_VERSION_NUM)));
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 MTM_ERRMSG("client sent max_proto_version=%d but we only support protocol %d or higher",
+								data->client_max_proto_version, PG_LOGICAL_PROTO_MIN_VERSION_NUM)));
 
 		/*
 		 * Set correct protocol format.
 		 *
-		 * This is the output plugin protocol format, this is different
-		 * from the individual fields binary vs textual format.
+		 * This is the output plugin protocol format, this is different from
+		 * the individual fields binary vs textual format.
 		 */
 		if (data->client_protocol_format != NULL
-				&& strcmp(data->client_protocol_format, "json") == 0)
+			&& strcmp(data->client_protocol_format, "json") == 0)
 		{
 			data->api = pglogical_init_api(PGLogicalProtoJson);
 			opt->output_type = OUTPUT_PLUGIN_TEXTUAL_OUTPUT;
 		}
 		else if ((data->client_protocol_format != NULL
-			     && strcmp(data->client_protocol_format, "native") == 0)
+				  && strcmp(data->client_protocol_format, "native") == 0)
 				 || data->client_protocol_format == NULL)
 		{
 			data->api = pglogical_init_api(PGLogicalProtoNative);
@@ -303,22 +306,22 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 		else
 		{
 			ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 MTM_ERRMSG("client requested protocol %s but only \"json\" or \"native\" are supported",
-				 	data->client_protocol_format)));
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 MTM_ERRMSG("client requested protocol %s but only \"json\" or \"native\" are supported",
+								data->client_protocol_format)));
 		}
 
 		/* check for encoding match if specific encoding demanded by client */
 		if (data->client_expected_encoding != NULL
-				&& strlen(data->client_expected_encoding) != 0)
+			&& strlen(data->client_expected_encoding) != 0)
 		{
-			int wanted_encoding = pg_char_to_encoding(data->client_expected_encoding);
+			int			wanted_encoding = pg_char_to_encoding(data->client_expected_encoding);
 
 			if (wanted_encoding == -1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 MTM_ERRMSG("unrecognised encoding name %s passed to expected_encoding",
-								data->client_expected_encoding)));
+									data->client_expected_encoding)));
 
 			if (opt->output_type == OUTPUT_PLUGIN_TEXTUAL_OUTPUT)
 			{
@@ -336,15 +339,15 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 			{
 				/*
 				 * currently in the binary protocol we can only emit encoded
-				 * datums in the server encoding. There's no support for encoding
-				 * conversion.
+				 * datums in the server encoding. There's no support for
+				 * encoding conversion.
 				 */
 				if (wanted_encoding != GetDatabaseEncoding())
 					ereport(ERROR,
 							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 							 MTM_ERRMSG("encoding conversion for binary datum not supported yet"),
 							 errdetail("expected_encoding %s must be unset or match server_encoding %s",
-								 data->client_expected_encoding, GetDatabaseEncodingName())));
+									   data->client_expected_encoding, GetDatabaseEncodingName())));
 			}
 
 			data->field_datum_encoding = wanted_encoding;
@@ -369,15 +372,15 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 		}
 
 		/*
-		 * Will we forward changesets? We have to if we're on 9.4;
-		 * otherwise honour the client's request.
+		 * Will we forward changesets? We have to if we're on 9.4; otherwise
+		 * honour the client's request.
 		 */
-		if (PG_VERSION_NUM/100 == 904)
+		if (PG_VERSION_NUM / 100 == 904)
 		{
 			/*
 			 * 9.4 unconditionally forwards changesets due to lack of
-			 * replication origins, and it can't ever send origin info
-			 * for the same reason.
+			 * replication origins, and it can't ever send origin info for the
+			 * same reason.
 			 */
 			data->forward_changesets = true;
 			data->forward_changeset_origins = false;
@@ -393,7 +396,10 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 		else if (data->client_forward_changesets_set
 				 && data->client_forward_changesets)
 		{
-			/* Client explicitly asked for forwarding; forward csets and origins */
+			/*
+			 * Client explicitly asked for forwarding; forward csets and
+			 * origins
+			 */
 			data->forward_changesets = true;
 			data->forward_changeset_origins = true;
 		}
@@ -408,8 +414,8 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 		{
 
 			data->hooks_mctxt = AllocSetContextCreate(ctx->context,
-					"pglogical_output hooks context",
-					ALLOCSET_DEFAULT_SIZES);
+													  "pglogical_output hooks context",
+													  ALLOCSET_DEFAULT_SIZES);
 
 			load_hooks(data);
 			call_startup_hook(data, ctx->output_plugin_options);
@@ -423,39 +429,38 @@ pg_decode_startup(LogicalDecodingContext * ctx, OutputPluginOptions *opt,
 void
 pg_decode_begin_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
-	bool send_replication_origin = data->forward_changeset_origins;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
+	bool		send_replication_origin = data->forward_changeset_origins;
 
 	if (!startup_message_sent)
-		send_startup_message(ctx, data, false /* can't be last message */);
+		send_startup_message(ctx, data, false /* can't be last message */ );
 
 	/* If the record didn't originate locally, send origin info */
 	send_replication_origin &= txn->origin_id != InvalidRepOriginId;
 
-	if (data->api) { 
+	if (data->api)
+	{
 		MtmOutputPluginPrepareWrite(ctx, !send_replication_origin, true);
 		data->api->write_begin(ctx->out, data, txn);
 
 		if (send_replication_origin)
 		{
-			char *origin;
-			
+			char	   *origin;
+
 			/* Message boundary */
 			MtmOutputPluginWrite(ctx, false, false);
 			MtmOutputPluginPrepareWrite(ctx, true, false);
-			
+
 			/*
 			 * XXX: which behaviour we want here?
 			 *
-			 * Alternatives:
-			 *  - don't send origin message if origin name not found
-			 *    (that's what we do now)
-			 *  - throw error - that will break replication, not good
-			 *  - send some special "unknown" origin
+			 * Alternatives: - don't send origin message if origin name not
+			 * found (that's what we do now) - throw error - that will break
+			 * replication, not good - send some special "unknown" origin
 			 */
 			if (data->api->write_origin &&
 				replorigin_by_oid(txn->origin_id, true, &origin))
-			data->api->write_origin(ctx->out, origin, txn->origin_lsn);
+				data->api->write_origin(ctx->out, origin, txn->origin_lsn);
 		}
 		MtmOutputPluginWrite(ctx, true, false);
 	}
@@ -475,7 +480,7 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 			whereToSendOutput = DestNone;
 
 		proc_exit(0);
-		abort();					/* keep the compiler quiet */
+		abort();				/* keep the compiler quiet */
 	}
 
 
@@ -486,12 +491,12 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 			whereToSendOutput = DestNone;
 
 		proc_exit(0);
-		abort();					/* keep the compiler quiet */
+		abort();				/* keep the compiler quiet */
 	}
 
 	/*
-	 * MtmOutputPluginPrepareWrite send some bytes to downstream,
-	 * so we must avoid calling it in normal (non-recovery) situation.
+	 * MtmOutputPluginPrepareWrite send some bytes to downstream, so we must
+	 * avoid calling it in normal (non-recovery) situation.
 	 */
 	if (data->api && hooks_data->is_recovery)
 	{
@@ -500,10 +505,10 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		MtmOutputPluginWrite(ctx, true, true);
 
 		/*
-		* This hook can be called mupltiple times when there is concurrent
-		* load, so exit right after we wrote recovery message first time during
-		* current recovery session.
-		*/
+		 * This hook can be called mupltiple times when there is concurrent
+		 * load, so exit right after we wrote recovery message first time
+		 * during current recovery session.
+		 */
 		proc_exit(0);
 	}
 }
@@ -516,9 +521,10 @@ void
 pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					 XLogRecPtr commit_lsn)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
-	if (data->api) { 
+	if (data->api)
+	{
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_commit(ctx->out, data, txn, commit_lsn);
 		MtmOutputPluginWrite(ctx, true, true);
@@ -527,9 +533,9 @@ pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 void
 pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn)
+					  XLogRecPtr lsn)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
 	MtmOutputPluginPrepareWrite(ctx, true, true);
 	pglogical_write_prepare(ctx->out, data, txn, lsn);
@@ -538,9 +544,9 @@ pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 void
 pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn)
+							  XLogRecPtr lsn)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
 	MtmOutputPluginPrepareWrite(ctx, true, true);
 	pglogical_write_commit_prepared(ctx->out, data, txn, lsn);
@@ -549,9 +555,9 @@ pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn
 
 void
 pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr lsn)
+							 XLogRecPtr lsn)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
 	MtmOutputPluginPrepareWrite(ctx, true, true);
 	pglogical_write_abort_prepared(ctx->out, data, txn, lsn);
@@ -591,8 +597,8 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			{
-				HeapTuple oldtuple = change->data.tp.oldtuple ?
-					&change->data.tp.oldtuple->tuple : NULL;
+				HeapTuple	oldtuple = change->data.tp.oldtuple ?
+				&change->data.tp.oldtuple->tuple : NULL;
 
 				MtmOutputPluginPrepareWrite(ctx, true, false);
 				data->api->write_update(ctx->out, data, relation, oldtuple,
@@ -623,7 +629,7 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 /*
  * Decide if the whole transaction with specific origin should be filtered out.
  */
-extern int MtmReplicationNodeId;
+extern int	MtmReplicationNodeId;
 
 static bool
 pg_decode_origin_filter(LogicalDecodingContext *ctx,
@@ -631,11 +637,13 @@ pg_decode_origin_filter(LogicalDecodingContext *ctx,
 {
 	PGLogicalOutputData *data = ctx->output_plugin_private;
 
-	if (!call_txn_filter_hook(data, origin_id)) { 
+	if (!call_txn_filter_hook(data, origin_id))
+	{
 		return true;
 	}
 
-	if (!data->forward_changesets && origin_id != InvalidRepOriginId) {
+	if (!data->forward_changesets && origin_id != InvalidRepOriginId)
+	{
 		return true;
 	}
 
@@ -647,7 +655,7 @@ pg_decode_message(LogicalDecodingContext *ctx,
 				  ReorderBufferTXN *txn, XLogRecPtr lsn, bool transactional,
 				  const char *prefix, Size sz, const char *message)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
 	MtmOutputPluginPrepareWrite(ctx, true, !transactional);
 	data->api->write_message(ctx->out, ctx, lsn, prefix, sz, message);
@@ -656,9 +664,9 @@ pg_decode_message(LogicalDecodingContext *ctx,
 
 static void
 send_startup_message(LogicalDecodingContext *ctx,
-		PGLogicalOutputData *data, bool last_message)
+					 PGLogicalOutputData *data, bool last_message)
 {
-	List *msg;
+	List	   *msg;
 
 	Assert(!startup_message_sent);
 
@@ -671,7 +679,8 @@ send_startup_message(LogicalDecodingContext *ctx,
 	 * not.
 	 */
 
-	if (data->api) {
+	if (data->api)
+	{
 		MtmOutputPluginPrepareWrite(ctx, last_message, true);
 		data->api->write_startup_message(ctx->out, msg);
 		MtmOutputPluginWrite(ctx, last_message, true);
@@ -682,9 +691,10 @@ send_startup_message(LogicalDecodingContext *ctx,
 	startup_message_sent = true;
 }
 
-static void pg_decode_shutdown(LogicalDecodingContext * ctx)
+static void
+pg_decode_shutdown(LogicalDecodingContext *ctx)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 
 	call_shutdown_hook(data);
 
@@ -698,9 +708,9 @@ static void pg_decode_shutdown(LogicalDecodingContext * ctx)
 /* Filter out unnecessary two-phase transactions */
 static bool
 pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					TransactionId xid, const char *gid)
+				  TransactionId xid, const char *gid)
 {
-	// PGLogicalOutputData *data = ctx->output_plugin_private;
+	/* PGLogicalOutputData *data = ctx->output_plugin_private; */
 
 	/*
 	 * decode all 2PC transactions
@@ -724,7 +734,7 @@ pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
  */
 static bool
 pg_filter_decode_txn(LogicalDecodingContext *ctx,
-					   ReorderBufferTXN *txn)
+					 ReorderBufferTXN *txn)
 {
 	/* if txn is NULL, filter it out */
 	if (txn == NULL)
@@ -739,7 +749,7 @@ pg_filter_decode_txn(LogicalDecodingContext *ctx,
 	 * transactions.
 	 */
 	if (TransactionIdIsValid(txn->xid) && TransactionIdDidAbort(txn->xid))
-			return true;
+		return true;
 
 	return false;
 }
@@ -747,7 +757,7 @@ pg_filter_decode_txn(LogicalDecodingContext *ctx,
 /* ABORT callback */
 static void
 pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-					 XLogRecPtr abort_lsn)
+					XLogRecPtr abort_lsn)
 {
 	return;
 }

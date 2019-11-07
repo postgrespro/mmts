@@ -80,7 +80,7 @@ typedef enum MtmLogTag
 	NodeMgmt				= LOG
 } MtmLogTag;
 
-// XXX: also meaningful process name would be cool
+/*  XXX: also meaningful process name would be cool */
 
 #define MTM_TAG "[MTM] "
 

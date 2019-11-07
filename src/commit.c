@@ -43,12 +43,13 @@ typedef struct
 	int			node_id;
 } mtm_msg;
 
-static bool	force_in_bgworker;
-static bool	committers_incremented;
-static bool	init_done;
-static bool	config_valid;
+static bool force_in_bgworker;
+static bool committers_incremented;
+static bool init_done;
+static bool config_valid;
 static bool inside_mtm_begin;
-// XXX: change dmq api and avoid that
+
+/*  XXX: change dmq api and avoid that */
 static int	sender_to_node[MTM_MAX_NODES];
 static MtmConfig *mtm_cfg;
 
@@ -72,8 +73,9 @@ proc_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	int sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
-										node_id - 1);
+	int			sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
+												node_id - 1);
+
 	sender_to_node[sender_id] = node_id;
 }
 
@@ -88,8 +90,8 @@ void
 MtmXactCallback(XactEvent event, void *arg)
 {
 	/*
-	 * Perform distributed commit only for transactions in ordinary
-	 * backends with multimaster enabled.
+	 * Perform distributed commit only for transactions in ordinary backends
+	 * with multimaster enabled.
 	 */
 	if (IsAnyAutoVacuumProcess() || !IsNormalProcessingMode() ||
 		am_walsender || (IsBackgroundWorker && !force_in_bgworker))
@@ -106,8 +108,8 @@ MtmXactCallback(XactEvent event, void *arg)
 		case XACT_EVENT_COMMIT_COMMAND:
 			/* Here we catching commit of single-statement transaction */
 			if (IsTransactionOrTransactionBlock()
-					&& !IsTransactionBlock()
-					&& !IsSubTransaction())
+				&& !IsTransactionBlock()
+				&& !IsSubTransaction())
 			{
 				MtmTwoPhaseCommit();
 			}
@@ -135,13 +137,13 @@ backend_at_exit(int status, Datum arg)
 void
 MtmBeginTransaction()
 {
-	MtmNodeStatus	node_status;
+	MtmNodeStatus node_status;
 
 	/* Set this on tx start, to avoid resetting in error handler */
 	AllowTempIn2PC = false;
 
-	// XXX: clean MtmTx on commit and check on begin that it is clean.
-	// That should unveil probable issues with subxacts.
+	/* XXX: clean MtmTx on commit and check on begin that it is clean. */
+	/* That should unveil probable issues with subxacts. */
 
 	if (!MtmIsEnabled())
 	{
@@ -154,14 +156,14 @@ MtmBeginTransaction()
 	{
 		/* Keep us informed about subscription changes. */
 		CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
-								  pubsub_change_cb,
-								  (Datum) 0);
+									  pubsub_change_cb,
+									  (Datum) 0);
 		CacheRegisterSyscacheCallback(PUBLICATIONOID,
-								  pubsub_change_cb,
-								  (Datum) 0);
+									  pubsub_change_cb,
+									  (Datum) 0);
 		CacheRegisterSyscacheCallback(PROCOID,
-								  proc_change_cb,
-								  (Datum) 0);
+									  proc_change_cb,
+									  (Datum) 0);
 		on_shmem_exit(backend_at_exit, (Datum) 0);
 		init_done = true;
 	}
@@ -187,8 +189,10 @@ MtmBeginTransaction()
 		&& strcmp(application_name, MULTIMASTER_ADMIN) != 0
 		&& strcmp(application_name, MULTIMASTER_BROADCAST_SERVICE) != 0)
 	{
-		/* Reject all user's transactions at offline cluster.
-		 * Allow execution of transaction by bg-workers to makeit possible to perform recovery.
+		/*
+		 * Reject all user's transactions at offline cluster. Allow execution
+		 * of transaction by bg-workers to makeit possible to perform
+		 * recovery.
 		 */
 		if (!MtmBreakConnection)
 		{
@@ -230,17 +234,19 @@ MtmGenerateGid(char *gid, TransactionId xid, int node_id)
 }
 
 int
-MtmGidParseNodeId(const char* gid)
+MtmGidParseNodeId(const char *gid)
 {
-	int node_id = -1;
+	int			node_id = -1;
+
 	sscanf(gid, "MTM-%d-%*d", &node_id);
 	return node_id;
 }
 
 TransactionId
-MtmGidParseXid(const char* gid)
+MtmGidParseXid(const char *gid)
 {
 	TransactionId xid = InvalidTransactionId;
+
 	sscanf(gid, "MTM-%*d-" XID_FMT, &xid);
 	return xid;
 }
@@ -286,15 +292,15 @@ MtmTwoPhaseCommit()
 	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
 
 	/*
-	 * This lock is taken for a quite a long period of time but normally
-	 * all callers lock it in shared mode, so it shouldn't be noticeable
+	 * This lock is taken for a quite a long period of time but normally all
+	 * callers lock it in shared mode, so it shouldn't be noticeable
 	 * performance-wise.
 	 *
 	 * It is only used during startup of WalSender(node_id) in recovered mode
 	 * to create a barrier after which all transactions doing our 3PC are
 	 * guaranted to have seen participants with node_id enabled, so the
-	 * receiver can apply them in parallel and be sure that precommit will
-	 * not happens before node_id applies prepare.
+	 * receiver can apply them in parallel and be sure that precommit will not
+	 * happens before node_id applies prepare.
 	 *
 	 * See also comments at the end of MtmReplicationStartupHook().
 	 */
@@ -321,7 +327,7 @@ MtmTwoPhaseCommit()
 		ConditionVariableCancelSleep();
 
 		participants = MtmGetEnabledNodeMask() &
-						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 		ret = PrepareTransactionBlock(gid);
 		if (!ret)
@@ -354,15 +360,15 @@ MtmTwoPhaseCommit()
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
-						(errcode(messages[i].errcode),
-						 errmsg("[multimaster] failed to prepare transaction at peer node")));
+							(errcode(messages[i].errcode),
+							 errmsg("[multimaster] failed to prepare transaction at peer node")));
 				else
 					ereport(ERROR,
-						(errcode(messages[i].errcode),
-						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i].node_id),
-						 errdetail("sqlstate %s (%s)",
-								unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+							(errcode(messages[i].errcode),
+							 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+									gid, messages[i].node_id),
+							 errdetail("sqlstate %s (%s)",
+									   unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 			}
 		}
 
@@ -375,7 +381,7 @@ MtmTwoPhaseCommit()
 		StartTransactionCommand();
 		FinishPreparedTransaction(gid, true, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-		// XXX: make this conditional
+		/* XXX: make this conditional */
 		gather(participants, messages, &n_messages);
 
 		RESUME_INTERRUPTS();
@@ -416,8 +422,8 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 	while (participants != 0)
 	{
 		bool		ret;
-		DmqSenderId	sender_id;
-		StringInfoData	msg;
+		DmqSenderId sender_id;
+		StringInfoData msg;
 		int			rc;
 		bool		wait;
 
@@ -449,17 +455,17 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 				{
 					BIT_CLEAR(participants, i);
 					mtm_log(MtmTxTrace,
-						"GatherPrecommit: dropping node%d from tx participants",
-						i + 1);
+							"GatherPrecommit: dropping node%d from tx participants",
+							i + 1);
 				}
 			}
 		}
 
 		if (wait)
 		{
-			// XXX cache that
+			/* XXX cache that */
 			rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 100.0,
-						PG_WAIT_EXTENSION);
+						   PG_WAIT_EXTENSION);
 
 			if (rc & WL_POSTMASTER_DEATH)
 				proc_exit(1);
@@ -473,10 +479,10 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 bool
 MtmExplicitPrepare(char *gid)
 {
-	nodemask_t participants;
-	bool	ret;
+	nodemask_t	participants;
+	bool		ret;
 	TransactionId xid;
-	char	stream[DMQ_NAME_MAXLEN];
+	char		stream[DMQ_NAME_MAXLEN];
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
@@ -498,7 +504,7 @@ MtmExplicitPrepare(char *gid)
 	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
 
 	participants = MtmGetEnabledNodeMask() &
-						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+		~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 	ret = PrepareTransactionBlock(gid);
 	if (!ret)
@@ -523,15 +529,15 @@ MtmExplicitPrepare(char *gid)
 
 			if (MtmVolksWagenMode)
 				ereport(ERROR,
-					(errcode(messages[i].errcode),
-						errmsg("[multimaster] failed to prepare transaction at peer node")));
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction at peer node")));
 			else
 				ereport(ERROR,
-					(errcode(messages[i].errcode),
-						errmsg("[multimaster] failed to prepare transaction %s at node %d",
-							gid, messages[i].node_id),
-						errdetail("sqlstate %s (%s)",
-							unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+						(errcode(messages[i].errcode),
+						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								gid, messages[i].node_id),
+						 errdetail("sqlstate %s (%s)",
+								   unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
 		}
 	}
 
@@ -543,19 +549,19 @@ MtmExplicitPrepare(char *gid)
 void
 MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 {
-	nodemask_t participants;
+	nodemask_t	participants;
 	mtm_msg		messages[MTM_MAX_NODES];
 	int			n_messages;
 
 	PreventInTransactionBlock(isTopLevel,
-		isCommit ? "COMMIT PREPARED" : "ROLLBACK PREPARED");
+							  isCommit ? "COMMIT PREPARED" : "ROLLBACK PREPARED");
 
 	if (isCommit)
 	{
 		dmq_stream_subscribe(gid);
 
 		participants = MtmGetEnabledNodeMask() &
-						~((nodemask_t)1 << (mtm_cfg->my_node_id-1));
+			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
@@ -563,7 +569,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 
 		FinishPreparedTransaction(gid, true, false);
 
-		// XXX: make this conditional
+		/* XXX: make this conditional */
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 		gather(participants, messages, &n_messages);
 
@@ -585,4 +591,3 @@ MtmToggleReplication(void)
 {
 	force_in_bgworker = true;
 }
-

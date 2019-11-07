@@ -48,8 +48,8 @@ server_bigendian(void)
 #endif
 }
 
-extern int process_parameters(List *options, PGLogicalOutputData *data);
+extern int	process_parameters(List *options, PGLogicalOutputData *data);
 
-extern List * prepare_startup_message(PGLogicalOutputData *data);
+extern List *prepare_startup_message(PGLogicalOutputData *data);
 
 #endif

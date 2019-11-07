@@ -51,7 +51,7 @@
 
 #include "multimaster.h"
 
-// XXX: is it defined somewhere?
+/*  XXX: is it defined somewhere? */
 #define GUC_KEY_MAXLEN					255
 #define MTM_GUC_HASHSIZE				100
 #define MULTIMASTER_MAX_LOCAL_TABLES	256
@@ -62,8 +62,8 @@
 
 struct DDLSharedState
 {
-	LWLock   *localtab_lock;
-} *ddl_shared;
+	LWLock	   *localtab_lock;
+}		   *ddl_shared;
 
 typedef struct MtmGucEntry
 {
@@ -71,21 +71,22 @@ typedef struct MtmGucEntry
 	dlist_node	list_node;
 } MtmGucEntry;
 
-typedef struct {
-	NameData schema;
-	NameData name;
+typedef struct
+{
+	NameData	schema;
+	NameData	name;
 } MtmLocalTablesTuple;
 
 /* GUCs */
-bool	MtmVolksWagenMode;
-bool	MtmMonotonicSequences;
-char   *MtmRemoteFunctionsList;
-bool	MtmIgnoreTablesWithoutPk;
+bool		MtmVolksWagenMode;
+bool		MtmMonotonicSequences;
+char	   *MtmRemoteFunctionsList;
+bool		MtmIgnoreTablesWithoutPk;
 
 static char MtmTempSchema[NAMEDATALEN];
 static bool TempDropRegistered;
 
-static void const* MtmDDLStatement;
+static void const *MtmDDLStatement;
 
 static Node *MtmCapturedDDL;
 static bool DDLApplyInProgress;
@@ -93,9 +94,9 @@ static bool DDLApplyInProgress;
 static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
 
-static HTAB	   *MtmRemoteFunctions;
-static bool		MtmRemoteFunctionsValid;
-static HTAB	   *MtmLocalTables;
+static HTAB *MtmRemoteFunctions;
+static bool MtmRemoteFunctionsValid;
+static HTAB *MtmLocalTables;
 
 static ExecutorStart_hook_type PreviousExecutorStartHook;
 static ExecutorFinish_hook_type PreviousExecutorFinishHook;
@@ -111,22 +112,22 @@ static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
 
 static void MtmProcessUtility(PlannedStmt *pstmt,
-				const char *queryString,
-				ProcessUtilityContext context, ParamListInfo params,
-				QueryEnvironment *queryEnv, DestReceiver *dest,
-				char *completionTag);
+				  const char *queryString,
+				  ProcessUtilityContext context, ParamListInfo params,
+				  QueryEnvironment *queryEnv, DestReceiver *dest,
+				  char *completionTag);
 
 static void MtmProcessUtilityReceiver(PlannedStmt *pstmt,
-				const char *queryString,
-				ProcessUtilityContext context, ParamListInfo params,
-				QueryEnvironment *queryEnv, DestReceiver *dest,
-				char *completionTag);
+						  const char *queryString,
+						  ProcessUtilityContext context, ParamListInfo params,
+						  QueryEnvironment *queryEnv, DestReceiver *dest,
+						  char *completionTag);
 
 static void MtmProcessUtilitySender(PlannedStmt *pstmt,
-				const char *queryString,
-				ProcessUtilityContext context, ParamListInfo params,
-				QueryEnvironment *queryEnv, DestReceiver *dest,
-				char *completionTag);
+						const char *queryString,
+						ProcessUtilityContext context, ParamListInfo params,
+						QueryEnvironment *queryEnv, DestReceiver *dest,
+						char *completionTag);
 
 static void MtmGucUpdate(const char *key);
 static void MtmInitializeRemoteFunctionsMap(void);
@@ -134,7 +135,7 @@ static char *MtmGucSerialize(void);
 static void MtmMakeRelationLocal(Oid relid, bool locked);
 static List *AdjustCreateSequence(List *options);
 
-static void MtmProcessDDLCommand(char const* queryString, bool transactional);
+static void MtmProcessDDLCommand(char const *queryString, bool transactional);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
 
@@ -147,7 +148,7 @@ PG_FUNCTION_INFO_V1(mtm_make_table_local);
 void
 MtmDDLReplicationInit()
 {
-	Size	size = 0;
+	Size		size = 0;
 
 	size = add_size(size, sizeof(struct DDLSharedState));
 	size = add_size(size, hash_estimate_size(MULTIMASTER_MAX_LOCAL_TABLES,
@@ -183,8 +184,8 @@ MtmDDLReplicationShmemStartup(void)
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	ddl_shared = ShmemInitStruct("ddl",
-								sizeof(struct DDLSharedState),
-								&found);
+								 sizeof(struct DDLSharedState),
+								 &found);
 
 	if (!found)
 	{
@@ -192,8 +193,8 @@ MtmDDLReplicationShmemStartup(void)
 	}
 
 	MtmLocalTables = ShmemInitHash("MtmLocalTables",
-		MULTIMASTER_MAX_LOCAL_TABLES, MULTIMASTER_MAX_LOCAL_TABLES,
-		&info, HASH_ELEM | HASH_BLOBS);
+								   MULTIMASTER_MAX_LOCAL_TABLES, MULTIMASTER_MAX_LOCAL_TABLES,
+								   &info, HASH_ELEM | HASH_BLOBS);
 
 
 	LWLockRelease(AddinShmemInitLock);
@@ -229,12 +230,12 @@ temp_schema_reset(void)
 {
 	Assert(TempDropRegistered);
 	MtmProcessDDLCommand(
-		psprintf("select mtm.set_temp_schema('%s'); "
-				 "DROP SCHEMA IF EXISTS %s CASCADE; "
-				 "DROP SCHEMA IF EXISTS %s_toast CASCADE",
-				 MtmTempSchema, MtmTempSchema, MtmTempSchema),
-		false
-	);
+						 psprintf("select mtm.set_temp_schema('%s'); "
+								  "DROP SCHEMA IF EXISTS %s CASCADE; "
+								  "DROP SCHEMA IF EXISTS %s_toast CASCADE",
+								  MtmTempSchema, MtmTempSchema, MtmTempSchema),
+						 false
+		);
 }
 
 /* Exit callback to call temp_schema_reset() */
@@ -298,7 +299,7 @@ mtm_set_temp_schema(PG_FUNCTION_ARGS)
  *
  *****************************************************************************/
 
-// XXX: move to ShmemStart?
+/*  XXX: move to ShmemStart? */
 static void
 MtmGucInit(void)
 {
@@ -310,18 +311,22 @@ MtmGucInit(void)
 	hash_ctl.entrysize = sizeof(MtmGucEntry);
 	hash_ctl.hcxt = TopMemoryContext;
 	MtmGucHash = hash_create("MtmGucHash",
-						MTM_GUC_HASHSIZE,
-						&hash_ctl,
-						HASH_ELEM | HASH_CONTEXT);
+							 MTM_GUC_HASHSIZE,
+							 &hash_ctl,
+							 HASH_ELEM | HASH_CONTEXT);
 
 	/*
-	 * If current role is not equal to MtmDatabaseUser, than set it before
-	 * any other GUC vars.
+	 * If current role is not equal to MtmDatabaseUser, than set it before any
+	 * other GUC vars.
 	 *
 	 * XXX: try to avoid using MtmDatabaseUser somehow
 	 */
 	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-	// XXX if (current_role && *current_role && strcmp(MtmDatabaseUser, current_role) != 0)
+
+	/*
+	 * XXX if (current_role && *current_role && strcmp(MtmDatabaseUser,
+	 * current_role) != 0)
+	 */
 	MtmGucUpdate("session_authorization");
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -342,12 +347,12 @@ static inline void
 MtmGucUpdate(const char *key)
 {
 	MtmGucEntry *hentry;
-	bool found;
+	bool		found;
 
 	if (!MtmGucHash)
 		MtmGucInit();
 
-	hentry = (MtmGucEntry*)hash_search(MtmGucHash, key, HASH_ENTER, &found);
+	hentry = (MtmGucEntry *) hash_search(MtmGucHash, key, HASH_ENTER, &found);
 	if (found)
 		dlist_delete(&hentry->list_node);
 
@@ -358,12 +363,12 @@ static inline void
 MtmGucRemove(const char *key)
 {
 	MtmGucEntry *hentry;
-	bool found;
+	bool		found;
 
 	if (!MtmGucHash)
 		MtmGucInit();
 
-	hentry = (MtmGucEntry*)hash_search(MtmGucHash, key, HASH_FIND, &found);
+	hentry = (MtmGucEntry *) hash_search(MtmGucHash, key, HASH_FIND, &found);
 	if (found)
 	{
 		dlist_delete(&hentry->list_node);
@@ -443,8 +448,8 @@ _guc_name_compare(const char *namea, const char *nameb)
 static int
 _var_name_cmp(const void *a, const void *b)
 {
-	const struct config_generic *confa = *(struct config_generic * const *) a;
-	const struct config_generic *confb = *(struct config_generic * const *) b;
+	const struct config_generic *confa = *(struct config_generic *const *) a;
+	const struct config_generic *confb = *(struct config_generic *const *) b;
 
 	return _guc_name_compare(confa->name, confb->name);
 }
@@ -452,7 +457,7 @@ _var_name_cmp(const void *a, const void *b)
 static struct config_generic *
 fing_guc_conf(const char *name)
 {
-	int num;
+	int			num;
 	struct config_generic **vars;
 	const char **key = &name;
 	struct config_generic **res;
@@ -461,9 +466,9 @@ fing_guc_conf(const char *name)
 	vars = get_guc_variables();
 
 	res = (struct config_generic **) bsearch((void *) &key,
-										(void *) vars,
-										num, sizeof(struct config_generic *),
-										_var_name_cmp);
+											 (void *) vars,
+											 num, sizeof(struct config_generic *),
+											 _var_name_cmp);
 
 	return res ? *res : NULL;
 }
@@ -471,13 +476,13 @@ fing_guc_conf(const char *name)
 char *
 MtmGucSerialize(void)
 {
-	StringInfo serialized_gucs = makeStringInfo();
-	dlist_iter iter;
+	StringInfo	serialized_gucs = makeStringInfo();
+	dlist_iter	iter;
 	const char *search_path;
-	bool found;
-	Oid ceUserId = GetUserId();
-	Oid csUserId = GetSessionUserId();
-	bool useRole = is_member_of_role(csUserId, ceUserId);
+	bool		found;
+	Oid			ceUserId = GetUserId();
+	Oid			csUserId = GetSessionUserId();
+	bool		useRole = is_member_of_role(csUserId, ceUserId);
 
 	if (!MtmGucHash)
 		MtmGucInit();
@@ -494,16 +499,18 @@ MtmGucSerialize(void)
 		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 		hash_search(MtmGucHash, "role", HASH_FIND, &found);
 		if ((found) && (ceUserId == csUserId))
+
 			/*
-			 * We need to do this because SET LOCAL return only WARNING if is used
-			 * out of transaction block. DDL will be passed to another nodes and
-			 * will set "role" variable at current node.
+			 * We need to do this because SET LOCAL return only WARNING if is
+			 * used out of transaction block. DDL will be passed to another
+			 * nodes and will set "role" variable at current node.
 			 */
 			MtmGucRemove("role");
 		else if ((!found) && (ceUserId != csUserId) && useRole)
+
 			/*
-			 * We need to do this because SECURITY DEFINER changed current user
-			 * value quietly.
+			 * We need to do this because SECURITY DEFINER changed current
+			 * user value quietly.
 			 */
 			MtmGucUpdate("role");
 		MemoryContextSwitchTo(oldcontext);
@@ -522,9 +529,11 @@ MtmGucSerialize(void)
 		appendStringInfoString(serialized_gucs, cur_entry->key);
 		appendStringInfoString(serialized_gucs, " TO ");
 
-		/* Current effective user can have more privileges than session user
+		/*
+		 * Current effective user can have more privileges than session user
 		 * (increase in rights by SECURITY DEFINER, for example). In this case
-		 * we need to set session authorization role in the current user value.
+		 * we need to set session authorization role in the current user
+		 * value.
 		 */
 		if (strcmp(cur_entry->key, "session_authorization") == 0)
 			gucValue = GetUserNameFromId(useRole ? csUserId : ceUserId, false);
@@ -547,8 +556,8 @@ MtmGucSerialize(void)
 	}
 
 	/*
-	 * Crutch for scheduler. It sets search_path through SetConfigOption()
-	 * so our callback do not react on that.
+	 * Crutch for scheduler. It sets search_path through SetConfigOption() so
+	 * our callback do not react on that.
 	 */
 	search_path = GetConfigOption("search_path", false, true);
 	if (strcmp(search_path, "\"\"") == 0 || strlen(search_path) == 0)
@@ -568,11 +577,11 @@ MtmGucSerialize(void)
  *****************************************************************************/
 
 static void
-MtmProcessDDLCommand(char const* queryString, bool transactional)
+MtmProcessDDLCommand(char const *queryString, bool transactional)
 {
 	if (transactional)
 	{
-		char *gucCtx;
+		char	   *gucCtx;
 
 		temp_schema_init();
 		gucCtx = MtmGucSerialize();
@@ -611,7 +620,7 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	else
 	{
 		MtmProcessUtilitySender(pstmt, queryString, context, params,
-								  queryEnv, dest, completionTag);
+								queryEnv, dest, completionTag);
 	}
 
 }
@@ -633,11 +642,11 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
  */
 static void
 MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
-				  ProcessUtilityContext context, ParamListInfo params,
-				  QueryEnvironment *queryEnv, DestReceiver *dest,
-				  char *completionTag)
+						  ProcessUtilityContext context, ParamListInfo params,
+						  QueryEnvironment *queryEnv, DestReceiver *dest,
+						  char *completionTag)
 {
-	Node *parsetree = pstmt->utilityStmt;
+	Node	   *parsetree = pstmt->utilityStmt;
 
 	/* catch only DDL produced by SPI in MtmApplyDDLMessage() */
 	if (DDLApplyInProgress)
@@ -663,67 +672,76 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 				break;
 
 			case T_IndexStmt:
-			{
-				IndexStmt *stmt = (IndexStmt *) parsetree;
-				if (stmt->concurrent)
 				{
-					Assert(MtmCapturedDDL == NULL);
-					MtmCapturedDDL = (Node *) copyObject(stmt);
-					captured = true;
+					IndexStmt  *stmt = (IndexStmt *) parsetree;
+
+					if (stmt->concurrent)
+					{
+						Assert(MtmCapturedDDL == NULL);
+						MtmCapturedDDL = (Node *) copyObject(stmt);
+						captured = true;
+					}
+					break;
 				}
-				break;
-			}
 
 			case T_PartitionStmt:
-			{
-				PartitionStmt *stmt = (PartitionStmt *) parsetree;
-				if (stmt->concurrent)
 				{
-					Assert(MtmCapturedDDL == NULL);
-					MtmCapturedDDL = (Node *) copyObject(stmt);
-					captured = true;
+					PartitionStmt *stmt = (PartitionStmt *) parsetree;
+
+					if (stmt->concurrent)
+					{
+						Assert(MtmCapturedDDL == NULL);
+						MtmCapturedDDL = (Node *) copyObject(stmt);
+						captured = true;
+					}
+					break;
 				}
-				break;
-			}
 
 			case T_AlterEnumStmt:
-			{
-				AlterEnumStmt *stmt = (AlterEnumStmt *) parsetree;
-				Assert(MtmCapturedDDL == NULL);
-				MtmCapturedDDL = (Node *) copyObject(stmt);
-				captured = true;
-				break;
-			}
-
-			case T_DropStmt:
-			{
-				DropStmt *stmt = (DropStmt *) parsetree;
-				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
 				{
+					AlterEnumStmt *stmt = (AlterEnumStmt *) parsetree;
+
 					Assert(MtmCapturedDDL == NULL);
 					MtmCapturedDDL = (Node *) copyObject(stmt);
 					captured = true;
+					break;
 				}
-				/* Make it possible to drop functions which were not replicated */
-				else if (stmt->removeType == OBJECT_FUNCTION)
-				{
-					stmt->missing_ok = true;
-				}
-				break;
-			}
 
-			/* disable functiob body check at replica */
+			case T_DropStmt:
+				{
+					DropStmt   *stmt = (DropStmt *) parsetree;
+
+					if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
+					{
+						Assert(MtmCapturedDDL == NULL);
+						MtmCapturedDDL = (Node *) copyObject(stmt);
+						captured = true;
+					}
+
+					/*
+					 * Make it possible to drop functions which were not
+					 * replicated
+					 */
+					else if (stmt->removeType == OBJECT_FUNCTION)
+					{
+						stmt->missing_ok = true;
+					}
+					break;
+				}
+
+				/* disable functiob body check at replica */
 			case T_CreateFunctionStmt:
 				check_function_bodies = false;
 				break;
 
 			case T_CreateSeqStmt:
-			{
-				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
-				if (!MtmVolksWagenMode)
-					stmt->options = AdjustCreateSequence(stmt->options);
-				break;
-			}
+				{
+					CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
+
+					if (!MtmVolksWagenMode)
+						stmt->options = AdjustCreateSequence(stmt->options);
+					break;
+				}
 
 			default:
 				break;
@@ -756,16 +774,16 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 
 static void
 MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
-				  ProcessUtilityContext context, ParamListInfo params,
-				  QueryEnvironment *queryEnv, DestReceiver *dest,
-				  char *completionTag)
+						ProcessUtilityContext context, ParamListInfo params,
+						QueryEnvironment *queryEnv, DestReceiver *dest,
+						char *completionTag)
 {
-	bool skipCommand = false;
-	bool executed = false;
-	Node *parsetree = pstmt->utilityStmt;
-	int stmt_start = pstmt->stmt_location > 0 ? pstmt->stmt_location : 0;
-	int stmt_len = pstmt->stmt_len > 0 ? pstmt->stmt_len : strlen(queryString + stmt_start);
-	char *stmt_string = palloc(stmt_len + 1);
+	bool		skipCommand = false;
+	bool		executed = false;
+	Node	   *parsetree = pstmt->utilityStmt;
+	int			stmt_start = pstmt->stmt_location > 0 ? pstmt->stmt_location : 0;
+	int			stmt_len = pstmt->stmt_len > 0 ? pstmt->stmt_len : strlen(queryString + stmt_start);
+	char	   *stmt_string = palloc(stmt_len + 1);
 	bool		isTopLevel = (context == PROCESS_UTILITY_TOPLEVEL);
 
 	strncpy(stmt_string, queryString + stmt_start, stmt_len);
@@ -780,36 +798,37 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	switch (nodeTag(parsetree))
 	{
 		case T_TransactionStmt:
-		{
-			TransactionStmt *stmt = (TransactionStmt *) parsetree;
-			switch (stmt->kind)
 			{
-				case TRANS_STMT_COMMIT:
-					if (MtmTwoPhaseCommit())
+				TransactionStmt *stmt = (TransactionStmt *) parsetree;
+
+				switch (stmt->kind)
+				{
+					case TRANS_STMT_COMMIT:
+						if (MtmTwoPhaseCommit())
+							return;
+						break;
+
+					case TRANS_STMT_PREPARE:
+						if (!MtmExplicitPrepare(stmt->gid))
+						{
+							/* report unsuccessful commit in completionTag */
+							if (completionTag)
+								strcpy(completionTag, "ROLLBACK");
+						}
 						return;
-					break;
 
-				case TRANS_STMT_PREPARE:
-					if (!MtmExplicitPrepare(stmt->gid))
-					{
-						/* report unsuccessful commit in completionTag */
-						if (completionTag)
-							strcpy(completionTag, "ROLLBACK");
-					}
-					return;
+					case TRANS_STMT_COMMIT_PREPARED:
+						MtmExplicitFinishPrepared(isTopLevel, stmt->gid, true);
+						return;
 
-				case TRANS_STMT_COMMIT_PREPARED:
-					MtmExplicitFinishPrepared(isTopLevel, stmt->gid, true);
-					return;
+					case TRANS_STMT_ROLLBACK_PREPARED:
+						MtmExplicitFinishPrepared(isTopLevel, stmt->gid, false);
+						return;
 
-				case TRANS_STMT_ROLLBACK_PREPARED:
-					MtmExplicitFinishPrepared(isTopLevel, stmt->gid, false);
-					return;
-
-				default:
-					break;
+					default:
+						break;
+				}
 			}
-		}
 			/* no break */
 		case T_PlannedStmt:
 		case T_FetchStmt:
@@ -824,8 +843,9 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_LoadStmt:
 		case T_ClusterStmt:
 		case T_VariableShowStmt:
-		case T_ReassignOwnedStmt: // XXX?
-		case T_LockStmt:
+		case T_ReassignOwnedStmt:
+			//XXX ?
+				case T_LockStmt :
 		case T_CheckPointStmt:
 		case T_ReindexStmt:
 		case T_AlterSystemStmt:
@@ -838,12 +858,13 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			break;
 
 		case T_CreateSeqStmt:
-		{
-			CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
-			if (!MtmVolksWagenMode)
-				stmt->options = AdjustCreateSequence(stmt->options);
-			break;
-		}
+			{
+				CreateSeqStmt *stmt = (CreateSeqStmt *) parsetree;
+
+				if (!MtmVolksWagenMode)
+					stmt->options = AdjustCreateSequence(stmt->options);
+				break;
+			}
 
 		case T_CreateTableSpaceStmt:
 		case T_DropTableSpaceStmt:
@@ -851,133 +872,144 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			MtmProcessDDLCommand(stmt_string, false);
 			break;
 
-		/*
-		 * Explain will not call ProcessUtility for passed CreateTableAsStmt,
-		 * but will run it manually, so we will not catch it in a standard way.
-		 * So catch it in a non-standard way.
-		 */
+			/*
+			 * Explain will not call ProcessUtility for passed
+			 * CreateTableAsStmt, but will run it manually, so we will not
+			 * catch it in a standard way. So catch it in a non-standard way.
+			 */
 		case T_ExplainStmt:
-		{
-			ExplainStmt	   *stmt = (ExplainStmt *) parsetree;
-			Query		   *query = (Query *) stmt->query;
-			ListCell	   *lc;
-
-			skipCommand = true;
-			if (query->commandType == CMD_UTILITY &&
-				IsA(query->utilityStmt, CreateTableAsStmt))
 			{
-				foreach(lc, stmt->options)
-				{
-					DefElem	   *opt = (DefElem *) lfirst(lc);
-					if (strcmp(opt->defname, "analyze") == 0)
-						skipCommand = false;
-				}
-			}
-			break;
-		}
+				ExplainStmt *stmt = (ExplainStmt *) parsetree;
+				Query	   *query = (Query *) stmt->query;
+				ListCell   *lc;
 
-		/* Save GUC context for consequent DDL execution */
-		case T_DiscardStmt:
-		{
-			DiscardStmt *stmt = (DiscardStmt *) parsetree;
-
-			if (stmt->target == DISCARD_TEMP)
-				temp_schema_reset();
-
-			if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
-			{
 				skipCommand = true;
-				MtmGucDiscard();
+				if (query->commandType == CMD_UTILITY &&
+					IsA(query->utilityStmt, CreateTableAsStmt))
+				{
+					foreach(lc, stmt->options)
+					{
+						DefElem    *opt = (DefElem *) lfirst(lc);
+
+						if (strcmp(opt->defname, "analyze") == 0)
+							skipCommand = false;
+					}
+				}
+				break;
 			}
-			break;
-		}
+
+			/* Save GUC context for consequent DDL execution */
+		case T_DiscardStmt:
+			{
+				DiscardStmt *stmt = (DiscardStmt *) parsetree;
+
+				if (stmt->target == DISCARD_TEMP)
+					temp_schema_reset();
+
+				if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
+				{
+					skipCommand = true;
+					MtmGucDiscard();
+				}
+				break;
+			}
 
 		case T_VariableSetStmt:
-		{
-			VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
-
-			/* Prevent SET TRANSACTION from replication */
-			if (stmt->kind == VAR_SET_MULTI)
-				skipCommand = true;
-
-			if (!IsTransactionBlock())
 			{
-				skipCommand = true;
-				/*
-				 * Catch GUC assignment after it will be performed, as it still may fail.
-				 */
+				VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
+
+				/* Prevent SET TRANSACTION from replication */
+				if (stmt->kind == VAR_SET_MULTI)
+					skipCommand = true;
+
+				if (!IsTransactionBlock())
+				{
+					skipCommand = true;
+
+					/*
+					 * Catch GUC assignment after it will be performed, as it
+					 * still may fail.
+					 */
+				}
+
+				break;
 			}
 
-			break;
-		}
-
-		/*
-		* Index is created at replicas completely asynchronously, so to prevent unintended interleaving with subsequent
-		* commands in this session, just wait here for a while.
-		* It will help to pass regression tests but will not be enough for construction of real large indexes
-		* where difference between completion of this operation at different nodes is unlimited
-		*/
+			/*
+			 * Index is created at replicas completely asynchronously, so to
+			 * prevent unintended interleaving with subsequent commands in
+			 * this session, just wait here for a while. It will help to pass
+			 * regression tests but will not be enough for construction of
+			 * real large indexes where difference between completion of this
+			 * operation at different nodes is unlimited
+			 */
 		case T_IndexStmt:
-		{
-			IndexStmt *indexStmt = (IndexStmt *) parsetree;
-			if (indexStmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 			{
-				MtmProcessDDLCommand(stmt_string, false);
-				skipCommand = true;
-				pg_usleep(USECS_PER_SEC); /* XXX */
+				IndexStmt  *indexStmt = (IndexStmt *) parsetree;
+
+				if (indexStmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
+				{
+					MtmProcessDDLCommand(stmt_string, false);
+					skipCommand = true;
+					pg_usleep(USECS_PER_SEC);	/* XXX */
+				}
+				break;
 			}
-			break;
-		}
 
 		case T_PartitionStmt:
-		{
-			PartitionStmt *stmt = (PartitionStmt *) parsetree;
-			if (stmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 			{
-				MtmProcessDDLCommand(stmt_string, false);
-				skipCommand = true;
-			}
-			break;
-		}
+				PartitionStmt *stmt = (PartitionStmt *) parsetree;
 
-		case T_DropStmt:
-		{
-			DropStmt *stmt = (DropStmt *) parsetree;
-			if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
-			{
-				if (context == PROCESS_UTILITY_TOPLEVEL)
+				if (stmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 				{
 					MtmProcessDDLCommand(stmt_string, false);
 					skipCommand = true;
 				}
+				break;
 			}
-			break;
-		}
 
-		/* Copy need some special care */
-		case T_CopyStmt:
-		{
-			CopyStmt *copyStatement = (CopyStmt *) parsetree;
-			skipCommand = true;
-			if (copyStatement->is_from)
+		case T_DropStmt:
 			{
-				RangeVar *relation = copyStatement->relation;
+				DropStmt   *stmt = (DropStmt *) parsetree;
 
-				if (relation != NULL)
+				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
 				{
-					Oid relid = RangeVarGetRelid(relation, NoLock, true);
-					if (OidIsValid(relid))
+					if (context == PROCESS_UTILITY_TOPLEVEL)
 					{
-						Relation rel = heap_open(relid, ShareLock);
-						if (RelationNeedsWAL(rel))
-							MtmTx.contains_dml = true;
-
-						heap_close(rel, ShareLock);
+						MtmProcessDDLCommand(stmt_string, false);
+						skipCommand = true;
 					}
 				}
+				break;
 			}
-			break;
-		}
+
+			/* Copy need some special care */
+		case T_CopyStmt:
+			{
+				CopyStmt   *copyStatement = (CopyStmt *) parsetree;
+
+				skipCommand = true;
+				if (copyStatement->is_from)
+				{
+					RangeVar   *relation = copyStatement->relation;
+
+					if (relation != NULL)
+					{
+						Oid			relid = RangeVarGetRelid(relation, NoLock, true);
+
+						if (OidIsValid(relid))
+						{
+							Relation	rel = heap_open(relid, ShareLock);
+
+							if (RelationNeedsWAL(rel))
+								MtmTx.contains_dml = true;
+
+							heap_close(rel, ShareLock);
+						}
+					}
+				}
+				break;
+			}
 
 		default:
 			skipCommand = false;
@@ -1002,20 +1034,21 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	if (PreviousProcessUtilityHook != NULL)
 	{
 		PreviousProcessUtilityHook(pstmt, queryString,
-										 context, params, queryEnv,
-										 dest, completionTag);
+								   context, params, queryEnv,
+								   dest, completionTag);
 	}
 	else
 	{
 		standard_ProcessUtility(pstmt, queryString,
-									context, params, queryEnv,
-									dest, completionTag);
+								context, params, queryEnv,
+								dest, completionTag);
 	}
 
 	/* Catch GUC assignment */
 	if (nodeTag(parsetree) == T_VariableSetStmt)
 	{
 		VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
+
 		if (!IsTransactionBlock())
 		{
 			MtmGucSet(stmt, stmt_string);
@@ -1038,7 +1071,7 @@ targetList_walker(Node *node, void *context)
 
 	if (IsA(node, FuncExpr))
 	{
-		Oid func_oid = ((FuncExpr*) node)->funcid;
+		Oid			func_oid = ((FuncExpr *) node)->funcid;
 
 		if (hash_search(MtmRemoteFunctions, &func_oid, HASH_FIND, NULL))
 			return true;
@@ -1051,7 +1084,7 @@ static bool
 search_for_remote_functions(PlanState *node, void *context)
 {
 	if (node == NULL)
-			return false;
+		return false;
 
 	if (targetList_walker((Node *) node->plan->targetlist, NULL))
 		return true;
@@ -1100,23 +1133,25 @@ static void
 MtmExecutorFinish(QueryDesc *queryDesc)
 {
 	/*
-	 * If tx didn't wrote to XLOG then there is nothing to commit on other nodes.
+	 * If tx didn't wrote to XLOG then there is nothing to commit on other
+	 * nodes.
 	 */
 
-	CmdType operation = queryDesc->operation;
-	EState *estate = queryDesc->estate;
-	PlannedStmt	*pstmt = queryDesc->plannedstmt;
+	CmdType		operation = queryDesc->operation;
+	EState	   *estate = queryDesc->estate;
+	PlannedStmt *pstmt = queryDesc->plannedstmt;
 
 	if (MtmIsEnabled())
 	{
 		if (operation == CMD_INSERT || operation == CMD_UPDATE ||
 			operation == CMD_DELETE || pstmt->hasModifyingCTE)
 		{
-			int i;
+			int			i;
 
 			for (i = 0; i < estate->es_num_result_relations; i++)
 			{
-				Relation rel = estate->es_result_relations[i].ri_RelationDesc;
+				Relation	rel = estate->es_result_relations[i].ri_RelationDesc;
+
 				if (RelationNeedsWAL(rel))
 				{
 					if (MtmIgnoreTablesWithoutPk)
@@ -1126,7 +1161,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 						if (rel->rd_replidindex == InvalidOid)
 						{
-							// XXX
+							/* XXX */
 							MtmMakeRelationLocal(RelationGetRelid(rel), false);
 							continue;
 						}
@@ -1145,7 +1180,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 
 	if (MtmDDLStatement == queryDesc && MtmIsEnabled())
 	{
-		// XXX try to filter out matviews in rowfilter
+		/* XXX try to filter out matviews in rowfilter */
 		MtmFinishDDLCommand();
 		MtmDDLStatement = NULL;
 	}
@@ -1162,7 +1197,7 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 void
 MtmApplyDDLMessage(const char *messageBody, bool transactional)
 {
-	int rc;
+	int			rc;
 
 	/* Write DDL to our WAL in case smbd going to recover from us */
 	Assert(replorigin_session_origin != InvalidRepOriginId);
@@ -1200,38 +1235,39 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 		MemoryContextSwitchTo(MtmApplyContext);
 		PushActiveSnapshot(GetTransactionSnapshot());
 
-		// XXX: assert that was non-transactional ddl
+		/* XXX: assert that was non-transactional ddl */
 
 		switch (nodeTag(MtmCapturedDDL))
 		{
 			case T_IndexStmt:
-			{
-				IndexStmt *indexStmt = (IndexStmt *) MtmCapturedDDL;
-				Oid relid =	RangeVarGetRelidExtended(indexStmt->relation,
-													ShareUpdateExclusiveLock,
-														0,
-														NULL,
-														NULL);
-				/* Run parse analysis ... */
-				indexStmt = transformIndexStmt(relid, indexStmt, messageBody);
+				{
+					IndexStmt  *indexStmt = (IndexStmt *) MtmCapturedDDL;
+					Oid			relid = RangeVarGetRelidExtended(indexStmt->relation,
+																 ShareUpdateExclusiveLock,
+																 0,
+																 NULL,
+																 NULL);
 
-				DefineIndex(relid,		/* OID of heap relation */
-							indexStmt,
-							InvalidOid, /* no predefined OID */
-							InvalidOid, /* no parent index */
-							InvalidOid, /* no parent constraint */
-							false,		/* is_alter_table */
-							true,		/* check_rights */
-							true,		/* check_not_in_use */
-							false,		/* skip_build */
-							false);		/* quiet */
+					/* Run parse analysis ... */
+					indexStmt = transformIndexStmt(relid, indexStmt, messageBody);
 
-				break;
-			}
+					DefineIndex(relid,	/* OID of heap relation */
+								indexStmt,
+								InvalidOid, /* no predefined OID */
+								InvalidOid, /* no parent index */
+								InvalidOid, /* no parent constraint */
+								false,	/* is_alter_table */
+								true,	/* check_rights */
+								true,	/* check_not_in_use */
+								false,	/* skip_build */
+								false); /* quiet */
+
+					break;
+				}
 
 			case T_PartitionStmt:
 				{
-					Oid		relid;
+					Oid			relid;
 					PartitionStmt *pstmt = (PartitionStmt *) MtmCapturedDDL;
 
 					relid = RangeVarGetRelid(pstmt->relation, NoLock, false);
@@ -1292,7 +1328,7 @@ MtmDDLResetApplyState()
 Datum
 mtm_make_table_local(PG_FUNCTION_ARGS)
 {
-	Oid	reloid = PG_GETARG_OID(0);
+	Oid			reloid = PG_GETARG_OID(0);
 	RangeVar   *rv;
 	Relation	rel;
 	TupleDesc	tupDesc;
@@ -1304,10 +1340,11 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
 	rel = heap_openrv(rv, RowExclusiveLock);
-	if (rel != NULL) {
-		char* tableName = get_rel_name(reloid);
-		Oid	  schemaid = get_rel_namespace(reloid);
-		char* schemaName = get_namespace_name(schemaid);
+	if (rel != NULL)
+	{
+		char	   *tableName = get_rel_name(reloid);
+		Oid			schemaid = get_rel_namespace(reloid);
+		char	   *schemaName = get_namespace_name(schemaid);
 
 		tupDesc = RelationGetDescr(rel);
 
@@ -1345,32 +1382,35 @@ MtmMakeRelationLocal(Oid relid, bool locked)
 }
 
 void
-MtmMakeTableLocal(char const* schema, char const* name, bool locked)
+MtmMakeTableLocal(char const *schema, char const *name, bool locked)
 {
-	RangeVar* rv = makeRangeVar((char*)schema, (char*)name, -1);
-	Oid relid = RangeVarGetRelid(rv, NoLock, true);
+	RangeVar   *rv = makeRangeVar((char *) schema, (char *) name, -1);
+	Oid			relid = RangeVarGetRelid(rv, NoLock, true);
+
 	MtmMakeRelationLocal(relid, locked);
 }
 
 static void
 MtmLoadLocalTables(void)
 {
-	RangeVar	   *rv;
-	Relation		rel;
-	SysScanDesc		scan;
-	HeapTuple		tuple;
+	RangeVar   *rv;
+	Relation	rel;
+	SysScanDesc scan;
+	HeapTuple	tuple;
 
 	Assert(IsTransactionState());
 	Assert(LWLockHeldByMeInMode(ddl_shared->localtab_lock, LW_EXCLUSIVE));
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
 	rel = heap_openrv_extended(rv, RowExclusiveLock, true);
-	if (rel != NULL) {
+	if (rel != NULL)
+	{
 		scan = systable_beginscan(rel, 0, true, NULL, 0, NULL);
 
 		while (HeapTupleIsValid(tuple = systable_getnext(scan)))
 		{
-			MtmLocalTablesTuple	*t = (MtmLocalTablesTuple*) GETSTRUCT(tuple);
+			MtmLocalTablesTuple *t = (MtmLocalTablesTuple *) GETSTRUCT(tuple);
+
 			MtmMakeTableLocal(NameStr(t->schema), NameStr(t->name), true);
 		}
 
@@ -1382,7 +1422,7 @@ MtmLoadLocalTables(void)
 bool
 MtmIsRelationLocal(Relation rel)
 {
-	bool found;
+	bool		found;
 
 	LWLockAcquire(ddl_shared->localtab_lock, LW_SHARED);
 	if (!Mtm->localTablesHashLoaded)
@@ -1409,7 +1449,7 @@ MtmIsRelationLocal(Relation rel)
  *****************************************************************************/
 
 void
-MtmSetRemoteFunction(char const* list, void* extra)
+MtmSetRemoteFunction(char const *list, void *extra)
 {
 	MtmRemoteFunctionsValid = false;
 }
@@ -1417,9 +1457,10 @@ MtmSetRemoteFunction(char const* list, void* extra)
 static void
 MtmInitializeRemoteFunctionsMap()
 {
-	HASHCTL info;
-	char* p, *q;
-	int n_funcs = 1;
+	HASHCTL		info;
+	char	   *p,
+			   *q;
+	int			n_funcs = 1;
 	FuncCandidateList clist;
 	Oid			save_userid;
 	int			save_sec_context;
@@ -1446,7 +1487,8 @@ MtmInitializeRemoteFunctionsMap()
 						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
 
 	p = pstrdup(MtmRemoteFunctionsList);
-	do {
+	do
+	{
 		q = strchr(p, ',');
 		if (q != NULL)
 			*q++ = '\0';
@@ -1488,19 +1530,20 @@ MtmSeqNextvalHook(Oid seqid, int64 next)
 	if (MtmMonotonicSequences && MtmIsEnabled())
 	{
 		MtmSeqPosition pos;
+
 		pos.seqid = seqid;
 		pos.next = next;
-		LogLogicalMessage("N", (char*)&pos, sizeof(pos), true);
+		LogLogicalMessage("N", (char *) &pos, sizeof(pos), true);
 	}
 }
 
 static List *
 AdjustCreateSequence(List *options)
 {
-	bool has_increment = false;
-	bool has_start = false;
-	ListCell	*option;
-	DefElem		*defel;
+	bool		has_increment = false;
+	bool		has_start = false;
+	ListCell   *option;
+	DefElem    *defel;
 
 	if (!MtmIsEnabled())
 		return options;

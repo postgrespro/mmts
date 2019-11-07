@@ -12,10 +12,10 @@ typedef int8 DmqSenderId;
 extern void dmq_init(int send_timeout);
 
 extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,
-											char *receiver_name, int ping_period);
+					char *receiver_name, int ping_period);
 extern void dmq_destination_drop(char *receiver_name);
 
-extern int dmq_attach_receiver(char *sender_name, int mask_pos);
+extern int	dmq_attach_receiver(char *sender_name, int mask_pos);
 extern void dmq_detach_receiver(char *sender_name);
 
 extern void dmq_terminate_receiver(char *name);

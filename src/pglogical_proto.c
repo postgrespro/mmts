@@ -50,37 +50,38 @@
 #include "logger.h"
 
 
-static int MtmTransactionRecords;
+static int	MtmTransactionRecords;
 static bool MtmIsFilteredTxn;
 static TransactionId MtmCurrentXid;
 static bool DDLInProgress = false;
-static Oid MtmSenderTID; /* transaction identifier for WAL sender */
-static Oid MtmLastRelId; /* last relation ID sent to the receiver in this transaction */
+static Oid	MtmSenderTID;		/* transaction identifier for WAL sender */
+static Oid	MtmLastRelId;		/* last relation ID sent to the receiver in
+								 * this transaction */
 
 static void pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel);
 
 static void pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
-							ReorderBufferTXN *txn);
-static void pglogical_write_commit(StringInfo out,PGLogicalOutputData *data,
-							ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
+					  ReorderBufferTXN *txn);
+static void pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
+					   ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
 
 static void pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
-							Relation rel, HeapTuple newtuple);
+					   Relation rel, HeapTuple newtuple);
 static void pglogical_write_update(StringInfo out, PGLogicalOutputData *data,
-							Relation rel, HeapTuple oldtuple,
-							HeapTuple newtuple);
+					   Relation rel, HeapTuple oldtuple,
+					   HeapTuple newtuple);
 static void pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
-							Relation rel, HeapTuple oldtuple);
+					   Relation rel, HeapTuple oldtuple);
 
 static void pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
-								  Relation rel, HeapTuple tuple);
+					  Relation rel, HeapTuple tuple);
 static char decide_datum_transfer(Form_pg_attribute att,
-								  Form_pg_type typclass,
-								  bool allow_internal_basetypes,
-								  bool allow_binary_basetypes);
+					  Form_pg_type typclass,
+					  bool allow_internal_basetypes,
+					  bool allow_binary_basetypes);
 
 static void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
-									 XLogRecPtr wal_end_ptr);
+						 XLogRecPtr wal_end_ptr);
 
 
 /*
@@ -93,8 +94,8 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 	uint8		nspnamelen;
 	const char *relname;
 	uint8		relnamelen;
-	Oid         relid;
-	Oid         tid;
+	Oid			relid;
+	Oid			tid;
 
 	if (MtmIsFilteredTxn)
 	{
@@ -114,13 +115,16 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 
 	MtmLastRelId = relid;
 
-	pq_sendbyte(out, 'R');		/* sending RELATION */	
-	pq_sendint(out, relid, sizeof relid); /* use Oid as relation identifier */
-	
+	pq_sendbyte(out, 'R');		/* sending RELATION */
+	pq_sendint(out, relid, sizeof relid);	/* use Oid as relation identifier */
+
 	Assert(MtmSenderTID != InvalidOid);
 	tid = pglogical_relid_map_get(relid);
-	if (tid == MtmSenderTID) { /* this relation was already sent in this transaction */
-		pq_sendbyte(out, 0); /* do not need to send relation namespace and name in this case */
+	if (tid == MtmSenderTID)
+	{							/* this relation was already sent in this
+								 * transaction */
+		pq_sendbyte(out, 0);	/* do not need to send relation namespace and
+								 * name in this case */
 		pq_sendbyte(out, 0);
 	}
 	else
@@ -131,14 +135,14 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 			elog(ERROR, "cache lookup failed for namespace %u",
 				 rel->rd_rel->relnamespace);
 		nspnamelen = strlen(nspname) + 1;
-		
+
 		relname = NameStr(rel->rd_rel->relname);
 		relnamelen = strlen(relname) + 1;
-		
-		pq_sendbyte(out, nspnamelen);		/* schema name length */
+
+		pq_sendbyte(out, nspnamelen);	/* schema name length */
 		pq_sendbytes(out, nspname, nspnamelen);
-		
-		pq_sendbyte(out, relnamelen);		/* table name length */
+
+		pq_sendbyte(out, relnamelen);	/* table name length */
 		pq_sendbytes(out, relname, relnamelen);
 	}
 }
@@ -157,7 +161,7 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	if (++MtmSenderTID == InvalidOid)
 	{
 		pglogical_relid_map_reset();
-		MtmSenderTID += 1; /* skip InvalidOid */
+		MtmSenderTID += 1;		/* skip InvalidOid */
 	}
 
 	MtmLastRelId = InvalidOid;
@@ -177,24 +181,28 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 			txn->xid, txn->gid);
 }
 
-static void pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition* pos)
+static void
+pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition *pos)
 {
-	Relation rel = heap_open(pos->seqid, NoLock);
+	Relation	rel = heap_open(pos->seqid, NoLock);
+
 	pglogical_write_rel(out, ctx->output_plugin_private, rel);
 	heap_close(rel, NoLock);
 	pq_sendbyte(out, 'N');
 	pq_sendint64(out, pos->next);
 }
 
-static void pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRequest* copy)
+static void
+pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRequest *copy)
 {
-	if (BIT_CHECK(copy->targetNodes, MtmReplicationNodeId-1)) { 
+	if (BIT_CHECK(copy->targetNodes, MtmReplicationNodeId - 1))
+	{
 		HeapScanDesc scandesc;
-		HeapTuple	 tuple;
-		Relation     rel;
-		
+		HeapTuple	tuple;
+		Relation	rel;
+
 		rel = heap_open(copy->sourceTable, ShareLock);
-		
+
 		pglogical_write_rel(out, ctx->output_plugin_private, rel);
 
 		pq_sendbyte(out, '0');
@@ -203,7 +211,7 @@ static void pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ct
 		while ((tuple = heap_getnext(scandesc, ForwardScanDirection)) != NULL)
 		{
 			MtmOutputPluginPrepareWrite(ctx, false, false);
-			pq_sendbyte(out, 'I');		/* action INSERT */
+			pq_sendbyte(out, 'I');	/* action INSERT */
 			pglogical_write_tuple(out, ctx->output_plugin_private, rel, tuple);
 			MtmOutputPluginWrite(ctx, false, false);
 		}
@@ -217,56 +225,57 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 						XLogRecPtr end_lsn,
 						const char *prefix, Size sz, const char *message)
 {
-	PGLogicalOutputData* data = (PGLogicalOutputData*)ctx->output_plugin_private;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
 	MtmLastRelId = InvalidOid;
 
 	switch (*prefix)
 	{
-	case 'L':
-		if (hooks_data->is_recovery)
-		{
+		case 'L':
+			if (hooks_data->is_recovery)
+			{
+				return;
+			}
+			mtm_log(ProtoTraceMessage, "Sent deadlock message to node %d",
+					MtmReplicationNodeId);
+			break;
+
+		case 'D':
+			if (MtmIsFilteredTxn)
+			{
+				mtm_log(ProtoTraceFilter, "pglogical_write_message filtered");
+				return;
+			}
+			DDLInProgress = true;
+			mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
+					MtmReplicationNodeId, message);
+			break;
+
+		case 'C':
+			mtm_log(ProtoTraceMessage, "Sent non-tx DDL message to node %d: %s",
+					MtmReplicationNodeId, message);
+			break;
+
+		case 'E':
+			DDLInProgress = false;
+
+			/*
+			 * we use End message only as indicator of DDL transaction finish,
+			 * so no need to send that to replicas.
+			 */
 			return;
-		}
-		mtm_log(ProtoTraceMessage, "Sent deadlock message to node %d",
-				MtmReplicationNodeId);
-		break;
 
-	case 'D':
-		if (MtmIsFilteredTxn)
-		{
-			mtm_log(ProtoTraceFilter, "pglogical_write_message filtered");
+		case 'B':
+			pglogical_broadcast_table(out, ctx, (MtmCopyRequest *) message);
 			return;
-		}
-		DDLInProgress = true;
-		mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
-				MtmReplicationNodeId, message);
-		break;
-
-	case 'C':
-		mtm_log(ProtoTraceMessage, "Sent non-tx DDL message to node %d: %s",
-				MtmReplicationNodeId, message);
-		break;
-
-	case 'E':
-		DDLInProgress = false;
-		/*
-		 * we use End message only as indicator of DDL transaction finish,
-		 * so no need to send that to replicas.
-		 */
-		return;
-
-	case 'B':
-		pglogical_broadcast_table(out, ctx, (MtmCopyRequest*)message);
-		return;
 
 
-	case 'N':
-		pglogical_seq_nextval(out, ctx, (MtmSeqPosition*)message);
-		mtm_log(ProtoTraceMessage, "Sent nextval message to node %d",
-				MtmReplicationNodeId);
-		return;
+		case 'N':
+			pglogical_seq_nextval(out, ctx, (MtmSeqPosition *) message);
+			mtm_log(ProtoTraceMessage, "Sent nextval message to node %d",
+					MtmReplicationNodeId);
+			return;
 	}
 
 	pq_sendbyte(out, 'M');
@@ -276,11 +285,12 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 	pq_sendbytes(out, message, sz);
 }
 
-/* 
- * WAL sender caught up 
+/*
+ * WAL sender caught up
  */
-void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
-							  XLogRecPtr wal_end_ptr)
+void
+pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
+						 XLogRecPtr wal_end_ptr)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
@@ -295,7 +305,7 @@ void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
  */
 static void
 pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
-						Relation rel, HeapTuple newtuple)
+					   Relation rel, HeapTuple newtuple)
 {
 
 	elog(ProtoTraceSender, "pglogical_write_insert %d %d",
@@ -323,7 +333,7 @@ pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
  */
 static void
 pglogical_write_update(StringInfo out, PGLogicalOutputData *data,
-						Relation rel, HeapTuple oldtuple, HeapTuple newtuple)
+					   Relation rel, HeapTuple oldtuple, HeapTuple newtuple)
 {
 	if (MtmIsFilteredTxn)
 	{
@@ -349,13 +359,13 @@ pglogical_write_update(StringInfo out, PGLogicalOutputData *data,
 	pq_sendbyte(out, 'N');		/* new tuple follows */
 	pglogical_write_tuple(out, data, rel, newtuple);
 }
-	
+
 /*
  * Write DELETE to the output stream.
  */
 static void
 pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
-						Relation rel, HeapTuple oldtuple)
+					   Relation rel, HeapTuple oldtuple)
 {
 	if (MtmIsFilteredTxn)
 	{
@@ -387,7 +397,8 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 {
 	if (txn->origin_id != InvalidRepOriginId)
 	{
-		int i;
+		int			i;
+
 		for (i = 0; i < private->cfg->n_nodes; i++)
 		{
 			if (private->cfg->nodes[i].origin_id == txn->origin_id)
@@ -411,15 +422,18 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
  */
 void
 pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
-					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+						ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
-	uint8 event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
+	uint8		event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
 
 	/* Ensure that we reset DDLInProgress */
 	Assert(!DDLInProgress);
 
-	/* COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn flag */
+	/*
+	 * COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn
+	 * flag
+	 */
 	if (MtmIsFilteredTxn && event == PGLOGICAL_PREPARE)
 		return;
 
@@ -446,7 +460,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
  */
 void
 pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
-					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+								ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
@@ -476,7 +490,7 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
  */
 void
 pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
-					   ReorderBufferTXN *txn, XLogRecPtr lsn)
+							   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
@@ -505,7 +519,7 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 					   ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
-	uint8 event = PGLOGICAL_COMMIT;
+	uint8		event = PGLOGICAL_COMMIT;
 
 	if (MtmIsFilteredTxn)
 		return;
@@ -529,7 +543,7 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
  */
 static void
 pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
-					   Relation rel, HeapTuple tuple)
+					  Relation rel, HeapTuple tuple)
 {
 	TupleDesc	desc;
 	Datum		values[MaxTupleAttributeNumber];
@@ -550,7 +564,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 
 	desc = RelationGetDescr(rel);
 
-	pq_sendbyte(out, 'T');			/* sending TUPLE */
+	pq_sendbyte(out, 'T');		/* sending TUPLE */
 
 	for (i = 0; i < desc->natts; i++)
 	{
@@ -602,15 +616,15 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 											  data->allow_internal_basetypes,
 											  data->allow_binary_basetypes);
 
-        pq_sendbyte(out, transfer_type);
+		pq_sendbyte(out, transfer_type);
 		switch (transfer_type)
 		{
-			case 'b':	/* internal-format binary data follows */
+			case 'b':			/* internal-format binary data follows */
 
 				/* pass by value */
 				if (att->attbyval)
 				{
-					pq_sendint(out, att->attlen, 4); /* length */
+					pq_sendint(out, att->attlen, 4);	/* length */
 
 					enlargeStringInfo(out, att->attlen);
 					store_att_byval(out->data + out->len, values[i],
@@ -621,7 +635,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 				/* fixed length non-varlena pass-by-reference type */
 				else if (att->attlen > 0)
 				{
-					pq_sendint(out, att->attlen, 4); /* length */
+					pq_sendint(out, att->attlen, 4);	/* length */
 
 					appendBinaryStringInfo(out, DatumGetPointer(values[i]),
 										   att->attlen);
@@ -629,19 +643,20 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 				/* varlena type */
 				else if (att->attlen == -1)
 				{
-					char *data = DatumGetPointer(values[i]);
+					char	   *data = DatumGetPointer(values[i]);
 
 					/* send indirect datums inline */
 					if (VARATT_IS_EXTERNAL_INDIRECT(values[i]))
 					{
 						struct varatt_indirect redirect;
+
 						VARATT_EXTERNAL_GET_POINTER(redirect, data);
 						data = (char *) redirect.pointer;
 					}
 
 					Assert(!VARATT_IS_EXTERNAL(data));
 
-					pq_sendint(out, VARSIZE_ANY(data), 4); /* length */
+					pq_sendint(out, VARSIZE_ANY(data), 4);	/* length */
 
 					appendBinaryStringInfo(out, data, VARSIZE_ANY(data));
 				}
@@ -652,14 +667,14 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 
 			default:
 				{
-					char   	   *outputstr;
+					char	   *outputstr;
 					int			len;
 
-					outputstr =	OidOutputFunctionCall(typclass->typoutput,
+					outputstr = OidOutputFunctionCall(typclass->typoutput,
 													  values[i]);
 					len = strlen(outputstr) + 1;
-					pq_sendint(out, len, 4); /* length */
-					appendBinaryStringInfo(out, outputstr, len); /* data */
+					pq_sendint(out, len, 4);	/* length */
+					appendBinaryStringInfo(out, outputstr, len);	/* data */
 					pfree(outputstr);
 				}
 		}
@@ -691,10 +706,10 @@ decide_datum_transfer(Form_pg_attribute att, Form_pg_type typclass,
 }
 
 static void
-MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
+MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 {
-	ListCell *param;
-	MtmDecoderPrivate   *hooks_data;
+	ListCell   *param;
+	MtmDecoderPrivate *hooks_data;
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
@@ -712,7 +727,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 	foreach(param, args->in_params)
 	{
-		DefElem	   *elem = lfirst(param);
+		DefElem    *elem = lfirst(param);
+
 		if (strcmp("mtm_replication_mode", elem->defname) == 0)
 		{
 			if (elem->arg != NULL && strVal(elem->arg) != NULL)
@@ -739,7 +755,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 		{
 			if (elem->arg != NULL && strVal(elem->arg) != NULL)
 			{
-				int64 session_id = 0;
+				int64		session_id = 0;
+
 				sscanf(strVal(elem->arg), INT64_FORMAT, &session_id);
 
 				if (session_id == 0)
@@ -760,9 +777,10 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 	/*
 	 * Set proper originId mappings.
 	 *
-	 * This is copypasted from receiver. Better to have normal init method
-	 * to setup all stuff in shared memory. But seems that there is no such
-	 * callback in vanilla pg and adding one will require some carefull thoughts.
+	 * This is copypasted from receiver. Better to have normal init method to
+	 * setup all stuff in shared memory. But seems that there is no such
+	 * callback in vanilla pg and adding one will require some carefull
+	 * thoughts.
 	 */
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = MyProcPid;
@@ -785,22 +803,24 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 
 		/*
 		 * Indicate receiver that after this point in wal it is safe to send
-		 * transaction to the pool of workers. Before this point in wal (or in other
-		 * words before we processed MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY event
-		 * and enabled this node in our disabledNodeMask) our backends are not waiting
-		 * for prepare confirmations from this node, so receiver can get precommit
-		 * before it will finish prepare. This will leave receiver with lots of
-		 * prepared transactions that will never be commited as precommit and commit
-		 * already happend before prepare.
+		 * transaction to the pool of workers. Before this point in wal (or in
+		 * other words before we processed
+		 * MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY event and enabled this node
+		 * in our disabledNodeMask) our backends are not waiting for prepare
+		 * confirmations from this node, so receiver can get precommit before
+		 * it will finish prepare. This will leave receiver with lots of
+		 * prepared transactions that will never be commited as precommit and
+		 * commit already happend before prepare.
 		 *
-		 * To ensure that all transactions ended after this message had seen right
-		 * disabledNodeMask we took MtmCommitBarrier in exclusive mode to await
-		 * finish of all transactions with potentially old disabledNodeMask.
+		 * To ensure that all transactions ended after this message had seen
+		 * right disabledNodeMask we took MtmCommitBarrier in exclusive mode
+		 * to await finish of all transactions with potentially old
+		 * disabledNodeMask.
 		 */
 		if (!hooks_data->is_recovery)
 		{
-			XLogRecPtr msg_xptr;
-			char *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
+			XLogRecPtr	msg_xptr;
+			char	   *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
 
 			SpinLockAcquire(&Mtm->cb_lock);
 			Mtm->n_commit_holders += 1;
@@ -810,7 +830,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 			{
 				for (;;)
 				{
-					bool done = false;
+					bool		done = false;
+
 					SpinLockAcquire(&Mtm->cb_lock);
 					if (Mtm->n_committers == 0)
 						done = true;
@@ -853,7 +874,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs* args)
 }
 
 static void
-MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
+MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs *args)
 {
 	Assert(MtmReplicationNodeId >= 0);
 
@@ -876,19 +897,19 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs* args)
  * Final filtering is also done at destination side by MtmFilterTransaction function.
  */
 static bool
-MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
+MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs *args)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) args->private_data;
 
-	/* Do not replicate any transactions in recovery mode (because we should apply
-	 * changes sent to us rather than send our own pending changes)
-	 * and transactions received from other nodes
-	 * (originId should be non-zero in this case)
-	 * unless we are performing recovery of disabled node
-	 * (in this case all transactions should be sent)
+	/*
+	 * Do not replicate any transactions in recovery mode (because we should
+	 * apply changes sent to us rather than send our own pending changes) and
+	 * transactions received from other nodes (originId should be non-zero in
+	 * this case) unless we are performing recovery of disabled node (in this
+	 * case all transactions should be sent)
 	 */
-	bool res = (args->origin_id == InvalidRepOriginId ||
-				hooks_data->is_recovery);
+	bool		res = (args->origin_id == InvalidRepOriginId ||
+					   hooks_data->is_recovery);
 
 	return res;
 }
@@ -897,13 +918,13 @@ MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs* args)
  * Filter record corresponding to local (non-distributed) tables
  */
 static bool
-MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
+MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs *args)
 {
-	bool isDistributed;
+	bool		isDistributed;
 
 	/*
-	 * We have several built-in local tables that shouldn't be replicated.
-	 * It is hard to insert them into MtmLocalTables properly on extension
+	 * We have several built-in local tables that shouldn't be replicated. It
+	 * is hard to insert them into MtmLocalTables properly on extension
 	 * creation so we just list them here.
 	 */
 	if (strcmp(args->changed_rel->rd_rel->relname.data, "referee_decision") == 0)
@@ -918,7 +939,7 @@ MtmReplicationRowFilterHook(struct PGLogicalRowFilterArgs* args)
 }
 
 static void
-MtmSetupReplicationHooks(struct PGLogicalHooks* hooks)
+MtmSetupReplicationHooks(struct PGLogicalHooks *hooks)
 {
 	hooks->startup_hook = MtmReplicationStartupHook;
 	hooks->shutdown_hook = MtmReplicationShutdownHook;
@@ -929,17 +950,18 @@ MtmSetupReplicationHooks(struct PGLogicalHooks* hooks)
 PGLogicalProtoAPI *
 pglogical_init_api(PGLogicalProtoType typ)
 {
-    PGLogicalProtoAPI* res = palloc0(sizeof(PGLogicalProtoAPI));
+	PGLogicalProtoAPI *res = palloc0(sizeof(PGLogicalProtoAPI));
+
 	sscanf(MyReplicationSlot->data.name.data, MULTIMASTER_SLOT_PATTERN, &MtmReplicationNodeId);
-    res->write_rel = pglogical_write_rel;
-    res->write_begin = pglogical_write_begin;
+	res->write_rel = pglogical_write_rel;
+	res->write_begin = pglogical_write_begin;
 	res->write_message = pglogical_write_message;
-    res->write_commit = pglogical_write_commit;
-    res->write_insert = pglogical_write_insert;
-    res->write_update = pglogical_write_update;
-    res->write_delete = pglogical_write_delete;
-    res->write_caughtup = pglogical_write_caughtup;
+	res->write_commit = pglogical_write_commit;
+	res->write_insert = pglogical_write_insert;
+	res->write_update = pglogical_write_update;
+	res->write_delete = pglogical_write_delete;
+	res->write_caughtup = pglogical_write_caughtup;
 	res->setup_hooks = MtmSetupReplicationHooks;
-    res->write_startup_message = write_startup_message;
-    return res;
+	res->write_startup_message = write_startup_message;
+	return res;
 }

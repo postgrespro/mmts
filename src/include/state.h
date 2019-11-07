@@ -53,7 +53,7 @@ extern void MtmOnDmqSenderDisconnect(char *node_name);
 
 extern void MtmRefreshClusterStatus(void);
 
-extern int countZeroBits(nodemask_t mask, int nNodes);
+extern int	countZeroBits(nodemask_t mask, int nNodes);
 
 extern MtmReplicationMode MtmGetReplicationMode(int nodeId);
 
@@ -61,8 +61,8 @@ extern MtmNodeStatus MtmGetCurrentStatus(void);
 extern nodemask_t MtmGetDisabledNodeMask(void);
 extern nodemask_t MtmGetConnectedNodeMask(void);
 extern nodemask_t MtmGetEnabledNodeMask(void);
-extern int MtmGetRecoveryCount(void);
-extern int MtmGetNodeDisableCount(int node_id);
+extern int	MtmGetRecoveryCount(void);
+extern int	MtmGetNodeDisableCount(int node_id);
 
 extern nodemask_t MtmGetDisabledNodeMask(void);
 

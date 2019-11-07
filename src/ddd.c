@@ -29,45 +29,46 @@
 #define MAX_TRANSACTIONS  1024 // XXX
 #define VISITED_NODE_MARK 0
 
-typedef struct MtmEdge {
-	struct MtmEdge	   *next; /* list of outgoing edges */
-	struct MtmVertex   *dst;
-	struct MtmVertex   *src;
+typedef struct MtmEdge
+{
+	struct MtmEdge *next;		/* list of outgoing edges */
+	struct MtmVertex *dst;
+	struct MtmVertex *src;
 } MtmEdge;
 
 typedef struct MtmVertex
 {
-	struct MtmEdge		   *outgoingEdges;
-	struct MtmVertex	   *collision;
-	GlobalTransactionId		gtid;
+	struct MtmEdge *outgoingEdges;
+	struct MtmVertex *collision;
+	GlobalTransactionId gtid;
 } MtmVertex;
 
 typedef struct MtmGraph
 {
-	MtmVertex   *hashtable[MAX_TRANSACTIONS];
+	MtmVertex  *hashtable[MAX_TRANSACTIONS];
 } MtmGraph;
 
 typedef struct xid2GtidEntry
 {
-	TransactionId		xid;
+	TransactionId xid;
 	GlobalTransactionId gtid;
 } xid2GtidEntry;
 
 typedef struct NodeDeadlockData
 {
-	void   *lockGraphData;
-	int		lockGraphAllocated;
-	int		lockGraphUsed;
+	void	   *lockGraphData;
+	int			lockGraphAllocated;
+	int			lockGraphUsed;
 } NodeDeadlockData;
 
 struct ddd_shared
 {
-	LWLockPadded	   *locks;
-	int					n_nodes;
-	NodeDeadlockData	nodelocks[FLEXIBLE_ARRAY_MEMBER];
-} *ddd_shared;
+	LWLockPadded *locks;
+	int			n_nodes;
+	NodeDeadlockData nodelocks[FLEXIBLE_ARRAY_MEMBER];
+}		   *ddd_shared;
 
-static HTAB			   *xid2gtid;
+static HTAB *xid2gtid;
 
 PG_FUNCTION_INFO_V1(mtm_dump_lock_graph);
 PG_FUNCTION_INFO_V1(mtm_check_deadlock);
@@ -83,14 +84,14 @@ static shmem_startup_hook_type PreviousShmemStartupHook;
 static Size
 ddd_shmem_size(int n_nodes)
 {
-	Size	size = 0;
+	Size		size = 0;
 
 	size = add_size(size, sizeof(struct ddd_shared) +
-					n_nodes*sizeof(NodeDeadlockData));
-	size = add_size(size, hash_estimate_size(n_nodes*MaxBackends,
-					sizeof(xid2GtidEntry)));
+					n_nodes * sizeof(NodeDeadlockData));
+	size = add_size(size, hash_estimate_size(n_nodes * MaxBackends,
+											 sizeof(xid2GtidEntry)));
 	/* hope that three reallocs (1 + 2 + 4) is enough: */
-	size = add_size(size, 7*n_nodes*LOCK_BUF_INIT_SIZE);
+	size = add_size(size, 7 * n_nodes * LOCK_BUF_INIT_SIZE);
 
 	return MAXALIGN(size);
 }
@@ -105,7 +106,7 @@ MtmDeadlockDetectorInit(int n_nodes)
 void
 MtmDeadlockDetectorShmemStartup(int n_nodes)
 {
-	bool found;
+	bool		found;
 	HASHCTL		hash_info;
 
 	if (PreviousShmemStartupHook)
@@ -118,11 +119,11 @@ MtmDeadlockDetectorShmemStartup(int n_nodes)
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	ddd_shared = ShmemInitStruct("mtm-ddd",
-						   sizeof(struct ddd_shared),
-						   &found);
+								 sizeof(struct ddd_shared),
+								 &found);
 	if (!found)
 	{
-		int	i;
+		int			i;
 
 		ddd_shared->n_nodes = n_nodes;
 		ddd_shared->locks = GetNamedLWLockTranche("mtm-ddd");
@@ -135,8 +136,8 @@ MtmDeadlockDetectorShmemStartup(int n_nodes)
 	}
 
 	xid2gtid = ShmemInitHash("mtm-ddd-xid2gtid",
-		n_nodes*MaxBackends, n_nodes*MaxBackends,
-		&hash_info, HASH_ELEM | HASH_BLOBS);
+							 n_nodes * MaxBackends, n_nodes * MaxBackends,
+							 &hash_info, HASH_ELEM | HASH_BLOBS);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -153,73 +154,90 @@ MtmDeadlockDetectorShmemStartup(int n_nodes)
 static void
 MtmGraphInit(MtmGraph *graph)
 {
-    memset(graph->hashtable, 0, sizeof(graph->hashtable));
+	memset(graph->hashtable, 0, sizeof(graph->hashtable));
 }
 
-static inline MtmVertex*
+static inline MtmVertex *
 findVertex(MtmGraph *graph, GlobalTransactionId *gtid)
 {
-    uint32 h = gtid->xid % MAX_TRANSACTIONS;
-    MtmVertex* v;
-    for (v = graph->hashtable[h]; v != NULL; v = v->collision) { 
-        if (EQUAL_GTID(v->gtid, *gtid)) { 
-            return v;
-        }
-    }
-	v = (MtmVertex*)palloc(sizeof(MtmVertex));
-    v->gtid = *gtid;
+	uint32		h = gtid->xid % MAX_TRANSACTIONS;
+	MtmVertex  *v;
+
+	for (v = graph->hashtable[h]; v != NULL; v = v->collision)
+	{
+		if (EQUAL_GTID(v->gtid, *gtid))
+		{
+			return v;
+		}
+	}
+	v = (MtmVertex *) palloc(sizeof(MtmVertex));
+	v->gtid = *gtid;
 	v->outgoingEdges = NULL;
-    v->collision = graph->hashtable[h];
-    graph->hashtable[h] = v;
-    return v;
+	v->collision = graph->hashtable[h];
+	graph->hashtable[h] = v;
+	return v;
 }
 
 static void
 MtmGraphAdd(MtmGraph *graph, GlobalTransactionId *gtid, int size)
 {
-    GlobalTransactionId* last = gtid + size;
-    while (gtid != last) { 
-        MtmVertex* src = findVertex(graph, gtid++);
-        while (gtid->node != 0) { 
-            MtmVertex* dst = findVertex(graph, gtid++);
-            MtmEdge* e = (MtmEdge*)palloc(sizeof(MtmEdge));
-            e->dst = dst;
-            e->src = src;
-            e->next = src->outgoingEdges;
-            src->outgoingEdges = e;
-        }
+	GlobalTransactionId *last = gtid + size;
+
+	while (gtid != last)
+	{
+		MtmVertex  *src = findVertex(graph, gtid++);
+
+		while (gtid->node != 0)
+		{
+			MtmVertex  *dst = findVertex(graph, gtid++);
+			MtmEdge    *e = (MtmEdge *) palloc(sizeof(MtmEdge));
+
+			e->dst = dst;
+			e->src = src;
+			e->next = src->outgoingEdges;
+			src->outgoingEdges = e;
+		}
 		gtid += 1;
-    }
+	}
 }
 
 static bool
-recursiveTraverseGraph(MtmVertex* root, MtmVertex* v)
+recursiveTraverseGraph(MtmVertex *root, MtmVertex *v)
 {
-    MtmEdge* e;
-    v->gtid.node = VISITED_NODE_MARK;
-    for (e = v->outgoingEdges; e != NULL; e = e->next) {
-        if (e->dst == root) { 
-            return true;
-        } else if (e->dst->gtid.node != VISITED_NODE_MARK && recursiveTraverseGraph(root, e->dst)) { /* loop */
-            return true;
-        } 
-    }
-    return false;        
+	MtmEdge    *e;
+
+	v->gtid.node = VISITED_NODE_MARK;
+	for (e = v->outgoingEdges; e != NULL; e = e->next)
+	{
+		if (e->dst == root)
+		{
+			return true;
+		}
+		else if (e->dst->gtid.node != VISITED_NODE_MARK && recursiveTraverseGraph(root, e->dst))
+		{						/* loop */
+			return true;
+		}
+	}
+	return false;
 }
 
 static bool
-MtmGraphFindLoop(MtmGraph* graph, GlobalTransactionId* root)
+MtmGraphFindLoop(MtmGraph *graph, GlobalTransactionId *root)
 {
-    MtmVertex* v;
-    for (v = graph->hashtable[root->xid % MAX_TRANSACTIONS]; v != NULL; v = v->collision) { 
-        if (EQUAL_GTID(v->gtid, *root)) { 
-            if (recursiveTraverseGraph(v, v)) { 
-                return true;
-            }
-            break;
-        }
-    }
-    return false;        
+	MtmVertex  *v;
+
+	for (v = graph->hashtable[root->xid % MAX_TRANSACTIONS]; v != NULL; v = v->collision)
+	{
+		if (EQUAL_GTID(v->gtid, *root))
+		{
+			if (recursiveTraverseGraph(v, v))
+			{
+				return true;
+			}
+			break;
+		}
+	}
+	return false;
 }
 
 
@@ -231,28 +249,30 @@ MtmGraphFindLoop(MtmGraph* graph, GlobalTransactionId* root)
 
 
 void
-MtmUpdateLockGraph(int nodeId, void const* messageBody, int messageSize)
+MtmUpdateLockGraph(int nodeId, void const *messageBody, int messageSize)
 {
-	int allocated;
+	int			allocated;
 
 	Assert(nodeId > 0);
 
 	LWLockAcquire(LOCK_BY_INDEX(nodeId), LW_EXCLUSIVE);
 
-	allocated = ddd_shared->nodelocks[nodeId-1].lockGraphAllocated;
-	if (messageSize > allocated) {
-		allocated = Max(Max(LOCK_BUF_INIT_SIZE, allocated*2), messageSize);
+	allocated = ddd_shared->nodelocks[nodeId - 1].lockGraphAllocated;
+	if (messageSize > allocated)
+	{
+		allocated = Max(Max(LOCK_BUF_INIT_SIZE, allocated * 2), messageSize);
 
-		// XXX: shmem leak
-		ddd_shared->nodelocks[nodeId-1].lockGraphData = ShmemAlloc(allocated);
-		if (ddd_shared->nodelocks[nodeId-1].lockGraphData == NULL) {
+		/* XXX: shmem leak */
+		ddd_shared->nodelocks[nodeId - 1].lockGraphData = ShmemAlloc(allocated);
+		if (ddd_shared->nodelocks[nodeId - 1].lockGraphData == NULL)
+		{
 			elog(PANIC, "Failed to allocate shared memory for lock graph: %d bytes requested",
 				 allocated);
 		}
-		ddd_shared->nodelocks[nodeId-1].lockGraphAllocated = allocated;
+		ddd_shared->nodelocks[nodeId - 1].lockGraphAllocated = allocated;
 	}
-	memcpy(ddd_shared->nodelocks[nodeId-1].lockGraphData, messageBody, messageSize);
-	ddd_shared->nodelocks[nodeId-1].lockGraphUsed = messageSize;
+	memcpy(ddd_shared->nodelocks[nodeId - 1].lockGraphData, messageBody, messageSize);
+	ddd_shared->nodelocks[nodeId - 1].lockGraphUsed = messageSize;
 
 	LWLockRelease(LOCK_BY_INDEX(nodeId));
 
@@ -262,8 +282,8 @@ MtmUpdateLockGraph(int nodeId, void const* messageBody, int messageSize)
 void
 MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid)
 {
-	xid2GtidEntry   *entry;
-	bool found;
+	xid2GtidEntry *entry;
+	bool		found;
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -279,7 +299,7 @@ MtmDeadlockDetectorAddXact(TransactionId xid, GlobalTransactionId *gtid)
 void
 MtmDeadlockDetectorRemoveXact(TransactionId xid)
 {
-	bool found;
+	bool		found;
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -291,9 +311,9 @@ MtmDeadlockDetectorRemoveXact(TransactionId xid)
 }
 
 static void
-MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
+MtmGetGtid(TransactionId xid, GlobalTransactionId *gtid)
 {
-	xid2GtidEntry   *entry;
+	xid2GtidEntry *entry;
 
 	Assert(Mtm->my_node_id != 0);
 
@@ -311,7 +331,7 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 		gid = TwoPhaseGetGid(xid);
 		if (gid[0] != '\0')
 		{
-			int tx_node_id = MtmGidParseNodeId(gid);
+			int			tx_node_id = MtmGidParseNodeId(gid);
 
 			if (tx_node_id > 0)
 			{
@@ -336,8 +356,7 @@ MtmGetGtid(TransactionId xid, GlobalTransactionId* gtid)
 		else
 		{
 			/*
-			 * That should be local running tx or any recently
-			 * committed tx.
+			 * That should be local running tx or any recently committed tx.
 			 */
 			gtid->node = Mtm->my_node_id;
 			gtid->xid = xid;
@@ -356,7 +375,10 @@ gtid_by_pgproc(PGPROC *proc)
 	if (TransactionIdIsValid(pgxact->xid))
 		MtmGetGtid(pgxact->xid, &gtid);
 	else
-		gtid = (GlobalTransactionId){Mtm->my_node_id, proc->pgprocno, proc->pgprocno};
+		gtid = (GlobalTransactionId)
+	{
+		Mtm->my_node_id, proc->pgprocno, proc->pgprocno
+	};
 
 	return gtid;
 }
@@ -367,9 +389,10 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 	ByteBuffer *buf = (ByteBuffer *) arg;
 	SHM_QUEUE  *procLocks = &(lock->procLocks);
 	PROCLOCK   *src_pl;
-	LockMethod lockMethodTable = GetLocksMethodTable(lock);
+	LockMethod	lockMethodTable = GetLocksMethodTable(lock);
 	PROC_QUEUE *waitQueue;
-	PGPROC	   *prev, *curr;
+	PGPROC	   *prev,
+			   *curr;
 	int			numLockModes = lockMethodTable->numLockModes;
 
 	/* dump hard edges */
@@ -379,7 +402,8 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 		 src_pl = (PROCLOCK *) SHMQueueNext(procLocks, &src_pl->lockLink,
 											offsetof(PROCLOCK, lockLink)))
 	{
-		GlobalTransactionId src_gtid, zero_gtid = {0, 0, 0};
+		GlobalTransactionId src_gtid,
+					zero_gtid = {0, 0, 0};
 		PGPROC	   *src_proc = src_pl->tag.myProc;
 		PROCLOCK   *dst_pl;
 		int			conflictMask;
@@ -394,10 +418,10 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 		ByteBufferAppend(buf, &src_gtid, sizeof(src_gtid));
 
 		for (dst_pl = (PROCLOCK *) SHMQueueNext(procLocks, procLocks,
-											offsetof(PROCLOCK, lockLink));
+												offsetof(PROCLOCK, lockLink));
 			 dst_pl;
 			 dst_pl = (PROCLOCK *) SHMQueueNext(procLocks, &dst_pl->lockLink,
-											offsetof(PROCLOCK, lockLink)))
+												offsetof(PROCLOCK, lockLink)))
 		{
 			GlobalTransactionId dst_gtid;
 			int			lm;
@@ -414,7 +438,7 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 					dst_gtid = gtid_by_pgproc(dst_pl->tag.myProc);
 					ByteBufferAppend(buf, &dst_gtid, sizeof(dst_gtid));
 					mtm_log(DeadlockSerialize,
-							"%d:"XID_FMT" ("XID_FMT") -> %d:"XID_FMT" ("XID_FMT")",
+							"%d:" XID_FMT " (" XID_FMT ") -> %d:" XID_FMT " (" XID_FMT ")",
 							src_gtid.node, src_gtid.xid, src_gtid.my_xid,
 							dst_gtid.node, dst_gtid.xid, dst_gtid.my_xid);
 					break;
@@ -432,17 +456,19 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 	curr = (PGPROC *) prev->links.next;
 	while (curr != (PGPROC *) waitQueue->links.next)
 	{
-		GlobalTransactionId src_gtid, dst_gtid, zero_gtid = {0, 0, 0};
+		GlobalTransactionId src_gtid,
+					dst_gtid,
+					zero_gtid = {0, 0, 0};
 
 		src_gtid = gtid_by_pgproc(curr);
 		dst_gtid = gtid_by_pgproc(prev);
 		ByteBufferAppend(buf, &src_gtid, sizeof(src_gtid));
 		ByteBufferAppend(buf, &dst_gtid, sizeof(dst_gtid));
 		ByteBufferAppend(buf, &zero_gtid,
-							sizeof(GlobalTransactionId));
+						 sizeof(GlobalTransactionId));
 
 		mtm_log(DeadlockSerialize,
-				"%d:"XID_FMT" ("XID_FMT") ~> %d:"XID_FMT" ("XID_FMT")",
+				"%d:" XID_FMT " (" XID_FMT ") ~> %d:" XID_FMT " (" XID_FMT ")",
 				src_gtid.node, src_gtid.xid, src_gtid.my_xid,
 				dst_gtid.node, dst_gtid.xid, dst_gtid.my_xid);
 
@@ -454,11 +480,11 @@ MtmDumpWaitForEdges(LOCK *lock, void *arg)
 static bool
 MtmDetectGlobalDeadLockForXid(TransactionId xid)
 {
-	bool hasDeadlock = false;
-	ByteBuffer buf;
-	MtmGraph graph;
+	bool		hasDeadlock = false;
+	ByteBuffer	buf;
+	MtmGraph	graph;
 	GlobalTransactionId gtid;
-	int i;
+	int			i;
 
 	Assert(TransactionIdIsValid(xid));
 
@@ -469,12 +495,14 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	XLogFlush(LogLogicalMessage("L", buf.data, buf.used, false));
 
 	MtmGraphInit(&graph);
-	MtmGraphAdd(&graph, (GlobalTransactionId*)buf.data, buf.used/sizeof(GlobalTransactionId));
+	MtmGraphAdd(&graph, (GlobalTransactionId *) buf.data, buf.used / sizeof(GlobalTransactionId));
 	ByteBufferFree(&buf);
-	for (i = 0; i < ddd_shared->n_nodes; i++) {
-		if (i+1 != Mtm->my_node_id && BIT_CHECK(MtmGetEnabledNodeMask(), i)) {
-			size_t lockGraphSize;
-			void* lockGraphData;
+	for (i = 0; i < ddd_shared->n_nodes; i++)
+	{
+		if (i + 1 != Mtm->my_node_id && BIT_CHECK(MtmGetEnabledNodeMask(), i))
+		{
+			size_t		lockGraphSize;
+			void	   *lockGraphData;
 
 			LWLockAcquire(LOCK_BY_INDEX(i + 1), LW_SHARED);
 			lockGraphSize = ddd_shared->nodelocks[i].lockGraphUsed;
@@ -482,36 +510,39 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 			memcpy(lockGraphData, ddd_shared->nodelocks[i].lockGraphData, lockGraphSize);
 			LWLockRelease(LOCK_BY_INDEX(i + 1));
 
-			if (lockGraphData == NULL) {
+			if (lockGraphData == NULL)
+			{
 				return true;
-			} else {
-				MtmGraphAdd(&graph, (GlobalTransactionId*)lockGraphData, lockGraphSize/sizeof(GlobalTransactionId));
+			}
+			else
+			{
+				MtmGraphAdd(&graph, (GlobalTransactionId *) lockGraphData, lockGraphSize / sizeof(GlobalTransactionId));
 			}
 		}
 	}
 	MtmGetGtid(xid, &gtid);
 	hasDeadlock = MtmGraphFindLoop(&graph, &gtid);
 	mtm_log(DeadlockCheck, "Distributed deadlock check by backend %d for %u:" XID_FMT " = %d",
-		MyProcPid, gtid.node, gtid.xid, hasDeadlock);
+			MyProcPid, gtid.node, gtid.xid, hasDeadlock);
 
 	if (!hasDeadlock)
 	{
-		// TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT);
+		/* TimestampTz start_time = get_timeout_start_time(DEADLOCK_TIMEOUT); */
 		mtm_log(DeadlockCheck, "Enable deadlock timeout in backend %d for transaction " XID_FMT,
 				MyProcPid, xid);
 		enable_timeout_after(DEADLOCK_TIMEOUT, DeadlockTimeout);
-		// set_timeout_start_time(DEADLOCK_TIMEOUT, start_time);
+		/* set_timeout_start_time(DEADLOCK_TIMEOUT, start_time); */
 	}
 
 	return hasDeadlock;
 }
 
 bool
-MtmDetectGlobalDeadLock(PGPROC* proc)
+MtmDetectGlobalDeadLock(PGPROC *proc)
 {
-	PGXACT* pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
+	PGXACT	   *pgxact = &ProcGlobal->allPgXact[proc->pgprocno];
 	bool		found;
-	RepOriginId	saved_origin_id = replorigin_session_origin;
+	RepOriginId saved_origin_id = replorigin_session_origin;
 
 	/*
 	 * There is no need to check for deadlocks in recovery: all our
@@ -536,12 +567,13 @@ MtmDetectGlobalDeadLock(PGPROC* proc)
 Datum
 mtm_dump_lock_graph(PG_FUNCTION_ARGS)
 {
-	StringInfo s = makeStringInfo();
-	int i;
+	StringInfo	s = makeStringInfo();
+	int			i;
+
 	for (i = 0; i < ddd_shared->n_nodes; i++)
 	{
-		size_t lockGraphSize;
-		char  *lockGraphData;
+		size_t		lockGraphSize;
+		char	   *lockGraphData;
 
 		LWLockAcquire(LOCK_BY_INDEX(i + 1), LW_SHARED);
 		lockGraphSize = ddd_shared->nodelocks[i].lockGraphUsed;
@@ -549,16 +581,22 @@ mtm_dump_lock_graph(PG_FUNCTION_ARGS)
 		memcpy(lockGraphData, ddd_shared->nodelocks[i].lockGraphData, lockGraphSize);
 		LWLockRelease(LOCK_BY_INDEX(i + 1));
 
-		if (lockGraphData) {
+		if (lockGraphData)
+		{
 			GlobalTransactionId *gtid = (GlobalTransactionId *) lockGraphData;
 			GlobalTransactionId *last = (GlobalTransactionId *) (lockGraphData + lockGraphSize);
-			appendStringInfo(s, "node-%d lock graph: ", i+1);
-			while (gtid != last) {
+
+			appendStringInfo(s, "node-%d lock graph: ", i + 1);
+			while (gtid != last)
+			{
 				GlobalTransactionId *src = gtid++;
-				appendStringInfo(s, "%d:"XID_FMT" -> ", src->node, src->xid);
-				while (gtid->node != 0) {
+
+				appendStringInfo(s, "%d:" XID_FMT " -> ", src->node, src->xid);
+				while (gtid->node != 0)
+				{
 					GlobalTransactionId *dst = gtid++;
-					appendStringInfo(s, "%d:"XID_FMT", ", dst->node, dst->xid);
+
+					appendStringInfo(s, "%d:" XID_FMT ", ", dst->node, dst->xid);
 				}
 				gtid += 1;
 			}
@@ -572,5 +610,6 @@ Datum
 mtm_check_deadlock(PG_FUNCTION_ARGS)
 {
 	TransactionId xid = PG_GETARG_INT64(0);
+
 	PG_RETURN_BOOL(MtmDetectGlobalDeadLockForXid(xid));
 }

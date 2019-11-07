@@ -50,7 +50,7 @@
 #define DMQ_MQ_SIZE  ((Size) 65536)
 #define DMQ_MQ_MAGIC 0x646d71
 
-// XXX: move to common
+/*  XXX: move to common */
 #define BIT_CHECK(mask, bit) (((mask) & ((int64)1 << (bit))) != 0)
 
 /*
@@ -67,43 +67,44 @@
 
 typedef enum
 {
-	Idle,			/* upon init or falure */
-	Connecting,		/* upon PQconnectStart */
-	Negotiating,	/* upon PQconnectPoll == OK */
-	Active,			/* upon dmq_receiver_loop() response */
+	Idle,						/* upon init or falure */
+	Connecting,					/* upon PQconnectStart */
+	Negotiating,				/* upon PQconnectPoll == OK */
+	Active,						/* upon dmq_receiver_loop() response */
 } DmqConnState;
 
-typedef struct {
-	bool			active;
-	char			sender_name[DMQ_NAME_MAXLEN];
-	char			receiver_name[DMQ_NAME_MAXLEN];
-	char			connstr[DMQ_CONNSTR_MAX_LEN];
-	int				recv_timeout;
-	PGconn		   *pgconn;
-	DmqConnState	state;
-	int				pos;
+typedef struct
+{
+	bool		active;
+	char		sender_name[DMQ_NAME_MAXLEN];
+	char		receiver_name[DMQ_NAME_MAXLEN];
+	char		connstr[DMQ_CONNSTR_MAX_LEN];
+	int			recv_timeout;
+	PGconn	   *pgconn;
+	DmqConnState state;
+	int			pos;
 } DmqDestination;
 
 typedef struct
 {
-	char	stream_name[DMQ_NAME_MAXLEN];
-	int		mask_pos;
-	int		procno;
+	char		stream_name[DMQ_NAME_MAXLEN];
+	int			mask_pos;
+	int			procno;
 } DmqStreamSubscription;
 
 
 /* Global state for dmq */
 struct DmqSharedState
 {
-	LWLock		   *lock;
+	LWLock	   *lock;
 
 	/* sender stuff */
-	pid_t			sender_pid;
-	dsm_handle	    out_dsm;
-	DmqDestination  destinations[DMQ_MAX_DESTINATIONS];
+	pid_t		sender_pid;
+	dsm_handle	out_dsm;
+	DmqDestination destinations[DMQ_MAX_DESTINATIONS];
 
 	/* receivers stuff */
-	int				n_receivers;
+	int			n_receivers;
 	struct
 	{
 		char		name[DMQ_NAME_MAXLEN];
@@ -111,25 +112,25 @@ struct DmqSharedState
 		int			procno;
 		bool		active;
 		pid_t		pid;
-	} receivers[DMQ_MAX_RECEIVERS];
+	}			receivers[DMQ_MAX_RECEIVERS];
 
-} *dmq_state;
+}		   *dmq_state;
 
-static HTAB		   *dmq_subscriptions;
+static HTAB *dmq_subscriptions;
 
 /* Backend-local i/o queues. */
 struct
 {
-	shm_mq_handle  *mq_outh;
-	int				n_inhandles;
+	shm_mq_handle *mq_outh;
+	int			n_inhandles;
 	struct
 	{
-		dsm_segment	   *dsm_seg;
-		shm_mq_handle  *mqh;
-		char			name[DMQ_NAME_MAXLEN];
-		int				mask_pos;
-	} inhandles[DMQ_MAX_RECEIVERS];
-} dmq_local;
+		dsm_segment *dsm_seg;
+		shm_mq_handle *mqh;
+		char		name[DMQ_NAME_MAXLEN];
+		int			mask_pos;
+	}			inhandles[DMQ_MAX_RECEIVERS];
+}			dmq_local;
 
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;
@@ -141,7 +142,7 @@ dmq_hook_type dmq_receiver_stop_hook;
 dmq_hook_type dmq_sender_connect_hook;
 dmq_hook_type dmq_sender_disconnect_hook;
 
-void dmq_sender_main(Datum main_arg);
+void		dmq_sender_main(Datum main_arg);
 
 PG_FUNCTION_INFO_V1(dmq_receiver_loop);
 
@@ -154,7 +155,8 @@ PG_FUNCTION_INFO_V1(dmq_receiver_loop);
 static double
 dmq_now(void)
 {
-	instr_time cur_time;
+	instr_time	cur_time;
+
 	INSTR_TIME_SET_CURRENT(cur_time);
 	return INSTR_TIME_GET_MILLISEC(cur_time);
 }
@@ -185,7 +187,7 @@ dmq_sighup_handler(SIGNAL_ARGS)
 static void
 dmq_shmem_startup_hook(void)
 {
-	bool found;
+	bool		found;
 	HASHCTL		hash_info;
 
 	if (PreviousShmemStartupHook)
@@ -202,11 +204,11 @@ dmq_shmem_startup_hook(void)
 								&found);
 	if (!found)
 	{
-		int i;
+		int			i;
 
 		dmq_state->lock = &(GetNamedLWLockTranche("dmq"))->lock;
 		dmq_state->out_dsm = DSM_HANDLE_INVALID;
-		memset(dmq_state->destinations, '\0', sizeof(DmqDestination)*DMQ_MAX_DESTINATIONS);
+		memset(dmq_state->destinations, '\0', sizeof(DmqDestination) * DMQ_MAX_DESTINATIONS);
 
 		dmq_state->sender_pid = 0;
 		dmq_state->n_receivers = 0;
@@ -220,10 +222,10 @@ dmq_shmem_startup_hook(void)
 	}
 
 	dmq_subscriptions = ShmemInitHash("dmq_stream_subscriptions",
-								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
-								DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
-								&hash_info,
-								HASH_ELEM);
+									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
+									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
+									  &hash_info,
+									  HASH_ELEM);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -231,10 +233,10 @@ dmq_shmem_startup_hook(void)
 static Size
 dmq_shmem_size(void)
 {
-	Size	size = 0;
+	Size		size = 0;
 
 	size = add_size(size, sizeof(struct DmqSharedState));
-	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND*MaxBackends,
+	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
 											 sizeof(DmqStreamSubscription)));
 	return MAXALIGN(size);
 }
@@ -274,7 +276,7 @@ dmq_init(int send_timeout)
 static Size
 dmq_toc_size()
 {
-	int i;
+	int			i;
 	shm_toc_estimator e;
 
 	shm_toc_initialize_estimator(&e);
@@ -297,7 +299,7 @@ fe_send(PGconn *conn, char *msg, size_t len)
 	if (PQputCopyData(conn, msg, len) < 0)
 		return -1;
 
-	// XXX: move PQflush out of the loop?
+	/* XXX: move PQflush out of the loop? */
 	if (PQflush(conn) < 0)
 		return -1;
 
@@ -307,7 +309,7 @@ fe_send(PGconn *conn, char *msg, size_t len)
 static void
 dmq_sender_at_exit(int status, Datum arg)
 {
-	int		i;
+	int			i;
 
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	for (i = 0; i < dmq_state->n_receivers; i++)
@@ -324,15 +326,15 @@ dmq_sender_at_exit(int status, Datum arg)
 void
 dmq_sender_main(Datum main_arg)
 {
-	int		i;
-	dsm_segment	   *seg;
-	shm_toc		   *toc;
+	int			i;
+	dsm_segment *seg;
+	shm_toc    *toc;
 	shm_mq_handle **mq_handles;
-	WaitEventSet   *set;
-	DmqDestination	conns[DMQ_MAX_DESTINATIONS];
-	int		heartbeat_send_timeout = DatumGetInt32(main_arg);
+	WaitEventSet *set;
+	DmqDestination conns[DMQ_MAX_DESTINATIONS];
+	int			heartbeat_send_timeout = DatumGetInt32(main_arg);
 
-	double	prev_timer_at = dmq_now();
+	double		prev_timer_at = dmq_now();
 
 	on_shmem_exit(dmq_sender_at_exit, (Datum) 0);
 
@@ -346,10 +348,11 @@ dmq_sender_main(Datum main_arg)
 	dsm_pin_segment(seg);
 	toc = shm_toc_create(DMQ_MQ_MAGIC, dsm_segment_address(seg),
 						 dmq_toc_size());
-	mq_handles = palloc(MaxBackends*sizeof(shm_mq_handle *));
+	mq_handles = palloc(MaxBackends * sizeof(shm_mq_handle *));
 	for (i = 0; i < MaxBackends; i++)
 	{
 		shm_mq	   *mq;
+
 		mq = shm_mq_create(shm_toc_allocate(toc, DMQ_MQ_SIZE), DMQ_MQ_SIZE);
 		shm_toc_insert(toc, i, mq);
 		shm_mq_set_receiver(mq, MyProc);
@@ -394,13 +397,14 @@ dmq_sender_main(Datum main_arg)
 			for (i = 0; i < DMQ_MAX_DESTINATIONS; i++)
 			{
 				DmqDestination *dest = &(dmq_state->destinations[i]);
+
 				/* start connection for a freshly added destination */
 				if (dest->active && !conns[i].active)
 				{
 					conns[i] = *dest;
 					Assert(conns[i].pgconn == NULL);
 					conns[i].state = Idle;
-					prev_timer_at = 0; /* do not wait for timer event */
+					prev_timer_at = 0;	/* do not wait for timer event */
 				}
 				/* close connection to deleted destination */
 				else if (!dest->active && conns[i].active)
@@ -425,17 +429,17 @@ dmq_sender_main(Datum main_arg)
 			res = shm_mq_receive(mq_handles[i], &len, &data, true);
 			if (res == SHM_MQ_SUCCESS)
 			{
-				int conn_id;
+				int			conn_id;
 
 				/* first byte is connection_id */
-				conn_id = * (char *) data;
+				conn_id = *(char *) data;
 				data = (char *) data + 1;
 				len -= 1;
 				Assert(0 <= conn_id && conn_id < DMQ_MAX_DESTINATIONS);
 
 				if (conns[conn_id].state == Active)
 				{
-					int ret = fe_send(conns[conn_id].pgconn, data, len);
+					int			ret = fe_send(conns[conn_id].pgconn, data, len);
 
 					if (ret < 0)
 					{
@@ -458,8 +462,8 @@ dmq_sender_main(Datum main_arg)
 				else
 				{
 					mtm_log(WARNING,
-						 "[DMQ] dropping message (l=%zu, m=%s) to disconnected %s",
-						 len, (char *) data, conns[conn_id].receiver_name);
+							"[DMQ] dropping message (l=%zu, m=%s) to disconnected %s",
+							len, (char *) data, conns[conn_id].receiver_name);
 				}
 
 				wait = false;
@@ -469,8 +473,8 @@ dmq_sender_main(Datum main_arg)
 				shm_mq	   *mq = shm_mq_get_queue(mq_handles[i]);
 
 				/*
-				 * Overwrite old mq struct since mq api don't have a way to reattach
-				 * detached queue.
+				 * Overwrite old mq struct since mq api don't have a way to
+				 * reattach detached queue.
 				 */
 				shm_mq_detach(mq_handles[i]);
 				mq = shm_mq_create(mq, DMQ_MQ_SIZE);
@@ -502,12 +506,12 @@ dmq_sender_main(Datum main_arg)
 		}
 
 		/*
-		 * Handle timer event: reconnect previously broken connection or
-		 * send hearbeats.
+		 * Handle timer event: reconnect previously broken connection or send
+		 * hearbeats.
 		 */
 		if (timer_event)
 		{
-			uintptr_t		conn_id;
+			uintptr_t	conn_id;
 
 			for (conn_id = 0; conn_id < DMQ_MAX_DESTINATIONS; conn_id++)
 			{
@@ -541,8 +545,8 @@ dmq_sender_main(Datum main_arg)
 					{
 						conns[conn_id].state = Connecting;
 						conns[conn_id].pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
-											PQsocket(conns[conn_id].pgconn),
-											NULL, (void *) conn_id);
+															   PQsocket(conns[conn_id].pgconn),
+															   NULL, (void *) conn_id);
 
 						mtm_log(DmqStateIntermediate,
 								"[DMQ] switching %s from Idle to Connecting on '%s'",
@@ -553,7 +557,8 @@ dmq_sender_main(Datum main_arg)
 				/* Heatbeat */
 				else if (conns[conn_id].state == Active)
 				{
-					int ret = fe_send(conns[conn_id].pgconn, "H", 2);
+					int			ret = fe_send(conns[conn_id].pgconn, "H", 2);
+
 					if (ret < 0)
 					{
 						conns[conn_id].state = Idle;
@@ -568,13 +573,14 @@ dmq_sender_main(Datum main_arg)
 				}
 			}
 		}
+
 		/*
 		 * Handle all the connection machinery: consequently go through
 		 * Connecting --> Negotiating --> Active states.
 		 */
 		else if (nevents > 0 && event.events & WL_SOCKET_MASK)
 		{
-			uintptr_t conn_id = (uintptr_t) event.user_data;
+			uintptr_t	conn_id = (uintptr_t) event.user_data;
 
 			Assert(conns[conn_id].active);
 
@@ -584,84 +590,87 @@ dmq_sender_main(Datum main_arg)
 					Assert(false);
 					break;
 
-				/* Await for connection establishment and call dmq_receiver_loop() */
+					/*
+					 * Await for connection establishment and call
+					 * dmq_receiver_loop()
+					 */
 				case Connecting:
-				{
-					double		pqtime;
-					PostgresPollingStatusType status;
-					int			pos = event.pos;
+					{
+						double		pqtime;
+						PostgresPollingStatusType status;
+						int			pos = event.pos;
 
-					pqtime = dmq_now();
-					status = PQconnectPoll(conns[conn_id].pgconn);
-					mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqp = %f ms", dmq_now() - pqtime);
+						pqtime = dmq_now();
+						status = PQconnectPoll(conns[conn_id].pgconn);
+						mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqp = %f ms", dmq_now() - pqtime);
 
-					mtm_log(DmqStateIntermediate,
-							"[DMQ] Connecting: PostgresPollingStatusType = %d on %s",
-							status,
-							conns[conn_id].receiver_name);
+						mtm_log(DmqStateIntermediate,
+								"[DMQ] Connecting: PostgresPollingStatusType = %d on %s",
+								status,
+								conns[conn_id].receiver_name);
+
+						/*
+						 * PQconnectPoll() can recreate socket behind the
+						 * scene, so re-register it in WaitEventSet.
+						 */
+						if (status == PGRES_POLLING_READING || status == PGRES_POLLING_WRITING)
+						{
+							DeleteWaitEvent(set, pos);
+							pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
+													PQsocket(conns[conn_id].pgconn),
+													NULL, (void *) conn_id);
+							conns[conn_id].pos = pos;
+						}
+
+						if (status == PGRES_POLLING_READING)
+						{
+							ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
+							mtm_log(DmqStateIntermediate,
+									"[DMQ] Connecting: modify wait event to WL_SOCKET_READABLE on %s",
+									conns[conn_id].receiver_name);
+						}
+						else if (status == PGRES_POLLING_WRITING)
+						{
+							ModifyWaitEvent(set, pos, WL_SOCKET_WRITEABLE, NULL);
+							mtm_log(DmqStateIntermediate,
+									"[DMQ] Connecting: modify wait event to WL_SOCKET_WRITEABLE on %s",
+									conns[conn_id].receiver_name);
+						}
+						else if (status == PGRES_POLLING_OK)
+						{
+							char	   *sender_name = conns[conn_id].sender_name;
+							char	   *query = psprintf("select mtm.dmq_receiver_loop('%s', %d)",
+														 sender_name, conns[conn_id].recv_timeout);
+
+							conns[conn_id].state = Negotiating;
+							ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
+							PQsendQuery(conns[conn_id].pgconn, query);
+
+							mtm_log(DmqStateIntermediate,
+									"[DMQ] switching %s from Connecting to Negotiating",
+									conns[conn_id].receiver_name);
+						}
+						else if (status == PGRES_POLLING_FAILED)
+						{
+							conns[conn_id].state = Idle;
+							DeleteWaitEvent(set, pos);
+
+							mtm_log(DmqStateIntermediate,
+									"[DMQ] failed to connect with %s (%s): %s",
+									conns[conn_id].receiver_name,
+									conns[conn_id].connstr,
+									PQerrorMessage(conns[conn_id].pgconn));
+						}
+						else
+							Assert(false);
+
+						break;
+					}
 
 					/*
-					 * PQconnectPoll() can recreate socket behind the scene, so
-					 * re-register it in WaitEventSet.
+					 * Await for response to dmq_receiver_loop() call and
+					 * switch to active state.
 					 */
-					if (status == PGRES_POLLING_READING || status == PGRES_POLLING_WRITING)
-					{
-						DeleteWaitEvent(set, pos);
-						pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
-												PQsocket(conns[conn_id].pgconn),
-												NULL, (void *) conn_id);
-						conns[conn_id].pos = pos;
-					}
-
-					if (status == PGRES_POLLING_READING)
-					{
-						ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
-						mtm_log(DmqStateIntermediate,
-								"[DMQ] Connecting: modify wait event to WL_SOCKET_READABLE on %s",
-								conns[conn_id].receiver_name);
-					}
-					else if (status == PGRES_POLLING_WRITING)
-					{
-						ModifyWaitEvent(set, pos, WL_SOCKET_WRITEABLE, NULL);
-						mtm_log(DmqStateIntermediate,
-								"[DMQ] Connecting: modify wait event to WL_SOCKET_WRITEABLE on %s",
-								conns[conn_id].receiver_name);
-					}
-					else if (status == PGRES_POLLING_OK)
-					{
-						char *sender_name = conns[conn_id].sender_name;
-						char *query = psprintf("select mtm.dmq_receiver_loop('%s', %d)",
-											   sender_name, conns[conn_id].recv_timeout);
-
-						conns[conn_id].state = Negotiating;
-						ModifyWaitEvent(set, pos, WL_SOCKET_READABLE, NULL);
-						PQsendQuery(conns[conn_id].pgconn, query);
-
-						mtm_log(DmqStateIntermediate,
-								"[DMQ] switching %s from Connecting to Negotiating",
-								conns[conn_id].receiver_name);
-					}
-					else if (status == PGRES_POLLING_FAILED)
-					{
-						conns[conn_id].state = Idle;
-						DeleteWaitEvent(set, pos);
-
-						mtm_log(DmqStateIntermediate,
-								"[DMQ] failed to connect with %s (%s): %s",
-								conns[conn_id].receiver_name,
-								conns[conn_id].connstr,
-								PQerrorMessage(conns[conn_id].pgconn));
-					}
-					else
-						Assert(false);
-
-					break;
-				}
-
-				/*
-				 * Await for response to dmq_receiver_loop() call and switch to
-				 * active state.
-				 */
 				case Negotiating:
 					Assert(event.events & WL_SOCKET_READABLE);
 					if (!PQconsumeInput(conns[conn_id].pgconn))
@@ -688,7 +697,7 @@ dmq_sender_main(Datum main_arg)
 					}
 					break;
 
-				/* Do nothing and check that connection is still alive */
+					/* Do nothing and check that connection is still alive */
 				case Active:
 					Assert(event.events & WL_SOCKET_READABLE);
 					if (!PQconsumeInput(conns[conn_id].pgconn))
@@ -733,7 +742,7 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 {
 	const char *stream_name;
 	const char *body;
-	int 		body_len;
+	int			body_len;
 	bool		found;
 	DmqStreamSubscription *sub;
 	shm_mq_result res;
@@ -759,9 +768,8 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	}
 
 	/*
-	 * Find subscriber.
-	 * XXX: we can cache that and re-read shared memory upon a signal, but
-	 * likely that won't show any measurable speedup.
+	 * Find subscriber. XXX: we can cache that and re-read shared memory upon
+	 * a signal, but likely that won't show any measurable speedup.
 	 */
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions,
@@ -772,8 +780,8 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	if (!found)
 	{
 		mtm_log(WARNING,
-			"[DMQ] subscription %s is not found (body = %s)",
-			stream_name, body);
+				"[DMQ] subscription %s is not found (body = %s)",
+				stream_name, body);
 		return;
 	}
 
@@ -791,8 +799,8 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 
 #define DMQ_RECV_BUFFER 8192
 static char recv_buffer[DMQ_RECV_BUFFER];
-static int  recv_bytes;
-static int  read_bytes;
+static int	recv_bytes;
+static int	read_bytes;
 
 /*
  * _pq_have_full_message.
@@ -811,7 +819,7 @@ _pq_have_full_message(StringInfo s)
 	/* Have we got message length header? */
 	if (recv_bytes - read_bytes >= 4)
 	{
-		int len = pg_ntoh32( * (int *) (recv_buffer + read_bytes) );
+		int			len = pg_ntoh32(*(int *) (recv_buffer + read_bytes));
 
 		Assert(len < DMQ_RECV_BUFFER);
 
@@ -827,7 +835,7 @@ _pq_have_full_message(StringInfo s)
 		else if (read_bytes + len >= DMQ_RECV_BUFFER)
 		{
 			memmove(recv_buffer, recv_buffer + read_bytes,
-									recv_bytes - read_bytes);
+					recv_bytes - read_bytes);
 			recv_bytes -= read_bytes;
 			read_bytes = 0;
 		}
@@ -851,7 +859,7 @@ _pq_have_full_message(StringInfo s)
 static int
 _pq_getmessage_if_avalable(StringInfo s)
 {
-	int rc;
+	int			rc;
 
 	/* Check if we have full messages after previous call */
 	if (_pq_have_full_message(s) > 0)
@@ -867,15 +875,15 @@ _pq_getmessage_if_avalable(StringInfo s)
 		else
 		{
 			/*
-			 * Move data to the left in case we are near the buffer end.
-			 * Case when message starts earlier in the buffer and spans
-			 * past it's end handled separately down the lines.
+			 * Move data to the left in case we are near the buffer end. Case
+			 * when message starts earlier in the buffer and spans past it's
+			 * end handled separately down the lines.
 			 */
 			Assert(recv_bytes > read_bytes);
 			if (recv_bytes > (DMQ_RECV_BUFFER - 1024))
 			{
 				memmove(recv_buffer, recv_buffer + read_bytes,
-										recv_bytes - read_bytes);
+						recv_bytes - read_bytes);
 				recv_bytes -= read_bytes;
 				read_bytes = 0;
 			}
@@ -886,7 +894,7 @@ _pq_getmessage_if_avalable(StringInfo s)
 	MyProcPort->noblock = true;
 
 	rc = secure_read(MyProcPort, recv_buffer + recv_bytes,
-						DMQ_RECV_BUFFER - recv_bytes);
+					 DMQ_RECV_BUFFER - recv_bytes);
 
 	if (rc < 0)
 	{
@@ -905,8 +913,8 @@ _pq_getmessage_if_avalable(StringInfo s)
 		mtm_log(DmqTraceIncoming, "dmq: got %d bytes", rc);
 
 		/*
-		 * Here we need to re-check for full message again, so the caller will know
-		 * whether he should wait for event on socket.
+		 * Here we need to re-check for full message again, so the caller will
+		 * know whether he should wait for event on socket.
 		 */
 		if (_pq_have_full_message(s) > 0)
 			return 1;
@@ -926,7 +934,7 @@ _pq_getmessage_if_avalable(StringInfo s)
 static int
 _pq_getbyte_if_available(unsigned char *c)
 {
-	int rc;
+	int			rc;
 
 	/*
 	 * That is why we re-implementing this function: byte can be already in
@@ -966,8 +974,8 @@ _pq_getbyte_if_available(unsigned char *c)
 static void
 dmq_receiver_at_exit(int status, Datum receiver)
 {
-	int		receiver_id = DatumGetInt32(receiver);
-	char	sender_name[DMQ_NAME_MAXLEN];
+	int			receiver_id = DatumGetInt32(receiver);
+	char		sender_name[DMQ_NAME_MAXLEN];
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	strncpy(sender_name, dmq_state->receivers[receiver_id].name,
@@ -986,18 +994,18 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	{
 		NeedByte,
 		NeedMessage
-	} reader_state = NeedByte;
+	}			reader_state = NeedByte;
 
-	dsm_segment		   *seg;
-	shm_toc			   *toc;
-	StringInfoData		s;
-	shm_mq_handle	  **mq_handles;
-	char			   *sender_name;
-	char			   *proc_name;
-	int					i;
-	int					receiver_id = -1;
-	int					recv_timeout;
-	double				last_message_at = dmq_now();
+	dsm_segment *seg;
+	shm_toc    *toc;
+	StringInfoData s;
+	shm_mq_handle **mq_handles;
+	char	   *sender_name;
+	char	   *proc_name;
+	int			i;
+	int			receiver_id = -1;
+	int			recv_timeout;
+	double		last_message_at = dmq_now();
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	recv_timeout = PG_GETARG_INT32(1);
@@ -1010,10 +1018,11 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	dsm_pin_mapping(seg);
 	toc = shm_toc_create(DMQ_MQ_MAGIC, dsm_segment_address(seg),
 						 dmq_toc_size());
-	mq_handles = palloc(MaxBackends*sizeof(shm_mq_handle *));
+	mq_handles = palloc(MaxBackends * sizeof(shm_mq_handle *));
 	for (i = 0; i < MaxBackends; i++)
 	{
 		shm_mq	   *mq;
+
 		mq = shm_mq_create(shm_toc_allocate(toc, DMQ_MQ_SIZE), DMQ_MQ_SIZE);
 		shm_toc_insert(toc, i, mq);
 		shm_mq_set_sender(mq, MyProc);
@@ -1057,8 +1066,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	/* okay, switch client to copyout state */
 	pq_beginmessage(&s, 'W');
-	pq_sendbyte(&s, 0); /* copy_is_binary */
-	pq_sendint16(&s, 0); /* numAttributes */
+	pq_sendbyte(&s, 0);			/* copy_is_binary */
+	pq_sendint16(&s, 0);		/* numAttributes */
 	pq_endmessage(&s);
 	pq_flush();
 
@@ -1074,10 +1083,10 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	for (;;)
 	{
-		unsigned char	qtype;
-		WaitEvent		event;
-		int				rc;
-		int				nevents;
+		unsigned char qtype;
+		WaitEvent	event;
+		int			rc;
+		int			nevents;
 
 		if (reader_state == NeedByte)
 		{
@@ -1096,7 +1105,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 				else
 				{
 					mtm_log(ERROR, "[DMQ] invalid message type %c, %s",
-								qtype, s.data);
+							qtype, s.data);
 				}
 			}
 		}
@@ -1116,8 +1125,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		if (rc == EOF)
 		{
 			ereport(COMMERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("[DMQ] EOF on connection")));
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("[DMQ] EOF on connection")));
 			break;
 		}
 
@@ -1132,11 +1141,11 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		if (nevents > 0 && event.events & WL_POSTMASTER_DEATH)
 		{
 			ereport(FATAL,
-				(errcode(ERRCODE_ADMIN_SHUTDOWN),
-				 errmsg("[DMQ] exit receiver due to unexpected postmaster exit")));
+					(errcode(ERRCODE_ADMIN_SHUTDOWN),
+					 errmsg("[DMQ] exit receiver due to unexpected postmaster exit")));
 		}
 
-		// XXX: is it enough?
+		/* XXX: is it enough? */
 		CHECK_FOR_INTERRUPTS();
 
 		if (dmq_now() - last_message_at > recv_timeout)
@@ -1230,7 +1239,7 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
 			buf.len, buf.len, buf.data);
 
-	// XXX: use sendv instead
+	/* XXX: use sendv instead */
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
@@ -1255,7 +1264,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
 			buf.len, buf.len, buf.data);
 
-	// XXX: use sendv instead
+	/* XXX: use sendv instead */
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(WARNING, "[DMQ] dmq_push: can't send to queue");
@@ -1264,21 +1273,21 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 static bool
 dmq_reattach_shm_mq(int handle_id)
 {
-	shm_toc		   *toc;
-	shm_mq		   *inq;
+	shm_toc    *toc;
+	shm_mq	   *inq;
 	MemoryContext oldctx;
 
-	int receiver_id = -1;
-	int receiver_procno;
-	dsm_handle receiver_dsm;
-	int i;
+	int			receiver_id = -1;
+	int			receiver_procno;
+	dsm_handle	receiver_dsm;
+	int			i;
 
 	dsm_segment *new_segmap;
 
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		// XXX: change to hash maybe
+		/* XXX: change to hash maybe */
 		if (strcmp(dmq_state->receivers[i].name, dmq_local.inhandles[handle_id].name) == 0
 			&& dmq_state->receivers[i].active)
 		{
@@ -1293,7 +1302,7 @@ dmq_reattach_shm_mq(int handle_id)
 	if (receiver_id < 0)
 	{
 		mtm_log(DmqTraceShmMq, "[DMQ] can't find receiver named '%s'",
-			dmq_local.inhandles[handle_id].name);
+				dmq_local.inhandles[handle_id].name);
 		return false;
 	}
 
@@ -1302,8 +1311,8 @@ dmq_reattach_shm_mq(int handle_id)
 	if (dsm_find_mapping(receiver_dsm))
 	{
 		mtm_log(DmqTraceShmMq,
-			"[DMQ] we already attached '%s', probably receiver is exiting",
-			dmq_local.inhandles[handle_id].name);
+				"[DMQ] we already attached '%s', probably receiver is exiting",
+				dmq_local.inhandles[handle_id].name);
 		return false;
 	}
 
@@ -1336,7 +1345,7 @@ dmq_reattach_shm_mq(int handle_id)
 	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
 
 	toc = shm_toc_attach(DMQ_MQ_MAGIC,
-				dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg));
+						 dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg));
 	if (toc == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -1346,13 +1355,15 @@ dmq_reattach_shm_mq(int handle_id)
 
 	/* re-create */
 	mtm_log(DmqTraceShmMq, "[DMQ] creating shm_mq handle %p", inq);
-	inq = shm_mq_create(inq, DMQ_MQ_SIZE); // XXX
-	shm_mq_set_receiver(inq, MyProc);
-	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]); // XXX
+	inq = shm_mq_create(inq, DMQ_MQ_SIZE);
+	//XXX
+		shm_mq_set_receiver(inq, MyProc);
+	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]);
+	//XXX
 
-	oldctx = MemoryContextSwitchTo(TopMemoryContext);
+		oldctx = MemoryContextSwitchTo(TopMemoryContext);
 	dmq_local.inhandles[handle_id].mqh = shm_mq_attach(inq,
-							dmq_local.inhandles[handle_id].dsm_seg, NULL);
+													   dmq_local.inhandles[handle_id].dsm_seg, NULL);
 	MemoryContextSwitchTo(oldctx);
 
 	return true;
@@ -1416,7 +1427,7 @@ dmq_detach_receiver(char *sender_name)
 	if (dmq_local.inhandles[handle_id].dsm_seg)
 	{
 		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
-		dmq_local.inhandles[handle_id].dsm_seg =  NULL;
+		dmq_local.inhandles[handle_id].dsm_seg = NULL;
 	}
 
 	dmq_local.inhandles[handle_id].name[0] = '\0';
@@ -1425,9 +1436,9 @@ dmq_detach_receiver(char *sender_name)
 void
 dmq_stream_subscribe(char *stream_name)
 {
-	bool found;
+	bool		found;
 	DmqStreamSubscription *sub;
-	int i;
+	int			i;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions, stream_name,
@@ -1443,8 +1454,8 @@ dmq_stream_subscribe(char *stream_name)
 
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
-		Size	len;
-		void   *data;
+		Size		len;
+		void	   *data;
 		shm_mq_result res;
 
 		if (dmq_local.inhandles[i].mqh)
@@ -1462,7 +1473,7 @@ dmq_stream_subscribe(char *stream_name)
 void
 dmq_stream_unsubscribe(char *stream_name)
 {
-	bool found;
+	bool		found;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	hash_search(dmq_subscriptions, stream_name, HASH_REMOVE, &found);
@@ -1486,8 +1497,8 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 
 		for (i = 0; i < dmq_local.n_inhandles; i++)
 		{
-			Size	len;
-			void   *data;
+			Size		len;
+			void	   *data;
 
 			if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 				continue;
@@ -1531,7 +1542,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 		if (nowait)
 			continue;
 
-		// XXX cache that
+		/* XXX cache that */
 		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 10.0,
 					   WAIT_EVENT_MQ_RECEIVE);
 
@@ -1551,15 +1562,15 @@ bool
 dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 {
 	shm_mq_result res;
-	int i;
+	int			i;
 
 	*wait = true;
 	*sender_id = -1;
 
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
-		Size	len;
-		void   *data;
+		Size		len;
+		void	   *data;
 
 		if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 			continue;
@@ -1603,12 +1614,13 @@ dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
 					int recv_timeout)
 {
 	DmqDestinationId dest_id;
-	pid_t sender_pid;
+	pid_t		sender_pid;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	for (dest_id = 0; dest_id < DMQ_MAX_DESTINATIONS; dest_id++)
 	{
 		DmqDestination *dest = &(dmq_state->destinations[dest_id]);
+
 		if (!dest->active)
 		{
 			strncpy(dest->sender_name, sender_name, DMQ_NAME_MAXLEN);
@@ -1635,12 +1647,13 @@ void
 dmq_destination_drop(char *receiver_name)
 {
 	DmqDestinationId dest_id;
-	pid_t sender_pid;
+	pid_t		sender_pid;
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	for (dest_id = 0; dest_id < DMQ_MAX_DESTINATIONS; dest_id++)
 	{
 		DmqDestination *dest = &(dmq_state->destinations[dest_id]);
+
 		if (dest->active &&
 			strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)
 		{
@@ -1654,4 +1667,3 @@ dmq_destination_drop(char *receiver_name)
 	if (sender_pid)
 		kill(sender_pid, SIGHUP);
 }
-

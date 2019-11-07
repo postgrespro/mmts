@@ -24,7 +24,7 @@
 #define MULTIMASTER_SCHEMA_NAME          "mtm"
 #define MULTIMASTER_NAME                 "multimaster"
 #define MULTIMASTER_SLOT_PATTERN         "mtm_slot_%d"
-// XXX: change to one NODENAME_FMT
+/*  XXX: change to one NODENAME_FMT */
 #define MTM_SUBNAME_FMT					 "mtm_sub_%d"
 #define MTM_DMQNAME_FMT					 "node%d"
 #define MULTIMASTER_RECOVERY_SLOT_PATTERN "mtm_recovery_slot_%d"
@@ -90,7 +90,7 @@ typedef struct
 {
 	int			node;			/* One based id of node initiating transaction */
 	TransactionId xid;			/* Transaction ID at origin node */
-	TransactionId my_xid;			/* Transaction ID at our node */
+	TransactionId my_xid;		/* Transaction ID at our node */
 } GlobalTransactionId;
 
 typedef struct
@@ -113,7 +113,7 @@ typedef enum
 	PGLOGICAL_COMMIT_PREPARED,
 	PGLOGICAL_ABORT_PREPARED,
 	PGLOGICAL_PRECOMMIT_PREPARED
-} PGLOGICAL_EVENT;
+}			PGLOGICAL_EVENT;
 
 typedef enum
 {
@@ -134,7 +134,7 @@ typedef struct
 {
 	int			node_id;
 	char	   *conninfo;
-	RepOriginId	origin_id;
+	RepOriginId origin_id;
 	bool		init_done;
 } MtmNode;
 
@@ -144,7 +144,7 @@ typedef struct
 	int			my_node_id;
 	int			backup_node_id;
 	XLogRecPtr	backup_end_lsn;
-	MtmNode	nodes[MTM_MAX_NODES];
+	MtmNode		nodes[MTM_MAX_NODES];
 } MtmConfig;
 
 extern MtmConfig *receiver_mtm_cfg;
@@ -162,20 +162,21 @@ typedef struct
 										 * hash table */
 
 	volatile slock_t cb_lock;
-	int n_committers;
-	int n_commit_holders;
+	int			n_committers;
+	int			n_commit_holders;
 	ConditionVariable commit_barrier_cv;
 
 	ConditionVariable receiver_barrier_cv;
 
-	struct {
-		MtmReplicationMode	receiver_mode;
-		pid_t				sender_pid;
-		pid_t				receiver_pid;
-		int					dmq_dest_id;
-		XLogRecPtr			trim_lsn;
-	} peers[MTM_MAX_NODES];
-	BgwPool	pools[MTM_MAX_NODES];		/* [Mtm->nAllNodes]: per-node data */
+	struct
+	{
+		MtmReplicationMode receiver_mode;
+		pid_t		sender_pid;
+		pid_t		receiver_pid;
+		int			dmq_dest_id;
+		XLogRecPtr	trim_lsn;
+	}			peers[MTM_MAX_NODES];
+	BgwPool		pools[MTM_MAX_NODES];	/* [Mtm->nAllNodes]: per-node data */
 } MtmShared;
 
 extern MtmShared *Mtm;
@@ -198,19 +199,19 @@ extern int	MtmHeartbeatSendTimeout;
 extern int	MtmHeartbeatRecvTimeout;
 extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
-extern bool	MtmBreakConnection;
+extern bool MtmBreakConnection;
 
 extern void MtmSleep(int64 interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);
 extern MtmConfig *MtmLoadConfig(void);
 
-typedef void (*mtm_cfg_change_cb)(int node_id, MtmConfig *new_cfg, Datum arg);
+typedef void (*mtm_cfg_change_cb) (int node_id, MtmConfig *new_cfg, Datum arg);
 
 extern MtmConfig *MtmReloadConfig(MtmConfig *old_cfg,
-								  mtm_cfg_change_cb node_add_cb,
-								  mtm_cfg_change_cb node_drop_cb,
-								  Datum arg);
+				mtm_cfg_change_cb node_add_cb,
+				mtm_cfg_change_cb node_drop_cb,
+				Datum arg);
 extern MtmNode *MtmNodeById(MtmConfig *cfg, int node_id);
 
 extern void MtmStateFill(MtmConfig *cfg);

@@ -6,7 +6,7 @@
 #include "catalog/namespace.h"
 #include "tcop/tcopprot.h"
 #include "storage/ipc.h"
-#include "miscadmin.h" /* PostmasterPid */
+#include "miscadmin.h"			/* PostmasterPid */
 #include "utils/syscache.h"
 #include "utils/inval.h"
 #include "replication/slot.h"
@@ -22,7 +22,7 @@
 #include "state.h"
 #include "logger.h"
 
-char const* const MtmNeighborEventMnem[] =
+char const *const MtmNeighborEventMnem[] =
 {
 	"MTM_NEIGHBOR_CLIQUE_DISABLE",
 	"MTM_NEIGHBOR_WAL_RECEIVER_START",
@@ -33,7 +33,7 @@ char const* const MtmNeighborEventMnem[] =
 	"MTM_NEIGHBOR_WAL_SENDER_STOP"
 };
 
-char const* const MtmEventMnem[] =
+char const *const MtmEventMnem[] =
 {
 	"MTM_REMOTE_DISABLE",
 	"MTM_CLIQUE_DISABLE",
@@ -46,7 +46,7 @@ char const* const MtmEventMnem[] =
 	"MTM_NONRECOVERABLE_ERROR"
 };
 
-char const* const MtmNodeStatusMnem[] =
+char const *const MtmNodeStatusMnem[] =
 {
 	"disabled",
 	"recovery",
@@ -76,11 +76,11 @@ struct MtmState
 	LWLock	   *lock;
 
 	MtmNodeStatus status;
-} *mtm_state;
+}		   *mtm_state;
 
-static int  MtmRefereeGetWinner(void);
+static int	MtmRefereeGetWinner(void);
 static bool MtmRefereeClearWinner(void);
-static int  MtmRefereeReadSaved(void);
+static int	MtmRefereeReadSaved(void);
 
 static void MtmEnableNode(int node_id);
 static void MtmDisableNode(int node_id);
@@ -115,12 +115,13 @@ MtmStateShmemStartup()
 	LWLockRelease(AddinShmemInitLock);
 }
 
-// XXXX: allocate in context and clean it
+/*  XXXX: allocate in context and clean it */
 static char *
 maskToString(nodemask_t mask)
 {
-	char *strMask = palloc0(MTM_MAX_NODES + 1);
-	int i, j = 0;
+	char	   *strMask = palloc0(MTM_MAX_NODES + 1);
+	int			i,
+				j = 0;
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
@@ -134,7 +135,9 @@ maskToString(nodemask_t mask)
 static int
 popcount(nodemask_t mask)
 {
-	int i, count = 0;
+	int			i,
+				count = 0;
+
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (BIT_CHECK(mask, i))
@@ -152,7 +155,7 @@ MtmStateFill(MtmConfig *cfg)
 
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
-	// XXX: that kind of dangerous. Move to mtm-monitor?
+	/* XXX: that kind of dangerous. Move to mtm-monitor? */
 	if (cfg->backup_node_id != 0)
 		mtm_state->recovery_slot = cfg->backup_node_id;
 
@@ -177,11 +180,11 @@ MtmSetClusterStatus(MtmNodeStatus status)
 		return;
 
 	mtm_log(MtmStateSwitch, "[STATE]   Switching status from %s to %s",
-			 MtmNodeStatusMnem[mtm_state->status], MtmNodeStatusMnem[status]);
+			MtmNodeStatusMnem[mtm_state->status], MtmNodeStatusMnem[status]);
 
 	/*
-	 * Do some actions on specific status transitions.
-	 * This will be executed only once because of preceeding if stmt.
+	 * Do some actions on specific status transitions. This will be executed
+	 * only once because of preceeding if stmt.
 	 */
 	if (status == MTM_DISABLED)
 	{
@@ -189,7 +192,8 @@ MtmSetClusterStatus(MtmNodeStatus status)
 		mtm_state->recovery_slot = 0;
 		mtm_state->receivers_mask = 0;
 		mtm_state->senders_mask = 0;
-		mtm_state->recovery_count++; /* this will restart replication connection */
+		mtm_state->recovery_count++;	/* this will restart replication
+										 * connection */
 	}
 
 	/*
@@ -206,31 +210,31 @@ MtmSetClusterStatus(MtmNodeStatus status)
 static void
 MtmCheckState(void)
 {
-	bool isEnabledState;
+	bool		isEnabledState;
 	MtmNodeStatus old_status;
-	int nEnabled    = popcount(mtm_state->enabled_mask);
-	int nConnected  = popcount(mtm_state->connected_mask & mtm_state->dmq_senders_mask);
-	int nReceivers  = popcount(mtm_state->receivers_mask);
-	int nSenders    = popcount(mtm_state->senders_mask);
-	int nConfigured = popcount(mtm_state->configured_mask);
+	int			nEnabled = popcount(mtm_state->enabled_mask);
+	int			nConnected = popcount(mtm_state->connected_mask & mtm_state->dmq_senders_mask);
+	int			nReceivers = popcount(mtm_state->receivers_mask);
+	int			nSenders = popcount(mtm_state->senders_mask);
+	int			nConfigured = popcount(mtm_state->configured_mask);
 
 	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
 	old_status = mtm_state->status;
 
 	mtm_log(MtmStateMessage,
-		"[STATE]   Status = (enabled=%s, connected=%s, dmq_senders=%s, clique=%s, receivers=%s, senders=%s, total=%i, referee_grant=%d)",
-		maskToString(mtm_state->enabled_mask),
-		maskToString(mtm_state->connected_mask),
-		maskToString(mtm_state->dmq_senders_mask),
-		maskToString(mtm_state->clique),
-		maskToString(mtm_state->receivers_mask),
-		maskToString(mtm_state->senders_mask),
-		popcount(mtm_state->configured_mask),
-		mtm_state->referee_grant);
+			"[STATE]   Status = (enabled=%s, connected=%s, dmq_senders=%s, clique=%s, receivers=%s, senders=%s, total=%i, referee_grant=%d)",
+			maskToString(mtm_state->enabled_mask),
+			maskToString(mtm_state->connected_mask),
+			maskToString(mtm_state->dmq_senders_mask),
+			maskToString(mtm_state->clique),
+			maskToString(mtm_state->receivers_mask),
+			maskToString(mtm_state->senders_mask),
+			popcount(mtm_state->configured_mask),
+			mtm_state->referee_grant);
 
-	isEnabledState = (nConnected >= nConfigured/2 + 1) ||
-					 (nConnected == nConfigured/2 && mtm_state->referee_grant);
+	isEnabledState = (nConnected >= nConfigured / 2 + 1) ||
+		(nConnected == nConfigured / 2 && mtm_state->referee_grant);
 
 	/* ANY -> MTM_DISABLED */
 	if (!isEnabledState)
@@ -264,13 +268,13 @@ MtmCheckState(void)
 			}
 			break;
 
-		/*
-		 * Switching from MTM_RECOVERY to MTM_ONLINE requires two state
-		 * re-checks. If by the time of MTM_RECOVERY -> MTM_RECOVERED all
-		 * senders/receiveirs already atarted we can stuck in MTM_RECOVERED
-		 * state. Hence call MtmCheckState() from periodic status check while
-		 * in MTM_RECOVERED state.
-		 */
+			/*
+			 * Switching from MTM_RECOVERY to MTM_ONLINE requires two state
+			 * re-checks. If by the time of MTM_RECOVERY -> MTM_RECOVERED all
+			 * senders/receiveirs already atarted we can stuck in
+			 * MTM_RECOVERED state. Hence call MtmCheckState() from periodic
+			 * status check while in MTM_RECOVERED state.
+			 */
 		case MTM_RECOVERED:
 			if ((nReceivers == nEnabled && nSenders == nEnabled && nEnabled == nConnected - 1)
 				|| mtm_state->referee_grant)
@@ -285,12 +289,12 @@ MtmCheckState(void)
 
 		case MTM_ONLINE:
 			{
-				int nEnabled = popcount(mtm_state->enabled_mask);
-				int nConfigured = popcount(mtm_state->configured_mask);
+				int			nEnabled = popcount(mtm_state->enabled_mask);
+				int			nConfigured = popcount(mtm_state->configured_mask);
 
-				// XXX: re-check for nEnabled
-				if ( !((nEnabled >= nConfigured/2+1) ||
-						(nEnabled == nConfigured/2 && mtm_state->referee_grant)) )
+				/* XXX: re-check for nEnabled */
+				if (!((nEnabled >= nConfigured / 2 + 1) ||
+					  (nEnabled == nConfigured / 2 && mtm_state->referee_grant)))
 				{
 					mtm_log(MtmStateMessage, "[STATE] disable myself, nEnabled less then majority");
 					MtmSetClusterStatus(MTM_DISABLED);
@@ -317,14 +321,14 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked)
 
 	Assert(LWLockHeldByMeInMode(mtm_state->lock, LW_EXCLUSIVE));
 
-	switch(ev)
+	switch (ev)
 	{
 		case MTM_NEIGHBOR_CLIQUE_DISABLE:
 			MtmDisableNode(node_id);
 			break;
 
-		// XXX: now that means reception of parallel-safe message  through
-		// replication. Need to be renamed.
+			/* XXX: now that means reception of parallel-safe message  through */
+			/* replication. Need to be renamed. */
 		case MTM_NEIGHBOR_WAL_RECEIVER_START:
 			BIT_SET(mtm_state->receivers_mask, node_id - 1);
 			break;
@@ -335,15 +339,18 @@ MtmStateProcessNeighborEvent(int node_id, MtmNeighborEvent ev, bool locked)
 			break;
 
 		case MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY:
+
 			/*
-			 * With big heartbeat recv timeout it can heppend that other node will
-			 * restart faster than we can detect that. Without disabledNodeMask bit set
-			 * we will never send recovery_finish in such case. So set it now.
+			 * With big heartbeat recv timeout it can heppend that other node
+			 * will restart faster than we can detect that. Without
+			 * disabledNodeMask bit set we will never send recovery_finish in
+			 * such case. So set it now.
 			 *
 			 * It is also possible to change logic of recovery_finish but for
-			 * now it is easier to do it here. MtmIsRecoveredNode deserves rewrite anyway.
+			 * now it is easier to do it here. MtmIsRecoveredNode deserves
+			 * rewrite anyway.
 			 */
-			// XXX
+			/* XXX */
 			if (BIT_CHECK(mtm_state->enabled_mask, node_id - 1))
 			{
 				mtm_log(MtmStateMessage, "[WARN] node %d started recovery, but it wasn't disabled", node_id);
@@ -433,7 +440,7 @@ MtmDisableNode(int node_id)
 	BIT_CLEAR(mtm_state->enabled_mask, node_id - 1);
 	mtm_state->node_recovery_count[node_id - 1] += 1;
 
-	// XXX my_node_id
+	/* XXX my_node_id */
 	if (mtm_state->status == MTM_ONLINE)
 	{
 		ResolveTransactionsForNode(node_id, popcount(mtm_state->configured_mask));
@@ -461,15 +468,15 @@ MtmOnNodeDisconnect(char *node_name)
 
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
-	// XXX: assert?
+	/* XXX: assert? */
 	if (!BIT_CHECK(mtm_state->connected_mask, node_id - 1))
 		return;
 
 	mtm_log(MtmStateMessage, "[STATE] Node %i: disconnected", node_id);
 
 	/*
-	 * We should disable it, as clique detector will not necessarily
-	 * do that. For example it will anyway find clique with one node.
+	 * We should disable it, as clique detector will not necessarily do that.
+	 * For example it will anyway find clique with one node.
 	 */
 
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
@@ -485,6 +492,7 @@ void
 MtmOnDmqSenderConnect(char *node_name)
 {
 	int			node_id;
+
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
@@ -497,6 +505,7 @@ void
 MtmOnDmqSenderDisconnect(char *node_name)
 {
 	int			node_id;
+
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
@@ -506,8 +515,9 @@ MtmOnDmqSenderDisconnect(char *node_name)
 	LWLockRelease(mtm_state->lock);
 }
 
-// XXXX: make that event too
-void MtmOnNodeConnect(char *node_name)
+/*  XXXX: make that event too */
+void
+MtmOnNodeConnect(char *node_name)
 {
 	int			node_id = -1;
 	MtmConfig  *cfg = MtmLoadConfig();
@@ -521,8 +531,8 @@ void MtmOnNodeConnect(char *node_name)
 
 	/* do not hold lock for mtm.cluster_nodes */
 	ResourceOwnerRelease(TopTransactionResourceOwner,
-						RESOURCE_RELEASE_LOCKS,
-						true, true);
+						 RESOURCE_RELEASE_LOCKS,
+						 true, true);
 
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
@@ -537,20 +547,24 @@ void MtmOnNodeConnect(char *node_name)
  * Build internode connectivity mask. 1 - means that node is disconnected.
  */
 static void
-MtmBuildConnectivityMatrix(nodemask_t* matrix)
+MtmBuildConnectivityMatrix(nodemask_t *matrix)
 {
-	int i, j, n = MTM_MAX_NODES;
+	int			i,
+				j,
+				n = MTM_MAX_NODES;
 
 	for (i = 0; i < n; i++)
 		matrix[i] = Mtm->nodes[i].connectivityMask;
 
 	/* make matrix symmetric: required for Bron–Kerbosch algorithm */
-	for (i = 0; i < n; i++) {
-		for (j = 0; j < i; j++) {
+	for (i = 0; i < n; i++)
+	{
+		for (j = 0; j < i; j++)
+		{
 			matrix[i] |= ((matrix[j] >> i) & 1) << j;
 			matrix[j] |= ((matrix[i] >> j) & 1) << i;
 		}
-		matrix[i] &= ~((nodemask_t)1 << i);
+		matrix[i] &= ~((nodemask_t) 1 << i);
 	}
 }
 #endif
@@ -566,7 +580,10 @@ MtmGetReplicationMode(int nodeId)
 {
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
-	/* Await until node is connected and both receiver and sender are in clique */
+	/*
+	 * Await until node is connected and both receiver and sender are in
+	 * clique
+	 */
 	while (!BIT_CHECK(mtm_state->connected_mask, nodeId - 1))
 	{
 		LWLockRelease(mtm_state->lock);
@@ -576,8 +593,11 @@ MtmGetReplicationMode(int nodeId)
 
 	if (!mtm_state->recovered)
 	{
-		/* Ok, then start recovery by luckiest walreceiver (if there is no donor node).
-		 * If this node was populated using basebackup, then donorNodeId is not zero and we should choose this node for recovery */
+		/*
+		 * Ok, then start recovery by luckiest walreceiver (if there is no
+		 * donor node). If this node was populated using basebackup, then
+		 * donorNodeId is not zero and we should choose this node for recovery
+		 */
 		if ((mtm_state->recovery_slot == 0 || mtm_state->recovery_slot == nodeId))
 		{
 			/* Lock on us */
@@ -610,15 +630,18 @@ MtmRefreshClusterStatus()
 {
 
 	/*
-	 * Check for referee decision when only half of nodes are visible.
-	 * Do not hold lock here, but recheck later wheter mask changed.
+	 * Check for referee decision when only half of nodes are visible. Do not
+	 * hold lock here, but recheck later wheter mask changed.
 	 */
 	if (MtmRefereeConnStr && *MtmRefereeConnStr && !mtm_state->referee_winner_id &&
-		popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask)/2)
+		popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask) / 2)
 	{
-		int winner_node_id = MtmRefereeGetWinner();
+		int			winner_node_id = MtmRefereeGetWinner();
 
-		/* We also can have old value. Do that only from single mtm-monitor process */
+		/*
+		 * We also can have old value. Do that only from single mtm-monitor
+		 * process
+		 */
 		if (winner_node_id <= 0 && !mtm_state_initialized)
 		{
 			winner_node_id = MtmRefereeReadSaved();
@@ -631,19 +654,19 @@ MtmRefreshClusterStatus()
 			if (BIT_CHECK(mtm_state->connected_mask, winner_node_id - 1))
 			{
 				/*
-				 * By the time we enter this block we can already see other nodes.
-				 * So recheck old conditions under lock.
+				 * By the time we enter this block we can already see other
+				 * nodes. So recheck old conditions under lock.
 				 */
 				LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
-				if (popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask)/2 &&
+				if (popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask) / 2 &&
 					BIT_CHECK(mtm_state->connected_mask, winner_node_id - 1))
 				{
 					mtm_log(MtmStateMessage, "[STATE] Referee allowed to proceed with half of the nodes (winner_id = %d)",
-					winner_node_id);
+							winner_node_id);
 					mtm_state->referee_grant = true;
 					if (popcount(mtm_state->connected_mask) == 1)
 					{
-						// MtmPollStatusOfPreparedTransactions(true);
+						/* MtmPollStatusOfPreparedTransactions(true); */
 						ResolveForRefereeWinner(popcount(mtm_state->configured_mask));
 					}
 					mtm_state->recovered = true;
@@ -656,14 +679,17 @@ MtmRefreshClusterStatus()
 	}
 
 	/*
-	 * Clear winner if we again have all nodes recovered.
-	 * We should clean old value based on disabledNodeMask instead of SELF_CONNECTIVITY_MASK
-	 * because we can clean old value before failed node starts it recovery and that node
-	 * can get refereeGrant before start of walsender, so it start in recovered mode.
+	 * Clear winner if we again have all nodes recovered. We should clean old
+	 * value based on disabledNodeMask instead of SELF_CONNECTIVITY_MASK
+	 * because we can clean old value before failed node starts it recovery
+	 * and that node can get refereeGrant before start of walsender, so it
+	 * start in recovered mode.
 	 */
 	if (MtmRefereeConnStr && *MtmRefereeConnStr && mtm_state->referee_winner_id &&
 		popcount(mtm_state->enabled_mask) == popcount(mtm_state->configured_mask) &&
-		MtmGetCurrentStatus() == MTM_ONLINE) /* restrict this actions only to major -> online transition */
+		MtmGetCurrentStatus() == MTM_ONLINE)	/* restrict this actions only
+												 * to major -> online
+												 * transition */
 	{
 		if (MtmRefereeClearWinner())
 		{
@@ -676,8 +702,8 @@ MtmRefreshClusterStatus()
 	return;
 
 #ifdef FALSE
-	// Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1);
-	// return;
+	/* Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1); */
+	/* return; */
 
 	/*
 	 * Check for clique.
@@ -691,18 +717,20 @@ MtmRefreshClusterStatus()
 	mtm_log(MtmStateMessage, "[STATE] Old clique: %s", maskToString(mtm_state->clique));
 
 	/*
-	 * Otherwise make sure that all nodes have a chance to replicate their connectivity
-	 * mask and we have the "consistent" picture. Obviously we can not get true consistent
-	 * snapshot, but at least try to wait heartbeat send timeout is expired and
-	 * connectivity graph is stabilized.
+	 * Otherwise make sure that all nodes have a chance to replicate their
+	 * connectivity mask and we have the "consistent" picture. Obviously we
+	 * can not get true consistent snapshot, but at least try to wait
+	 * heartbeat send timeout is expired and connectivity graph is stabilized.
 	 */
-	do {
+	do
+	{
 		oldClique = newClique;
+
 		/*
-		 * Double timeout to consider the worst case when heartbeat receive interval is added
-		 * with refresh cluster status interval.
+		 * Double timeout to consider the worst case when heartbeat receive
+		 * interval is added with refresh cluster status interval.
 		 */
-		MtmSleep(1000L*(MtmHeartbeatRecvTimeout)*2);
+		MtmSleep(1000L * (MtmHeartbeatRecvTimeout) * 2);
 		MtmBuildConnectivityMatrix(matrix);
 		newClique = MtmFindMaxClique(matrix, MTM_MAX_NODES, &cliqueSize);
 	} while (newClique != oldClique);
@@ -711,22 +739,23 @@ MtmRefreshClusterStatus()
 
 	if (newClique != trivialClique)
 	{
-		mtm_log(MtmStateMessage, "[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique)); // XXXX some false-positives, fixme
+		mtm_log(MtmStateMessage, "[STATE] NONTRIVIAL CLIQUE! (trivial: %s)", maskToString(trivialClique));
+		//XXXX some false - positives, fixme
 	}
 
 	/*
-	 * We are using clique only to disable nodes.
-	 * So find out what node should be disabled and disable them.
+	 * We are using clique only to disable nodes. So find out what node should
+	 * be disabled and disable them.
 	 */
 	LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
 
 	mtm_state->clique = newClique;
 
 	/*
-	 * Do not perform any action based on clique with referee grant,
-	 * because we can disable ourself.
-	 * But we also need to maintain actual clique not disable ourselves
-	 * when neighbour node will come back and we erase refereeGrant.
+	 * Do not perform any action based on clique with referee grant, because
+	 * we can disable ourself. But we also need to maintain actual clique not
+	 * disable ourselves when neighbour node will come back and we erase
+	 * refereeGrant.
 	 */
 	if (mtm_state->referee_grant)
 	{
@@ -736,15 +765,15 @@ MtmRefreshClusterStatus()
 
 	for (i = 0; i < Mtm->nAllNodes; i++)
 	{
-		bool old_status = BIT_CHECK(Mtm->disabledNodeMask, i);
-		bool new_status = BIT_CHECK(~newClique, i);
+		bool		old_status = BIT_CHECK(Mtm->disabledNodeMask, i);
+		bool		new_status = BIT_CHECK(~newClique, i);
 
 		if (new_status && new_status != old_status)
 		{
-			if ( i+1 == Mtm->my_node_id )
+			if (i + 1 == Mtm->my_node_id)
 				MtmStateProcessEvent(MTM_CLIQUE_DISABLE, true);
 			else
-				MtmStateProcessNeighborEvent(i+1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
+				MtmStateProcessNeighborEvent(i + 1, MTM_NEIGHBOR_CLIQUE_DISABLE, true);
 		}
 	}
 
@@ -792,9 +821,9 @@ MtmRefereeHasLocalTable()
 static int
 MtmRefereeReadSaved(void)
 {
-	int winner = -1;
-	int rc;
-	bool txstarted = false;
+	int			winner = -1;
+	int			rc;
+	bool		txstarted = false;
 
 	if (!MtmRefereeHasLocalTable())
 		return -1;
@@ -814,7 +843,8 @@ MtmRefereeReadSaved(void)
 	}
 	else if (SPI_processed > 0)
 	{
-		bool isnull;
+		bool		isnull;
+
 		winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
 		Assert(SPI_processed == 1);
 		Assert(!isnull);
@@ -836,12 +866,12 @@ MtmRefereeReadSaved(void)
 static int
 MtmRefereeGetWinner(void)
 {
-	PGconn* conn;
-	PGresult *res;
-	char sql[128];
-	int  winner_node_id;
-	int  old_winner = -1;
-	int  rc;
+	PGconn	   *conn;
+	PGresult   *res;
+	char		sql[128];
+	int			winner_node_id;
+	int			old_winner = -1;
+	int			rc;
 
 	conn = PQconnectdb(MtmRefereeConnStr);
 	if (PQstatus(conn) != CONNECTION_OK)
@@ -858,7 +888,7 @@ MtmRefereeGetWinner(void)
 		PQnfields(res) != 1)
 	{
 		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.get_winner()",
-			PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
+				PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
 		PQclear(res);
 		PQfinish(conn);
 		return -1;
@@ -869,8 +899,8 @@ MtmRefereeGetWinner(void)
 	if (winner_node_id < 1 || winner_node_id > MTM_MAX_NODES)
 	{
 		mtm_log(WARNING,
-			"Referee responded with node_id=%d, it's out of our node range",
-			winner_node_id);
+				"Referee responded with node_id=%d, it's out of our node range",
+				winner_node_id);
 		PQclear(res);
 		PQfinish(conn);
 		return -1;
@@ -894,7 +924,8 @@ MtmRefereeGetWinner(void)
 		}
 		else if (SPI_processed > 0)
 		{
-			bool isnull;
+			bool		isnull;
+
 			old_winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
 			Assert(SPI_processed == 1);
 			Assert(!isnull);
@@ -906,8 +937,8 @@ MtmRefereeGetWinner(void)
 		}
 		/* Update actual key */
 		sprintf(sql,
-			"insert into mtm.referee_decision values ('winner', %d) on conflict(key) do nothing;",
-			winner_node_id);
+				"insert into mtm.referee_decision values ('winner', %d) on conflict(key) do nothing;",
+				winner_node_id);
 		rc = SPI_execute(sql, false, 0);
 		SPI_finish();
 		if (rc < 0)
@@ -926,18 +957,18 @@ MtmRefereeGetWinner(void)
 static bool
 MtmRefereeClearWinner(void)
 {
-	PGconn* conn;
-	PGresult *res;
-	char *response;
-	int rc;
+	PGconn	   *conn;
+	PGresult   *res;
+	char	   *response;
+	int			rc;
 
 	/*
 	 * Delete result locally first.
 	 *
-	 * If we delete decision from referee but fail to delete local cached
-	 * that will be pretty bad -- on the next reboot we can read
-	 * stale referee decision and on next failure end up with two masters.
-	 * So just delete local cache first.
+	 * If we delete decision from referee but fail to delete local cached that
+	 * will be pretty bad -- on the next reboot we can read stale referee
+	 * decision and on next failure end up with two masters. So just delete
+	 * local cache first.
 	 */
 	if (MtmRefereeHasLocalTable())
 	{
@@ -970,7 +1001,7 @@ MtmRefereeClearWinner(void)
 		PQnfields(res) != 1)
 	{
 		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.clean().",
-			PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
+				PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
 		PQclear(res);
 		PQfinish(conn);
 		return false;
@@ -1000,6 +1031,7 @@ MtmNodeStatus
 MtmGetCurrentStatus()
 {
 	MtmNodeStatus status;
+
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	status = mtm_state->status;
 	LWLockRelease(mtm_state->lock);
@@ -1015,7 +1047,7 @@ MtmGetConnectedNodeMask()
 nodemask_t
 MtmGetEnabledNodeMask()
 {
-	nodemask_t enabled;
+	nodemask_t	enabled;
 
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	enabled = mtm_state->enabled_mask;
@@ -1033,7 +1065,7 @@ MtmGetEnabledNodeMask()
 nodemask_t
 MtmGetDisabledNodeMask()
 {
-	nodemask_t disabled;
+	nodemask_t	disabled;
 
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	disabled = ~mtm_state->enabled_mask;
@@ -1051,7 +1083,7 @@ MtmGetRecoveryCount()
 int
 MtmGetNodeDisableCount(int node_id)
 {
-	int count;
+	int			count;
 
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	count = mtm_state->node_recovery_count[node_id - 1];
@@ -1060,8 +1092,8 @@ MtmGetNodeDisableCount(int node_id)
 	return count;
 }
 
-// XXX: During evaluation of (mtm.node_info(id)).* this function called
-// once each columnt for every row. So may be just rewrite to SRF.
+/*  XXX: During evaluation of (mtm.node_info(id)).* this function called */
+/*  once each columnt for every row. So may be just rewrite to SRF. */
 Datum
 mtm_node_info(PG_FUNCTION_ARGS)
 {
@@ -1145,13 +1177,13 @@ mtm_status(PG_FUNCTION_ARGS)
 #include "utils/guc.h"
 #include "pgstat.h"
 
-void MtmMonitor(Datum arg);
+void		MtmMonitor(Datum arg);
 
-// XXX: change dmq api and evict that
-static int		sender_to_node[MTM_MAX_NODES];
-static bool		config_valid = false;
+/*  XXX: change dmq api and evict that */
+static int	sender_to_node[MTM_MAX_NODES];
+static bool config_valid = false;
 
-bool			MtmIsMonitorWorker;
+bool		MtmIsMonitorWorker;
 
 void
 MtmMonitorStart(Oid db_id, Oid user_id)
@@ -1160,7 +1192,7 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 	BackgroundWorkerHandle *handle;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 1;
 	worker.bgw_main_arg = Int32GetDatum(0);
@@ -1183,7 +1215,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 	StringInfoData msg;
 	bool		wait;
 
-	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		DmqDestinationId dest_id;
 		StringInfoData response_msg;
@@ -1211,7 +1243,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 		state_3pc = GetLoggedPreparedXactState(gid);
 
-		// XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED
+		/* XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED */
 		if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
 			state = MtmTxNotFound;
 		else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
@@ -1361,13 +1393,12 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	sender_to_node[sender_id] = node_id;
 
 	/*
-	 * Finally start receiver.
-	 * bgw handle should be allocated in TopMcxt.
+	 * Finally start receiver. bgw handle should be allocated in TopMcxt.
 	 *
 	 * Start receiver before logical slot creation, as during start after a
 	 * basebackup logical stot creation will wait for all in-progress
-	 * transactions to finish (including prepared ones). And to finish them
-	 * we need to start receiver.
+	 * transactions to finish (including prepared ones). And to finish them we
+	 * need to start receiver.
 	 */
 	old_context = MemoryContextSwitchTo(TopMemoryContext);
 	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
@@ -1382,8 +1413,8 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		/* Create logical slot for our publication to this neighbour */
 		ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
 		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
-										// XXX?
-										false,  /* do not build snapshot */
+		/* XXX? */
+										false,	/* do not build snapshot */
 										logical_read_local_xlog_page, NULL, NULL,
 										NULL);
 		DecodingContextFindStartpoint(ctx);
@@ -1437,9 +1468,8 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	dmq_detach_receiver(dmq_name);
 
 	/*
-	 * Disable this node by terminating receiver.
-	 * It shouldn't came back online as dmq-receiver check node_id presense
-	 * in mtm.cluster_nodes.
+	 * Disable this node by terminating receiver. It shouldn't came back
+	 * online as dmq-receiver check node_id presense in mtm.cluster_nodes.
 	 */
 	dmq_terminate_receiver(dmq_name);
 
@@ -1451,9 +1481,8 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	LWLockRelease(Mtm->lock);
 
 	/*
-	 * Stop corresponding receiver.
-	 * Also await for termination, so that we can drop slots and origins that
-	 * were acquired by receiver.
+	 * Stop corresponding receiver. Also await for termination, so that we can
+	 * drop slots and origins that were acquired by receiver.
 	 */
 	TerminateBackgroundWorker(receivers[node_id - 1]);
 	WaitForBackgroundWorkerShutdown(receivers[node_id - 1]);
@@ -1467,8 +1496,8 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	replorigin_drop(replorigin_by_name(logical_slot, false), true);
 
 	/*
-	 * Delete logical slot. It is aquired by walsender, so call with
-	 * nowait = false and wait for walsender exit.
+	 * Delete logical slot. It is aquired by walsender, so call with nowait =
+	 * false and wait for walsender exit.
 	 */
 	ReplicationSlotDrop(logical_slot, false);
 
@@ -1549,9 +1578,10 @@ MtmMonitor(Datum arg)
 	}
 
 	/*
-	 * During mtm_init_cluster() our worker is started from transaction that created
-	 * mtm config, so we can get here before this transaction is committed,
-	 * so we won't see config yet. Just wait for it to became visible.
+	 * During mtm_init_cluster() our worker is started from transaction that
+	 * created mtm config, so we can get here before this transaction is
+	 * committed, so we won't see config yet. Just wait for it to became
+	 * visible.
 	 */
 	mtm_cfg = MtmLoadConfig();
 	while (mtm_cfg->n_nodes == 0)
@@ -1580,7 +1610,7 @@ MtmMonitor(Datum arg)
 
 		rc = SPI_execute("select pg_replication_origin_drop(name) from "
 						 "(select 'mtm_slot_' || id as name from " MTM_NODES " where is_self = 'f') names;",
-							false, 0);
+						 false, 0);
 		if (rc < 0 || rc != SPI_OK_SELECT)
 			mtm_log(ERROR, "Failed to clean up replication origins after a basebackup");
 
@@ -1600,8 +1630,8 @@ MtmMonitor(Datum arg)
 	}
 
 	/*
-	 * Reset mtm_cfg, as it need to be NULL during first call of MtmReloadConfig
-	 * to properly fire on_node_create callbacks.
+	 * Reset mtm_cfg, as it need to be NULL during first call of
+	 * MtmReloadConfig to properly fire on_node_create callbacks.
 	 */
 	pfree(mtm_cfg);
 	mtm_cfg = NULL;
@@ -1631,9 +1661,9 @@ MtmMonitor(Datum arg)
 
 	for (;;)
 	{
-		int rc;
-		int i;
-		pid_t pid;
+		int			rc;
+		int			i;
+		pid_t		pid;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1648,7 +1678,7 @@ MtmMonitor(Datum arg)
 		if (!config_valid)
 		{
 			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
-							stop_node_workers, (Datum) receivers);
+									  stop_node_workers, (Datum) receivers);
 
 			/* we were excluded from cluster */
 			if (mtm_cfg->my_node_id == 0)
@@ -1677,7 +1707,7 @@ MtmMonitor(Datum arg)
 				PopActiveSnapshot();
 				CommitTransactionCommand();
 
-				// XXX: kill myself somehow?
+				/* XXX: kill myself somehow? */
 				proc_exit(0);
 			}
 
@@ -1685,7 +1715,8 @@ MtmMonitor(Datum arg)
 		}
 
 		/*
-		 * Check and restart resolver and receivers if its stopped by any error.
+		 * Check and restart resolver and receivers if its stopped by any
+		 * error.
 		 */
 		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
 		{
@@ -1702,12 +1733,12 @@ MtmMonitor(Datum arg)
 			{
 				mtm_log(MtmStateMessage, "Restart receiver for the node%d", i + 1);
 				/* Receiver has finished by some kind of mistake. Start it. */
-				receivers[i] = MtmStartReceiver(i+1, MyDatabaseId,
-														GetUserId(), MyProcPid);
+				receivers[i] = MtmStartReceiver(i + 1, MyDatabaseId,
+												GetUserId(), MyProcPid);
 			}
 		}
 
-		// XXX: add tx start/stop to clear mcxt?
+		/* XXX: add tx start/stop to clear mcxt? */
 		check_status_requests(mtm_cfg);
 
 		MtmRefreshClusterStatus();

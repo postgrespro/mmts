@@ -42,11 +42,11 @@
 typedef enum
 {
 	MTM_STATE_LOCK_ID
-} MtmLockIds;
+}			MtmLockIds;
 
 typedef struct
 {
-	TimestampTz	last_timestamp;
+	TimestampTz last_timestamp;
 	slock_t		mutex;
 } MtmTime;
 
@@ -54,8 +54,8 @@ static MtmTime *mtm_time;
 
 #define MTM_SHMEM_SIZE (8*1024*1024)
 
-void _PG_init(void);
-void _PG_fini(void);
+void		_PG_init(void);
+void		_PG_fini(void);
 
 PG_MODULE_MAGIC;
 
@@ -66,25 +66,25 @@ PG_FUNCTION_INFO_V1(mtm_init_cluster);
 PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
 
 static size_t MtmGetTransactionStateSize(void);
-static void	  MtmSerializeTransactionState(void* ctx);
-static void	  MtmDeserializeTransactionState(void* ctx);
-static void*  MtmCreateSavepointContext(void);
-static void	  MtmRestoreSavepointContext(void* ctx);
-static void	  MtmReleaseSavepointContext(void* ctx);
-static void*  MtmSuspendTransaction(void);
-static void   MtmResumeTransaction(void* ctx);
+static void MtmSerializeTransactionState(void *ctx);
+static void MtmDeserializeTransactionState(void *ctx);
+static void *MtmCreateSavepointContext(void);
+static void MtmRestoreSavepointContext(void *ctx);
+static void MtmReleaseSavepointContext(void *ctx);
+static void *MtmSuspendTransaction(void);
+static void MtmResumeTransaction(void *ctx);
 
 static void MtmShmemStartup(void);
 
 static void launcher_init(void);
-void launcher_main(Datum main_arg);
-void drop_node_entry(int node_id);
+void		launcher_main(Datum main_arg);
+void		drop_node_entry(int node_id);
 
-MtmShared* Mtm;
+MtmShared  *Mtm;
 
 MemoryContext MtmApplyContext;
 
-// XXX: do we really need all this guys (except ddd)?
+/*  XXX: do we really need all this guys (except ddd)? */
 static TransactionManager MtmTM =
 {
 	MtmDetectGlobalDeadLock,
@@ -99,20 +99,20 @@ static TransactionManager MtmTM =
 	MtmResumeTransaction
 };
 
-// XXX
-bool  MtmBackgroundWorker;
-int	  MtmReplicationNodeId;
+/*  XXX */
+bool		MtmBackgroundWorker;
+int			MtmReplicationNodeId;
 
 /*
  * Maximal size of transaction after which transaction is written to the disk.
  * Also defines bgwpool shared queue size (See BgwPoolStart routine).
  */
-int	  MtmTransSpillThreshold;
+int			MtmTransSpillThreshold;
 
-int	  MtmHeartbeatSendTimeout;
-int	  MtmHeartbeatRecvTimeout;
-char* MtmRefereeConnStr;
-bool  MtmBreakConnection;
+int			MtmHeartbeatSendTimeout;
+int			MtmHeartbeatRecvTimeout;
+char	   *MtmRefereeConnStr;
+bool		MtmBreakConnection;
 
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
@@ -143,13 +143,14 @@ MtmGetIncreasingTimestamp()
 	return now;
 }
 
-void MtmSleep(int64 usec)
+void
+MtmSleep(int64 usec)
 {
 	TimestampTz waketm = GetCurrentTimestamp() + usec;
 
 	for (;;)
 	{
-		int rc;
+		int			rc;
 		TimestampTz sleepfor;
 
 		CHECK_FOR_INTERRUPTS();
@@ -159,8 +160,8 @@ void MtmSleep(int64 usec)
 			break;
 
 		rc = WaitLatch(MyLatch,
-						WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						sleepfor/1000.0, WAIT_EVENT_BGWORKER_STARTUP);
+					   WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   sleepfor / 1000.0, WAIT_EVENT_BGWORKER_STARTUP);
 
 		if (rc & WL_POSTMASTER_DEATH)
 			proc_exit(1);
@@ -179,41 +180,47 @@ MtmGetTransactionStateSize(void)
 }
 
 static void
-MtmSerializeTransactionState(void* ctx)
+MtmSerializeTransactionState(void *ctx)
 {
 	memcpy(ctx, &MtmTx, sizeof(MtmTx));
 }
 
 static void
-MtmDeserializeTransactionState(void* ctx)
+MtmDeserializeTransactionState(void *ctx)
 {
 	memcpy(&MtmTx, ctx, sizeof(MtmTx));
 }
 
-static void* MtmCreateSavepointContext(void)
+static void *
+MtmCreateSavepointContext(void)
 {
 	return NULL;
 }
 
-static void	 MtmRestoreSavepointContext(void* ctx)
+static void
+MtmRestoreSavepointContext(void *ctx)
 {
 }
 
-static void	 MtmReleaseSavepointContext(void* ctx)
+static void
+MtmReleaseSavepointContext(void *ctx)
 {
 }
 
-static void* MtmSuspendTransaction(void)
+static void *
+MtmSuspendTransaction(void)
 {
-	MtmCurrentTrans* ctx = malloc(sizeof(MtmCurrentTrans));
+	MtmCurrentTrans *ctx = malloc(sizeof(MtmCurrentTrans));
+
 	*ctx = MtmTx;
 	MtmBeginTransaction();
 	return ctx;
 }
 
-static void MtmResumeTransaction(void* ctx)
+static void
+MtmResumeTransaction(void *ctx)
 {
-	MtmTx = *(MtmCurrentTrans*)ctx;
+	MtmTx = *(MtmCurrentTrans *) ctx;
 	free(ctx);
 }
 
@@ -224,8 +231,8 @@ static void MtmResumeTransaction(void* ctx)
 static void
 MtmSharedShmemStartup()
 {
-	bool found;
-	int i;
+	bool		found;
+	int			i;
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
@@ -236,7 +243,7 @@ MtmSharedShmemStartup()
 		SpinLockInit(&mtm_time->mutex);
 	}
 
-	Mtm = (MtmShared*) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared), &found);
+	Mtm = (MtmShared *) ShmemInitStruct(MULTIMASTER_NAME, sizeof(MtmShared), &found);
 	if (!found)
 	{
 		MemSet(Mtm, 0, sizeof(MtmShared));
@@ -283,154 +290,155 @@ _PG_init(void)
 	 * In order to create our shared memory area, we have to be loaded via
 	 * shared_preload_libraries.  If not, fall out without hooking into any of
 	 * the main system.	 (We don't throw error here because it seems useful to
-	 * allow the cs_* functions to be created even when the
-	 * module isn't active.	 The functions must protect themselves against
-	 * being called then, however.)
+	 * allow the cs_* functions to be created even when the module isn't
+	 * active.	 The functions must protect themselves against being called
+	 * then, however.)
 	 */
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
 	DefineCustomIntVariable(
-		"multimaster.heartbeat_send_timeout",
-		"Timeout in milliseconds of sending heartbeat messages",
-		"Period of broadcasting heartbeat messages by arbiter to all nodes",
-		&MtmHeartbeatSendTimeout,
-		200,
-		1,
-		INT_MAX,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							"multimaster.heartbeat_send_timeout",
+							"Timeout in milliseconds of sending heartbeat messages",
+							"Period of broadcasting heartbeat messages by arbiter to all nodes",
+							&MtmHeartbeatSendTimeout,
+							200,
+							1,
+							INT_MAX,
+							PGC_BACKEND,
+							0,
+							NULL,
+							NULL,
+							NULL
+		);
 
 	DefineCustomIntVariable(
-		"multimaster.heartbeat_recv_timeout",
-		"Timeout in milliseconds of receiving heartbeat messages",
-		"If no heartbeat message is received from node within this period, it assumed to be dead",
-		&MtmHeartbeatRecvTimeout,
-		2000,
-		1,
-		INT_MAX,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							"multimaster.heartbeat_recv_timeout",
+							"Timeout in milliseconds of receiving heartbeat messages",
+							"If no heartbeat message is received from node within this period, it assumed to be dead",
+							&MtmHeartbeatRecvTimeout,
+							2000,
+							1,
+							INT_MAX,
+							PGC_BACKEND,
+							0,
+							NULL,
+							NULL,
+							NULL
+		);
 
 	DefineCustomIntVariable(
-		"multimaster.trans_spill_threshold",
-		"Maximal size of transaction after which transaction is written to the disk",
-		NULL,
-		&MtmTransSpillThreshold,
-		100 * 1024, /* 100Mb */
-		0,
-		MaxAllocSize/1024,
-		PGC_SIGHUP,
-		GUC_UNIT_KB,
-		NULL,
-		NULL,
-		NULL
-	);
+							"multimaster.trans_spill_threshold",
+							"Maximal size of transaction after which transaction is written to the disk",
+							NULL,
+							&MtmTransSpillThreshold,
+							100 * 1024, /* 100Mb */
+							0,
+							MaxAllocSize / 1024,
+							PGC_SIGHUP,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL
+		);
 
 	DefineCustomBoolVariable(
-		"multimaster.monotonic_sequences",
-		"Enforce monotinic behaviour of sequence values obtained from different nodes",
-		NULL,
-		&MtmMonotonicSequences,
-		false,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							 "multimaster.monotonic_sequences",
+							 "Enforce monotinic behaviour of sequence values obtained from different nodes",
+							 NULL,
+							 &MtmMonotonicSequences,
+							 false,
+							 PGC_BACKEND,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL
+		);
 
-	// XXX
+	/* XXX */
 	DefineCustomBoolVariable(
-		"multimaster.ignore_tables_without_pk",
-		"Do not replicate tables without primary key",
-		NULL,
-		&MtmIgnoreTablesWithoutPk,
-		false,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							 "multimaster.ignore_tables_without_pk",
+							 "Do not replicate tables without primary key",
+							 NULL,
+							 &MtmIgnoreTablesWithoutPk,
+							 false,
+							 PGC_BACKEND,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL
+		);
 
 	DefineCustomStringVariable(
-		"multimaster.referee_connstring",
-		"Referee connection string",
-		NULL,
-		&MtmRefereeConnStr,
-		"",
-		PGC_POSTMASTER,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							   "multimaster.referee_connstring",
+							   "Referee connection string",
+							   NULL,
+							   &MtmRefereeConnStr,
+							   "",
+							   PGC_POSTMASTER,
+							   0,
+							   NULL,
+							   NULL,
+							   NULL
+		);
 
 	DefineCustomBoolVariable(
-		"multimaster.volkswagen_mode",
-		"Pretend to be normal postgres. This means skip some NOTICE's and use local sequences. Default false.",
-		NULL,
-		&MtmVolksWagenMode,
-		false,
-		PGC_BACKEND,
-		GUC_NO_SHOW_ALL,
-		NULL,
-		NULL,
-		NULL
-	);
+							 "multimaster.volkswagen_mode",
+							 "Pretend to be normal postgres. This means skip some NOTICE's and use local sequences. Default false.",
+							 NULL,
+							 &MtmVolksWagenMode,
+							 false,
+							 PGC_BACKEND,
+							 GUC_NO_SHOW_ALL,
+							 NULL,
+							 NULL,
+							 NULL
+		);
 
 	DefineCustomIntVariable(
-		"multimaster.max_workers",
-		"Maximal number of multimaster dynamic executor workers",
-		NULL,
-		&MtmMaxWorkers,
-		100,
-		0,
-		INT_MAX,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							"multimaster.max_workers",
+							"Maximal number of multimaster dynamic executor workers",
+							NULL,
+							&MtmMaxWorkers,
+							100,
+							0,
+							INT_MAX,
+							PGC_BACKEND,
+							0,
+							NULL,
+							NULL,
+							NULL
+		);
 
 	DefineCustomStringVariable(
-		"multimaster.remote_functions",
-		"List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
-		NULL,
-		&MtmRemoteFunctionsList,
-		"lo_creat,lo_create,lo_unlink,lo_open,loread,lowrite,lo_lseek,lo_tell,lo_close,lo_export"
-		"pathman.create_single_range_partition,pathman.drop_partitions,pathman.create_hash_partitions,pathman.create_range_partitions,pathman.split_range_partition,pathman.drop_range_partition,pathman.add_range_partition,pathman.attach_range_partition,pathman.detach_range_partition,pathman.prepend_range_partition,pathman.append_range_partition,pathman.set_auto,pathman.set_enable_parent,pathman.merge_range_partitions,pathman.add_to_pathman_config,pathman.set_spawn_using_bgw,pathman.set_init_callback,pathman.set_interval,pathman.partition_table_concurrently,"
-		"public.create_single_range_partition,public.drop_partitions,public.create_hash_partitions,public.create_range_partitions,public.split_range_partition,public.drop_range_partition,public.add_range_partition,public.attach_range_partition,public.detach_range_partition,public.prepend_range_partition,public.append_range_partition,public.set_auto,public.set_enable_parent,public.merge_range_partitions,public.add_to_pathman_config,public.set_spawn_using_bgw,public.set_init_callback,public.set_interval,public.partition_table_concurrently"
-		,
-		PGC_USERSET, /* context */
-		GUC_LIST_INPUT, /* flags */
-		NULL,		 /* GucStringCheckHook check_hook */
-		MtmSetRemoteFunction,		 /* GucStringAssignHook assign_hook */
-		NULL		 /* GucShowHook show_hook */
-	);
+							   "multimaster.remote_functions",
+							   "List of function names which should be executed remotely at all multimaster nodes instead of executing them at master and replicating result of their work",
+							   NULL,
+							   &MtmRemoteFunctionsList,
+							   "lo_creat,lo_create,lo_unlink,lo_open,loread,lowrite,lo_lseek,lo_tell,lo_close,lo_export"
+							   "pathman.create_single_range_partition,pathman.drop_partitions,pathman.create_hash_partitions,pathman.create_range_partitions,pathman.split_range_partition,pathman.drop_range_partition,pathman.add_range_partition,pathman.attach_range_partition,pathman.detach_range_partition,pathman.prepend_range_partition,pathman.append_range_partition,pathman.set_auto,pathman.set_enable_parent,pathman.merge_range_partitions,pathman.add_to_pathman_config,pathman.set_spawn_using_bgw,pathman.set_init_callback,pathman.set_interval,pathman.partition_table_concurrently,"
+							   "public.create_single_range_partition,public.drop_partitions,public.create_hash_partitions,public.create_range_partitions,public.split_range_partition,public.drop_range_partition,public.add_range_partition,public.attach_range_partition,public.detach_range_partition,public.prepend_range_partition,public.append_range_partition,public.set_auto,public.set_enable_parent,public.merge_range_partitions,public.add_to_pathman_config,public.set_spawn_using_bgw,public.set_init_callback,public.set_interval,public.partition_table_concurrently"
+							   ,
+							   PGC_USERSET, /* context */
+							   GUC_LIST_INPUT,	/* flags */
+							   NULL,	/* GucStringCheckHook check_hook */
+							   MtmSetRemoteFunction,	/* GucStringAssignHook
+														 * assign_hook */
+							   NULL /* GucShowHook show_hook */
+		);
 
 	DefineCustomBoolVariable(
-		"multimaster.break_connection",
-		"Break connection with client when node is no online",
-		NULL,
-		&MtmBreakConnection,
-		false,
-		PGC_BACKEND,
-		0,
-		NULL,
-		NULL,
-		NULL
-	);
+							 "multimaster.break_connection",
+							 "Break connection with client when node is no online",
+							 NULL,
+							 &MtmBreakConnection,
+							 false,
+							 PGC_BACKEND,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL
+		);
 
 	MtmDeadlockDetectorInit(MTM_MAX_NODES);
 
@@ -489,11 +497,11 @@ MtmIsEnabled()
 	return OidIsValid(get_publication_oid(MULTIMASTER_NAME, true));
 }
 
-// XXX: delete that
+/*  XXX: delete that */
 bool
 MtmAllApplyWorkersFinished()
 {
-	int i;
+	int			i;
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
@@ -530,22 +538,22 @@ MtmAllApplyWorkersFinished()
 static bool
 check_config(int node_id)
 {
-	bool	ok = true;
-	int		workers_required;
+	bool		ok = true;
+	int			workers_required;
 
 	if (max_prepared_xacts < 1)
 	{
 		mtm_log(WARNING,
-			 "multimaster requires max_prepared_transactions > 0, "
-			 "because all transactions are implicitly two-phase");
+				"multimaster requires max_prepared_transactions > 0, "
+				"because all transactions are implicitly two-phase");
 		ok = false;
 	}
 
 	if (node_id <= 0 || node_id > MTM_MAX_NODES)
 	{
 		mtm_log(WARNING,
-			"node_id should be in range from 1 to %d, but %d is given",
-			MTM_MAX_NODES, node_id);
+				"node_id should be in range from 1 to %d, but %d is given",
+				MTM_MAX_NODES, node_id);
 		ok = false;
 	}
 
@@ -553,40 +561,40 @@ check_config(int node_id)
 	if (max_worker_processes < workers_required)
 	{
 		mtm_log(WARNING,
-			 "multimaster requires max_worker_processes >= %d",
-			 workers_required);
+				"multimaster requires max_worker_processes >= %d",
+				workers_required);
 		ok = false;
 	}
 
 	if (wal_level != WAL_LEVEL_LOGICAL)
 	{
 		mtm_log(WARNING,
-			 "multimaster requires wal_level = 'logical', "
-			 "because it is build on top of logical replication");
+				"multimaster requires wal_level = 'logical', "
+				"because it is build on top of logical replication");
 		ok = false;
 	}
 
 	if (max_wal_senders < node_id)
 	{
 		mtm_log(WARNING,
-			 "multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
-			 node_id);
+				"multimaster requires max_wal_senders >= %d (multimaster.max_nodes), ",
+				node_id);
 		ok = false;
 	}
 
 	if (max_replication_slots < node_id)
 	{
 		mtm_log(WARNING,
-			 "multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
-			 node_id);
+				"multimaster requires max_replication_slots >= %d (multimaster.max_nodes), ",
+				node_id);
 		ok = false;
 	}
 
 	return ok;
 }
 
-// XXX: check also that nodes are different?
-// XXX: add connection check to after create triggers?
+/*  XXX: check also that nodes are different? */
+/*  XXX: add connection check to after create triggers? */
 Datum
 mtm_init_cluster(PG_FUNCTION_ARGS)
 {
@@ -609,8 +617,8 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 
 	if (n_peers + 1 >= MTM_MAX_NODES)
 		mtm_log(ERROR,
-			"multimaster allows at maximum %d nodes, but %d was given",
-			MTM_MAX_NODES, n_peers + 1);
+				"multimaster allows at maximum %d nodes, but %d was given",
+				MTM_MAX_NODES, n_peers + 1);
 
 	if (n_peers < 1)
 		mtm_log(ERROR, "at least one peer node should be specified");
@@ -630,6 +638,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 		if (PQstatus(peer_conns[i]) != CONNECTION_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+
 			PQfinish(peer_conns[i]);
 			mtm_log(ERROR,
 					"Could not connect to a node '%s' from this node: %s",
@@ -641,6 +650,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+
 			PQclear(res);
 			PQfinish(peer_conns[i]);
 			mtm_log(ERROR,
@@ -658,12 +668,13 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 							 j == i ? 't' : 'f');
 		}
 		appendStringInfo(&query, "(%d, $$%s$$, '%c', 'f')",
-							 1, my_conninfo, 'f');
+						 1, my_conninfo, 'f');
 
 		res = PQexec(peer_conns[i], query.data);
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+
 			PQclear(res);
 			PQfinish(peer_conns[i]);
 			mtm_log(ERROR, "Failed to fill mtm.cluster_nodes on '%s': %s",
@@ -680,7 +691,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	for (i = 0; i < n_peers; i++)
 	{
 		appendStringInfo(&local_query, "(%d, $$%s$$, 'f', 'f'), ",
-							i + 2, TextDatumGetCString(peers_datums[i]));
+						 i + 2, TextDatumGetCString(peers_datums[i]));
 	}
 	appendStringInfo(&local_query, "(%d, $$%s$$, 't', 'f')",
 					 1, my_conninfo);
@@ -717,20 +728,20 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	Assert(TRIGGER_FIRED_BY_INSERT(trigdata->tg_event));
 
 	node_id = DatumGetInt32(heap_getattr(trigdata->tg_trigtuple,
-							 Anum_mtm_nodes_id,
-							 RelationGetDescr(trigdata->tg_relation),
-							 &node_id_isnull));
+										 Anum_mtm_nodes_id,
+										 RelationGetDescr(trigdata->tg_relation),
+										 &node_id_isnull));
 	Assert(!node_id_isnull);
 
 	conninfo = text_to_cstring(DatumGetTextP(heap_getattr(trigdata->tg_trigtuple,
-							 Anum_mtm_nodes_connifo,
-							 RelationGetDescr(trigdata->tg_relation),
-							 &conninfo_isnull)));
+														  Anum_mtm_nodes_connifo,
+														  RelationGetDescr(trigdata->tg_relation),
+														  &conninfo_isnull)));
 
 	is_self = DatumGetBool(heap_getattr(trigdata->tg_trigtuple,
-							 Anum_mtm_nodes_is_self,
-							 RelationGetDescr(trigdata->tg_relation),
-							 &is_self_isnull));
+										Anum_mtm_nodes_is_self,
+										RelationGetDescr(trigdata->tg_relation),
+										&is_self_isnull));
 	Assert(!is_self_isnull);
 
 	if (!check_config(node_id))
@@ -748,8 +759,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		pub_stmt->for_all_tables = false;
 		pub_stmt->tables = NIL;
 		pub_stmt->options = list_make1(
-			makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
-		);
+									   makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
+			);
 		CreatePublication(pub_stmt);
 
 		/* liftoff */
@@ -765,23 +776,27 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		Assert(!conninfo_isnull);
 
 		/*
-		 * Dummy subscription. It is used by launcher to start workers in databases
-		 * where multimaster is configured (pg_subscription is shared catalog
-		 * relation, so launcher can find it from postgres database). Also our
-		 * workers and backends are subscribed to cache invalidations of
-		 * pg_publication, so that can know aboun node creating/deletion.
+		 * Dummy subscription. It is used by launcher to start workers in
+		 * databases where multimaster is configured (pg_subscription is
+		 * shared catalog relation, so launcher can find it from postgres
+		 * database). Also our workers and backends are subscribed to cache
+		 * invalidations of pg_publication, so that can know aboun node
+		 * creating/deletion.
 		 */
 		cs_stmt->subname = psprintf(MTM_SUBNAME_FMT, node_id);
 		cs_stmt->conninfo = conninfo;
 		cs_stmt->publication = list_make1(makeString(MULTIMASTER_NAME));
 		cs_stmt->options = list_make4(
-			makeDefElem("slot_name", (Node *) makeString("none"), -1),
-			makeDefElem("create_slot", (Node *) makeString("false"), -1),
-			makeDefElem("connect", (Node *) makeString("false"), -1),
-			makeDefElem("enabled", (Node *) makeString("false"), -1)
-		);
+									  makeDefElem("slot_name", (Node *) makeString("none"), -1),
+									  makeDefElem("create_slot", (Node *) makeString("false"), -1),
+									  makeDefElem("connect", (Node *) makeString("false"), -1),
+									  makeDefElem("enabled", (Node *) makeString("false"), -1)
+			);
 
-		/* supress unecessary and scary warning ('tables were not subscribed ..') */
+		/*
+		 * supress unecessary and scary warning ('tables were not subscribed
+		 * ..')
+		 */
 		client_min_messages = ERROR;
 		log_min_messages = ERROR;
 
@@ -792,10 +807,10 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		log_min_messages = saved_log_min_messages;
 
 		/*
-		 * Create origin for this neighbour.
-		 * It is tempting to use 'pg_#{suboid}' but accessing syscache in
-		 * MtmLoadConfig() will lead to deadlock if receiver tries to load
-		 * config just before committing tx that modified subscriptions.
+		 * Create origin for this neighbour. It is tempting to use
+		 * 'pg_#{suboid}' but accessing syscache in MtmLoadConfig() will lead
+		 * to deadlock if receiver tries to load config just before committing
+		 * tx that modified subscriptions.
 		 *
 		 * Other way around is to write suboid to mtm.cluster_nodes tuple, but
 		 * that is too much ado for now.
@@ -821,16 +836,16 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 	Assert(TRIGGER_FIRED_BY_DELETE(trigdata->tg_event));
 
 	node_id = DatumGetInt32(heap_getattr(trigdata->tg_trigtuple,
-							 Anum_mtm_nodes_id,
-							 RelationGetDescr(trigdata->tg_relation),
-							 &node_id_isnull));
+										 Anum_mtm_nodes_id,
+										 RelationGetDescr(trigdata->tg_relation),
+										 &node_id_isnull));
 	Assert(!node_id_isnull);
 	Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
 
 	is_self = DatumGetBool(heap_getattr(trigdata->tg_trigtuple,
-							 Anum_mtm_nodes_is_self,
-							 RelationGetDescr(trigdata->tg_relation),
-							 &is_self_isnull));
+										Anum_mtm_nodes_is_self,
+										RelationGetDescr(trigdata->tg_relation),
+										&is_self_isnull));
 	Assert(!is_self_isnull);
 
 	mtm_log(NodeMgmt, "Dropping node%d", node_id);
@@ -841,7 +856,7 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 	 */
 	if (is_self)
 	{
-		DropStmt *dp_stmt = makeNode(DropStmt);
+		DropStmt   *dp_stmt = makeNode(DropStmt);
 
 		dp_stmt->removeType = OBJECT_PUBLICATION;
 		dp_stmt->behavior = DROP_CASCADE;
@@ -879,7 +894,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	MtmConfig  *cfg = MtmLoadConfig();
 	XLogRecPtr	curr_lsn;
 	int			i;
-	MtmNode *new_node;
+	MtmNode    *new_node;
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
@@ -902,17 +917,19 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		char	   *msg = pchomp(PQerrorMessage(conn));
+
 		PQfinish(conn);
 		mtm_log(ERROR, "Could not connect to a node '%s': %s", conninfo, msg);
 	}
 
 	/* save info about basebackup */
 	res = PQexec(conn, psprintf("insert into mtm.config values('basebackup', "
-				"'{\"node_id\": %d,\"end_lsn\": " UINT64_FORMAT "}')",
-				cfg->my_node_id, end_lsn));
+								"'{\"node_id\": %d,\"end_lsn\": " UINT64_FORMAT "}')",
+								cfg->my_node_id, end_lsn));
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
 		char	   *msg = pchomp(PQerrorMessage(conn));
+
 		PQclear(res);
 		PQfinish(conn);
 		mtm_log(ERROR, "Can't fill mtm.config on '%s': %s", conninfo, msg);
@@ -920,11 +937,12 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PQclear(res);
 
 	res = PQexec(conn, psprintf("insert into mtm.syncpoints values "
-				"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint, pg_current_wal_lsn()::bigint)",
-				cfg->my_node_id, end_lsn));
+								"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint, pg_current_wal_lsn()::bigint)",
+								cfg->my_node_id, end_lsn));
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
 		char	   *msg = pchomp(PQerrorMessage(conn));
+
 		PQclear(res);
 		PQfinish(conn);
 		mtm_log(ERROR, "Can't fill mtm.syncpoints on '%s': %s", conninfo, msg);
@@ -945,7 +963,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			continue;
 
 		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
-		Mtm->pools[node_id-1].n_holders += 1;
+		Mtm->pools[node_id - 1].n_holders += 1;
 		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 
@@ -954,14 +972,14 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	{
 
 		while (!MtmAllApplyWorkersFinished())
-			MtmSleep(USECS_PER_SEC/10);
+			MtmSleep(USECS_PER_SEC / 10);
 
 		curr_lsn = GetXLogWriteRecPtr();
 
 		for (i = 0; i < cfg->n_nodes; i++)
 		{
 			char	   *ro_name;
-			RepOriginId	ro_id;
+			RepOriginId ro_id;
 			XLogRecPtr	olsn;
 			char	   *msg;
 
@@ -973,7 +991,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			olsn = replorigin_get_progress(ro_id, false);
 
 			msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
-						cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
+						   cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
 
 			replorigin_session_origin = cfg->nodes[i].origin_id;
 			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
@@ -982,6 +1000,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 
 		{
 			char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
+
 			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 		}
 
@@ -997,7 +1016,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 
 
 			LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
-			Mtm->pools[node_id-1].n_holders -= 1;
+			Mtm->pools[node_id - 1].n_holders -= 1;
 			LWLockRelease(&Mtm->pools[node_id - 1].lock);
 		}
 		ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
@@ -1014,7 +1033,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			continue;
 
 		LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
-		Mtm->pools[node_id-1].n_holders -= 1;
+		Mtm->pools[node_id - 1].n_holders -= 1;
 		LWLockRelease(&Mtm->pools[node_id - 1].lock);
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
@@ -1030,6 +1049,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
 	{
 		char	   *msg = pchomp(PQerrorMessage(conn));
+
 		PQclear(res);
 		PQfinish(conn);
 		mtm_log(ERROR, "Failed to insert new mtm.cluster_nodes on '%s': %s",
@@ -1068,7 +1088,7 @@ MtmLoadConfig()
 	int			save_sec_context;
 
 	cfg = (MtmConfig *) MemoryContextAllocZero(TopMemoryContext,
-										   sizeof(MtmConfig));
+											   sizeof(MtmConfig));
 
 	if (!inside_tx)
 		StartTransactionCommand();
@@ -1144,13 +1164,13 @@ MtmLoadConfig()
 	for (i = 0; i < cfg->n_nodes; i++)
 	{
 		char	   *origin_name;
-		RepOriginId	origin_id;
+		RepOriginId origin_id;
 		int			node_id = cfg->nodes[i].node_id;
 
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		origin_id = replorigin_by_name(origin_name, true);
 
-		// Assert(origin_id != InvalidRepOriginId || MtmIsMonitorWorker);
+		/* Assert(origin_id != InvalidRepOriginId || MtmIsMonitorWorker); */
 
 		cfg->nodes[i].origin_id = origin_id;
 	}
@@ -1210,8 +1230,8 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 		MtmStateFill(new_cfg);
 
 	/*
-	 * Construct bitmapsets from old and new mtm_config's and find
-	 * out whether some nodes were added or deleted.
+	 * Construct bitmapsets from old and new mtm_config's and find out whether
+	 * some nodes were added or deleted.
 	 */
 	if (old_cfg != NULL)
 	{
@@ -1230,10 +1250,10 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	if (node_add_cb)
 	{
 		/*
-		 * After a basebackup we should first run receiver from backup
-		 * source node to start commiting prepared transaction to be able
-		 * to finish logical slot creation (which wait for all currently
-		 * running transactions to finish).
+		 * After a basebackup we should first run receiver from backup source
+		 * node to start commiting prepared transaction to be able to finish
+		 * logical slot creation (which wait for all currently running
+		 * transactions to finish).
 		 */
 		if (new_cfg->backup_node_id > 0)
 		{
@@ -1260,7 +1280,7 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 }
 
 /* Helper to find node with specified id in cfg->nodes */
-// XXX: add missing ok
+/*  XXX: add missing ok */
 MtmNode *
 MtmNodeById(MtmConfig *cfg, int node_id)
 {
@@ -1310,11 +1330,11 @@ launcher_init()
 void
 launcher_main(Datum main_arg)
 {
-	Relation		rel;
-	HeapScanDesc	scan;
-	HeapTuple		tup;
-	HASHCTL			hash_info;
-	HTAB		   *already_started;
+	Relation	rel;
+	HeapScanDesc scan;
+	HeapTuple	tup;
+	HASHCTL		hash_info;
+	HTAB	   *already_started;
 
 	/* init this worker */
 	pqsignal(SIGTERM, die);
@@ -1329,11 +1349,12 @@ launcher_main(Datum main_arg)
 	BackgroundWorkerInitializeConnection(NULL, NULL, 0);
 
 	/*
-	 * Start a transaction so we can access pg_subscription, and get a snapshot.
-	 * We don't have a use for the snapshot itself, but we're interested in
-	 * the secondary effect that it sets RecentGlobalXmin.  (This is critical
-	 * for anything that reads heap pages, because HOT may decide to prune
-	 * them even if the process doesn't attempt to modify any tuples.)
+	 * Start a transaction so we can access pg_subscription, and get a
+	 * snapshot. We don't have a use for the snapshot itself, but we're
+	 * interested in the secondary effect that it sets RecentGlobalXmin.
+	 * (This is critical for anything that reads heap pages, because HOT may
+	 * decide to prune them even if the process doesn't attempt to modify any
+	 * tuples.)
 	 */
 	StartTransactionCommand();
 	(void) GetTransactionSnapshot();
@@ -1373,15 +1394,15 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
 	Tuplestorestate *tupstore;
 	Datum		values[BGWPOOL_STAT_COLS];
 	bool		nulls[BGWPOOL_STAT_COLS];
-	int i;
+	int			i;
 
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	MemoryContext per_query_ctx;
 	MemoryContext oldcontext;
 
 	/* Build a tuple descriptor for our result type */
-		if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-			elog(ERROR, "return type must be a row type");
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
 
 	per_query_ctx = rsinfo->econtext->ecxt_per_query_memory;
 	oldcontext = MemoryContextSwitchTo(per_query_ctx);

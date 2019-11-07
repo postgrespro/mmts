@@ -15,11 +15,11 @@
 #include "utils/relcache.h"
 
 /* GUCs */
-extern bool		MtmMonotonicSequences;
-extern char	   *MtmRemoteFunctionsList;
-extern bool		MtmRemoteFunctionsUpdating;
-extern bool		MtmVolksWagenMode;
-extern bool		MtmIgnoreTablesWithoutPk;
+extern bool MtmMonotonicSequences;
+extern char *MtmRemoteFunctionsList;
+extern bool MtmRemoteFunctionsUpdating;
+extern bool MtmVolksWagenMode;
+extern bool MtmIgnoreTablesWithoutPk;
 
 
 extern void MtmDDLReplicationInit(void);
@@ -28,9 +28,9 @@ extern bool MtmIsRelationLocal(Relation rel);
 extern void MtmDDLResetStatement(void);
 extern void MtmApplyDDLMessage(const char *messageBody, bool transactional);
 extern void MtmDDLResetApplyState(void);
-extern void MtmSetRemoteFunction(char const* list, void* extra);
+extern void MtmSetRemoteFunction(char const *list, void *extra);
 extern void MtmToggleDML(void);
-extern void MtmMakeTableLocal(char const* schema, char const* name, bool locked);
+extern void MtmMakeTableLocal(char const *schema, char const *name, bool locked);
 extern void multimaster_fmgr_hook(FmgrHookEventType event, FmgrInfo *flinfo, Datum *private);
 
 #endif

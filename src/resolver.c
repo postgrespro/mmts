@@ -37,8 +37,8 @@
 
 typedef struct
 {
-	LWLock		   *lock;
-	pid_t			pid;
+	LWLock	   *lock;
+	pid_t		pid;
 } resolver_state_data;
 
 static resolver_state_data *resolver_state;
@@ -48,22 +48,22 @@ static resolver_state_data *resolver_state;
  */
 typedef struct
 {
-	char			gid[GIDSIZE];
-	MtmTxState		state[MTM_MAX_NODES];
-	int				xact_node_id;
-	int				n_participants;
+	char		gid[GIDSIZE];
+	MtmTxState	state[MTM_MAX_NODES];
+	int			xact_node_id;
+	int			n_participants;
 } resolver_tx;
 
 static HTAB *gid2tx = NULL;
 
 /* sender_id to node_id mapping */
-static int		sender_to_node[MTM_MAX_NODES];
-static bool		config_valid;
+static int	sender_to_node[MTM_MAX_NODES];
+static bool config_valid;
 
 /* Auxiliary stuff for bgworker lifecycle */
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
-static MtmConfig  *mtm_cfg = NULL;
+static MtmConfig *mtm_cfg = NULL;
 
 /*****************************************************************************
  *
@@ -74,18 +74,18 @@ static MtmConfig  *mtm_cfg = NULL;
 static Size
 resolver_shmem_size(void)
 {
-	Size	size = 0;
+	Size		size = 0;
 
 	size = add_size(size, sizeof(resolver_state_data));
-	size = add_size(size, MaxBackends*sizeof(resolver_tx));
+	size = add_size(size, MaxBackends * sizeof(resolver_tx));
 	return MAXALIGN(size);
 }
 
 static void
 resolver_shmem_startup_hook()
 {
-	HASHCTL	hash_info;
-	bool	found;
+	HASHCTL		hash_info;
+	bool		found;
 
 	if (PreviousShmemStartupHook)
 		PreviousShmemStartupHook();
@@ -104,7 +104,7 @@ resolver_shmem_startup_hook()
 	/* init map with current unresolved transactions */
 	hash_info.keysize = GIDSIZE;
 	hash_info.entrysize = sizeof(resolver_tx);
-	gid2tx = ShmemInitHash("gid2tx", MaxBackends, 2*MaxBackends, &hash_info,
+	gid2tx = ShmemInitHash("gid2tx", MaxBackends, 2 * MaxBackends, &hash_info,
 						   HASH_ELEM);
 
 	LWLockRelease(AddinShmemInitLock);
@@ -133,7 +133,7 @@ ResolverStart(Oid db_id, Oid user_id)
 	BackgroundWorkerHandle *handle;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS |	BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = BGW_NEVER_RESTART;
 
@@ -162,10 +162,10 @@ ResolverStart(Oid db_id, Oid user_id)
 static bool
 load_tasks(int node_id, int n_participants)
 {
-	PreparedTransaction	pxacts;
-	int					n_xacts,
-						added_xacts = 0,
-						i;
+	PreparedTransaction pxacts;
+	int			n_xacts,
+				added_xacts = 0,
+				i;
 
 	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
 	Assert(node_id == -1 || node_id > 0);
@@ -182,8 +182,8 @@ load_tasks(int node_id, int n_participants)
 		/* user-generated 2pc || resolve all || resolve only our txes */
 		if (xact_node_id < 0 || node_id == -1 || node_id == xact_node_id)
 		{
-			int				j;
-			resolver_tx	   *tx;
+			int			j;
+			resolver_tx *tx;
 
 			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
 			added_xacts++;
@@ -210,7 +210,7 @@ load_tasks(int node_id, int n_participants)
 void
 ResolveTransactionsForNode(int node_id, int n_all_nodes)
 {
-	pid_t resolver_pid;
+	pid_t		resolver_pid;
 
 	LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
 	load_tasks(node_id, n_all_nodes);
@@ -230,8 +230,8 @@ ResolveAllTransactions(int n_all_nodes)
 void
 ResolveForRefereeWinner(int n_all_nodes)
 {
-	HASH_SEQ_STATUS		hash_seq;
-	resolver_tx		   *tx;
+	HASH_SEQ_STATUS hash_seq;
+	resolver_tx *tx;
 
 	mtm_log(LOG, "ResolveForRefereeWinner");
 
@@ -304,7 +304,7 @@ MtmTxStateMnem(MtmTxState state)
 static bool
 exists(resolver_tx *tx, MtmTxStateMask mask)
 {
-	int i;
+	int			i;
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
@@ -318,8 +318,8 @@ exists(resolver_tx *tx, MtmTxStateMask mask)
 static bool
 majority_in(resolver_tx *tx, MtmTxStateMask mask)
 {
-	int i;
-	int hits = 0;
+	int			i;
+	int			hits = 0;
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
@@ -327,7 +327,7 @@ majority_in(resolver_tx *tx, MtmTxStateMask mask)
 			hits++;
 	}
 
-	return (hits > tx->n_participants/2);
+	return (hits > tx->n_participants / 2);
 }
 
 
@@ -345,7 +345,7 @@ majority_in(resolver_tx *tx, MtmTxStateMask mask)
 static void
 resolve_tx(const char *gid, int node_id, MtmTxState state)
 {
-	bool found;
+	bool		found;
 	resolver_tx *tx;
 
 	Assert(IsTransactionState());
@@ -356,17 +356,17 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	if (!found)
 		return;
 
-	Assert(tx->state[Mtm->my_node_id-1] == MtmTxPrepared ||
-		   tx->state[Mtm->my_node_id-1] == MtmTxPreCommited ||
-		   tx->state[Mtm->my_node_id-1] == MtmTxPreAborted);
+	Assert(tx->state[Mtm->my_node_id - 1] == MtmTxPrepared ||
+		   tx->state[Mtm->my_node_id - 1] == MtmTxPreCommited ||
+		   tx->state[Mtm->my_node_id - 1] == MtmTxPreAborted);
 	Assert(node_id != Mtm->my_node_id);
 
 	mtm_log(ResolverTraceTxMsg,
 			"[RESOLVER] tx %s (%s) got state %s from node %d",
-			gid, MtmTxStateMnem(tx->state[Mtm->my_node_id-1]), MtmTxStateMnem(state),
+			gid, MtmTxStateMnem(tx->state[Mtm->my_node_id - 1]), MtmTxStateMnem(state),
 			node_id);
 
-	tx->state[node_id-1] = state;
+	tx->state[node_id - 1] = state;
 
 	/* XXX: missing ok because we call this concurrently with logrep recovery */
 
@@ -376,11 +376,10 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	 *
 	 * Otherwise we can scatter our abort to a different node (say node_A)
 	 * before it actually recevies prepare from a node expiriencing failure
-	 * (say node_B).
-	 * If then failed node become online and also receives our abort before
-	 * aborting tx itself, node_A will finally receive prepare, but won't
-	 * receive abort from node_B since it was originated on other node.
-	 * So this prepare on node_A will stuck indefinitely.
+	 * (say node_B). If then failed node become online and also receives our
+	 * abort before aborting tx itself, node_A will finally receive prepare,
+	 * but won't receive abort from node_B since it was originated on other
+	 * node. So this prepare on node_A will stuck indefinitely.
 	 */
 	Assert(replorigin_session_origin == InvalidRepOriginId);
 	if (tx->xact_node_id != Mtm->my_node_id)
@@ -405,11 +404,11 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 		Assert(found);
 	}
 	else if (exists(tx, MtmTxPreCommited) &&
-		majority_in(tx, MtmTxPrepared | MtmTxPreCommited))
+			 majority_in(tx, MtmTxPrepared | MtmTxPreCommited))
 	{
-		// XXX: do that through PreCommit
-		// SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED);
-		// tx->state[MtmNodeId-1] = MtmTxPreCommited;
+		/* XXX: do that through PreCommit */
+		/* SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED); */
+		/* tx->state[MtmNodeId-1] = MtmTxPreCommited; */
 		FinishPreparedTransaction(gid, true, true);
 		mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
@@ -417,9 +416,9 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 	}
 	else if (majority_in(tx, MtmTxPrepared | MtmTxPreAborted))
 	{
-		// XXX: do that through PreAbort
-		// SetPreparedTransactionState(gid, MULTIMASTER_PREABORTED);
-		// tx->state[MtmNodeId-1] = MtmTxPreAborted;
+		/* XXX: do that through PreAbort */
+		/* SetPreparedTransactionState(gid, MULTIMASTER_PREABORTED); */
+		/* tx->state[MtmNodeId-1] = MtmTxPreAborted; */
 		FinishPreparedTransaction(gid, false, true);
 		mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gid);
 		hash_search(gid2tx, gid, HASH_REMOVE, &found);
@@ -443,15 +442,15 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
 static void
 scatter_status_requests(MtmConfig *mtm_cfg)
 {
-	HASH_SEQ_STATUS		hash_seq;
-	resolver_tx		   *tx;
+	HASH_SEQ_STATUS hash_seq;
+	resolver_tx *tx;
 
 	LWLockAcquire(resolver_state->lock, LW_SHARED);
 
 	hash_seq_init(&hash_seq, gid2tx);
 	while ((tx = hash_seq_search(&hash_seq)) != NULL)
 	{
-		int i;
+		int			i;
 
 		for (i = 0; i < mtm_cfg->n_nodes; i++)
 		{
@@ -490,7 +489,7 @@ handle_responses(void)
 	StringInfoData msg;
 	bool		wait;
 
-	while(dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		int			node_id;
 		const char *gid;
@@ -519,8 +518,9 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	int sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
-										node_id - 1);
+	int			sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
+												node_id - 1);
+
 	sender_to_node[sender_id] = node_id;
 }
 
@@ -563,13 +563,13 @@ ResolverMain(Datum main_arg)
 	LWLockRelease(resolver_state->lock);
 	mtm_log(ResolverTraceTxMsg, "Resolver started");
 
-	for(;;)
+	for (;;)
 	{
-		int		rc;
+		int			rc;
 
 		CHECK_FOR_INTERRUPTS();
 
-		// XXX: add tx start/commit to free memory?
+		/* XXX: add tx start/commit to free memory? */
 
 		AcceptInvalidationMessages();
 		if (!config_valid)

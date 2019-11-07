@@ -25,4 +25,4 @@ extern void ResolveAllTransactions(int n_all_nodes);
 extern void ResolveForRefereeWinner(int n_all_nodes);
 extern char *MtmTxStateMnem(MtmTxState state);
 
-#endif  /* RESOLVER_H */
+#endif							/* RESOLVER_H */

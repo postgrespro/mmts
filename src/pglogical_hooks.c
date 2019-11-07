@@ -43,7 +43,7 @@ get_hooks_function_oid(List *funcname)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 MTM_ERRMSG("function %s must return void",
-						NameListToString(funcname))));
+							NameListToString(funcname))));
 	}
 
 	if (func_volatile(funcid) == PROVOLATILE_VOLATILE)
@@ -51,12 +51,12 @@ get_hooks_function_oid(List *funcname)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 MTM_ERRMSG("function %s must not be VOLATILE",
-						NameListToString(funcname))));
+							NameListToString(funcname))));
 	}
 
 	if (pg_proc_aclcheck(funcid, GetUserId(), ACL_EXECUTE) != ACLCHECK_OK)
 	{
-		const char * username;
+		const char *username;
 #if PG_VERSION_NUM >= 90500
 		username = GetUserNameFromId(GetUserId(), false);
 #else
@@ -65,7 +65,7 @@ get_hooks_function_oid(List *funcname)
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 MTM_ERRMSG("current user %s does not have permission to call function %s",
-					 username, NameListToString(funcname))));
+							username, NameListToString(funcname))));
 	}
 
 	return funcid;
@@ -79,9 +79,9 @@ get_hooks_function_oid(List *funcname)
 void
 load_hooks(PGLogicalOutputData *data)
 {
-	Oid hooks_func;
+	Oid			hooks_func;
 	MemoryContext old_ctxt;
-	bool txn_started = false;
+	bool		txn_started = false;
 
 	if (!IsTransactionState())
 	{
@@ -98,22 +98,22 @@ load_hooks(PGLogicalOutputData *data)
 		MemoryContextSwitchTo(old_ctxt);
 
 		elog(DEBUG3, "pglogical_output: Loaded hooks from function %u. Hooks are: \n"
-				"\tstartup_hook: %p\n"
-				"\tshutdown_hook: %p\n"
-				"\trow_filter_hook: %p\n"
-				"\ttxn_filter_hook: %p\n"
-				"\thooks_private_data: %p\n",
-				hooks_func,
-				data->hooks.startup_hook,
-				data->hooks.shutdown_hook,
-				data->hooks.row_filter_hook,
-				data->hooks.txn_filter_hook,
-				data->hooks.hooks_private_data);
-	} 
-	else if (data->api->setup_hooks) 
-	{ 
+			 "\tstartup_hook: %p\n"
+			 "\tshutdown_hook: %p\n"
+			 "\trow_filter_hook: %p\n"
+			 "\ttxn_filter_hook: %p\n"
+			 "\thooks_private_data: %p\n",
+			 hooks_func,
+			 data->hooks.startup_hook,
+			 data->hooks.shutdown_hook,
+			 data->hooks.row_filter_hook,
+			 data->hooks.txn_filter_hook,
+			 data->hooks.hooks_private_data);
+	}
+	else if (data->api->setup_hooks)
+	{
 		old_ctxt = MemoryContextSwitchTo(data->hooks_mctxt);
-		(*data->api->setup_hooks)(&data->hooks);
+		(*data->api->setup_hooks) (&data->hooks);
 		MemoryContextSwitchTo(old_ctxt);
 	}
 
@@ -129,7 +129,7 @@ call_startup_hook(PGLogicalOutputData *data, List *plugin_params)
 
 	if (data->hooks.startup_hook != NULL)
 	{
-		bool tx_started = false;
+		bool		tx_started = false;
 
 		args.private_data = data->hooks.hooks_private_data;
 		args.in_params = plugin_params;
@@ -144,7 +144,7 @@ call_startup_hook(PGLogicalOutputData *data, List *plugin_params)
 		}
 
 		old_ctxt = MemoryContextSwitchTo(data->hooks_mctxt);
-		(void) (*data->hooks.startup_hook)(&args);
+		(void) (*data->hooks.startup_hook) (&args);
 		MemoryContextSwitchTo(old_ctxt);
 
 		if (tx_started)
@@ -171,7 +171,7 @@ call_shutdown_hook(PGLogicalOutputData *data)
 		elog(DEBUG3, "calling pglogical shutdown hook");
 
 		old_ctxt = MemoryContextSwitchTo(data->hooks_mctxt);
-		(void) (*data->hooks.shutdown_hook)(&args);
+		(void) (*data->hooks.shutdown_hook) (&args);
 		MemoryContextSwitchTo(old_ctxt);
 
 		data->hooks.hooks_private_data = args.private_data;
@@ -186,11 +186,11 @@ call_shutdown_hook(PGLogicalOutputData *data)
  */
 bool
 call_row_filter_hook(PGLogicalOutputData *data, ReorderBufferTXN *txn,
-		Relation rel, ReorderBufferChange *change)
+					 Relation rel, ReorderBufferChange *change)
 {
-	struct  PGLogicalRowFilterArgs hook_args;
+	struct PGLogicalRowFilterArgs hook_args;
 	MemoryContext old_ctxt;
-	bool ret = true;
+	bool		ret = true;
 
 	if (data->hooks.row_filter_hook != NULL)
 	{
@@ -201,13 +201,13 @@ call_row_filter_hook(PGLogicalOutputData *data, ReorderBufferTXN *txn,
 		elog(DEBUG3, "calling pglogical row filter hook");
 
 		old_ctxt = MemoryContextSwitchTo(data->hooks_mctxt);
-		ret = (*data->hooks.row_filter_hook)(&hook_args);
+		ret = (*data->hooks.row_filter_hook) (&hook_args);
 		MemoryContextSwitchTo(old_ctxt);
 
 		/* Filter hooks shouldn't change the private data ptr */
 		Assert(data->hooks.hooks_private_data == hook_args.private_data);
 
-		elog(DEBUG3, "called pglogical row filter hook, returned %d", (int)ret);
+		elog(DEBUG3, "called pglogical row filter hook, returned %d", (int) ret);
 	}
 
 	return ret;
@@ -217,7 +217,7 @@ bool
 call_txn_filter_hook(PGLogicalOutputData *data, RepOriginId txn_origin)
 {
 	struct PGLogicalTxnFilterArgs hook_args;
-	bool ret = true;
+	bool		ret = true;
 	MemoryContext old_ctxt;
 
 	if (data->hooks.txn_filter_hook != NULL)
@@ -228,13 +228,13 @@ call_txn_filter_hook(PGLogicalOutputData *data, RepOriginId txn_origin)
 		elog(DEBUG3, "calling pglogical txn filter hook");
 
 		old_ctxt = MemoryContextSwitchTo(data->hooks_mctxt);
-		ret = (*data->hooks.txn_filter_hook)(&hook_args);
+		ret = (*data->hooks.txn_filter_hook) (&hook_args);
 		MemoryContextSwitchTo(old_ctxt);
 
 		/* Filter hooks shouldn't change the private data ptr */
 		Assert(data->hooks.hooks_private_data == hook_args.private_data);
 
-		elog(DEBUG3, "called pglogical txn filter hook, returned %d", (int)ret);
+		elog(DEBUG3, "called pglogical txn filter hook, returned %d", (int) ret);
 	}
 
 	return ret;

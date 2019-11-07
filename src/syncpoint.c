@@ -56,7 +56,7 @@ static void AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn);
 static int
 origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
 {
-	int		i;
+	int			i;
 
 	for (i = 0; i < mtm_cfg->n_nodes; i++)
 	{
@@ -141,9 +141,9 @@ MaybeLogSyncpoint()
 		Mtm->latestSyncpoint = syncpoint_lsn;
 
 		mtm_log(SyncpointCreated,
-			"Syncpoint created (origin_lsn=%"INT64_MODIFIER"x, trim_lsn=%"INT64_MODIFIER"x)",
-			syncpoint_lsn, min_confirmed_flush
-		);
+				"Syncpoint created (origin_lsn=%" INT64_MODIFIER "x, trim_lsn=%" INT64_MODIFIER "x)",
+				syncpoint_lsn, min_confirmed_flush
+			);
 	}
 	LWLockRelease(Mtm->syncpoint_lock);
 }
@@ -151,7 +151,7 @@ MaybeLogSyncpoint()
 static void
 AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 {
-	char	    *sql;
+	char	   *sql;
 	int			rc;
 	int			i;
 	XLogRecPtr	restart_lsn,
@@ -162,14 +162,14 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 
 	/* Load latest checkpoint for given node */
 	sql = psprintf("select restart_lsn from mtm.syncpoints "
-				"where node_id=%d and origin_lsn < "UINT64_FORMAT" "
-				"order by origin_lsn desc limit 1",
-				node_id, trim_lsn);
+				   "where node_id=%d and origin_lsn < " UINT64_FORMAT " "
+				   "order by origin_lsn desc limit 1",
+				   node_id, trim_lsn);
 	rc = SPI_execute(sql, true, 0);
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
 	{
-		TupleDesc	tupdesc	= SPI_tuptable->tupdesc;
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
 		HeapTuple	tup = SPI_tuptable->vals[0];
 		bool		isnull;
 
@@ -189,7 +189,7 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 
 	/*
 	 * XXX: simple delete of restart_lsn < $restart_lsn is not working
-	 * 
+	 *
 	 * Need to delete old syncpoints.
 	 */
 
@@ -214,7 +214,7 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 		PhysicalConfirmReceivedLocation(min_trim_lsn);
 
 	mtm_log(SyncpointApply,
-			"Syncpoint processed: trim recovery slot to %"INT64_MODIFIER"x (restart_lsn=%"INT64_MODIFIER"x)",
+			"Syncpoint processed: trim recovery slot to %" INT64_MODIFIER "x (restart_lsn=%" INT64_MODIFIER "x)",
 			min_trim_lsn, restart_lsn);
 }
 
@@ -237,13 +237,13 @@ SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
 
 	/* Save syncpoint */
 	sql = psprintf("insert into mtm.syncpoints values "
-					"(%d, "UINT64_FORMAT", "UINT64_FORMAT", "UINT64_FORMAT") "
-					"on conflict do nothing",
-		node_id,
-		origin_lsn,
-		local_lsn,
-		restart_lsn
-	);
+				   "(%d, " UINT64_FORMAT ", " UINT64_FORMAT ", " UINT64_FORMAT ") "
+				   "on conflict do nothing",
+				   node_id,
+				   origin_lsn,
+				   local_lsn,
+				   restart_lsn
+		);
 	rc = SPI_execute(sql, false, 0);
 
 	if (rc < 0)
@@ -259,13 +259,13 @@ SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
 	CommitTransactionCommand();
 
 	mtm_log(SyncpointApply,
-		"Syncpoint processed (node_id=%d, origin_lsn=%"INT64_MODIFIER"x, local_lsn=%"INT64_MODIFIER"x, trim_lsn=%"INT64_MODIFIER"x, restart_lsn=%"INT64_MODIFIER"x)",
-		node_id,
-		origin_lsn,
-		local_lsn,
-		trim_lsn,
-		restart_lsn
-	);
+			"Syncpoint processed (node_id=%d, origin_lsn=%" INT64_MODIFIER "x, local_lsn=%" INT64_MODIFIER "x, trim_lsn=%" INT64_MODIFIER "x, restart_lsn=%" INT64_MODIFIER "x)",
+			node_id,
+			origin_lsn,
+			local_lsn,
+			trim_lsn,
+			restart_lsn
+		);
 }
 
 
@@ -293,14 +293,14 @@ SyncpointGetLatest(int node_id)
 
 	/* Load latest checkpoint for given node */
 	sql = psprintf("select origin_lsn, local_lsn "
-				"from mtm.syncpoints where node_id=%d "
-				"order by origin_lsn desc limit 1",
-				node_id);
+				   "from mtm.syncpoints where node_id=%d "
+				   "order by origin_lsn desc limit 1",
+				   node_id);
 	rc = SPI_execute(sql, true, 0);
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
 	{
-		TupleDesc	tupdesc	= SPI_tuptable->tupdesc;
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
 		HeapTuple	tup = SPI_tuptable->vals[0];
 		bool		isnull;
 
@@ -339,8 +339,8 @@ SyncpointGetLatest(int node_id)
 Syncpoint *
 SyncpointGetAllLatest()
 {
-	int				rc;
-	Syncpoint	   *spvector;
+	int			rc;
+	Syncpoint  *spvector;
 
 	spvector = (Syncpoint *) palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 
@@ -360,7 +360,7 @@ SyncpointGetAllLatest()
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
 	{
-		TupleDesc	tupdesc	= SPI_tuptable->tupdesc;
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
 		int			i;
 
 		Assert(SPI_processed <= MTM_MAX_NODES);
@@ -370,7 +370,8 @@ SyncpointGetAllLatest()
 			HeapTuple	tup = SPI_tuptable->vals[i];
 			bool		isnull;
 			int			node_id;
-			XLogRecPtr	origin_lsn, local_lsn;
+			XLogRecPtr	origin_lsn,
+						local_lsn;
 
 			node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
 			Assert(!isnull);
@@ -414,11 +415,11 @@ SyncpointGetAllLatest()
 XLogRecPtr
 QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 {
-	StringInfoData		serialized_lsns;
-	int					i;
-	bool				nonzero = false;
-	XLogRecPtr			local_horizon = local_spvector[node_id - 1].origin_lsn;
-	XLogRecPtr			remote_horizon = InvalidXLogRecPtr;
+	StringInfoData serialized_lsns;
+	int			i;
+	bool		nonzero = false;
+	XLogRecPtr	local_horizon = local_spvector[node_id - 1].origin_lsn;
+	XLogRecPtr	remote_horizon = InvalidXLogRecPtr;
 
 	/* serialize filter_vector */
 	initStringInfo(&serialized_lsns);
@@ -440,9 +441,9 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 
 		/* Find out minimal lsn of given syncpoints */
 		sql = psprintf(
-			"select min(local_lsn) from regexp_split_to_table('%s', ',') as states "
-			"join (select node_id || ':' || origin_lsn as state, * from mtm.syncpoints) "
-			"local_states on states = local_states.state;", serialized_lsns.data);
+					   "select min(local_lsn) from regexp_split_to_table('%s', ',') as states "
+					   "join (select node_id || ':' || origin_lsn as state, * from mtm.syncpoints) "
+					   "local_states on states = local_states.state;", serialized_lsns.data);
 		res = PQexec(conn, sql);
 		pfree(sql);
 
@@ -452,7 +453,7 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 					PQresultErrorMessage(res));
 		}
 		else if (PQnfields(res) != 1 ||
-				(PQntuples(res) != 0 && PQntuples(res) != 1))
+				 (PQntuples(res) != 0 && PQntuples(res) != 1))
 		{
 			mtm_log(ERROR, "SyncpointGetRecoveryHorizon: refusing unexpected result from replication node");
 		}
@@ -468,10 +469,10 @@ QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
 	}
 
 	mtm_log(MtmReceiverStart,
-		"QueryRecoveryHorizon (remote_horizon=%"INT64_MODIFIER"x, local_horizon=%"INT64_MODIFIER"x)",
-		remote_horizon,
-		local_horizon
-	);
+			"QueryRecoveryHorizon (remote_horizon=%" INT64_MODIFIER "x, local_horizon=%" INT64_MODIFIER "x)",
+			remote_horizon,
+			local_horizon
+		);
 
 	return Min(remote_horizon, local_horizon);
 }
@@ -497,12 +498,12 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
 		if (start_lsn > spvector[i].local_lsn &&
-				spvector[i].local_lsn != InvalidXLogRecPtr)
+			spvector[i].local_lsn != InvalidXLogRecPtr)
 			start_lsn = spvector[i].local_lsn;
 	}
 
 	/* create hash */
-	estimate_size = (GetFlushRecPtr() - start_lsn)/100;
+	estimate_size = (GetFlushRecPtr() - start_lsn) / 100;
 	estimate_size = Min(Max(estimate_size, 1000), 100000);
 	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
 	hash_ctl.keysize = hash_ctl.entrysize = sizeof(FilterEntry);
@@ -522,8 +523,8 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	if (!xlogreader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
-					errmsg("out of memory"),
-					errdetail("Failed while allocating a WAL reading processor.")));
+				 errmsg("out of memory"),
+				 errdetail("Failed while allocating a WAL reading processor.")));
 
 	/*
 	 * The given start_lsn pointer points to the end of the syncpoint record,
@@ -542,10 +543,10 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	/* fill our filter */
 	do
 	{
-		XLogRecord	   *record;
-		char		   *errormsg = NULL;
-		RepOriginId		origin_id;
-		int				node_id;
+		XLogRecord *record;
+		char	   *errormsg = NULL;
+		RepOriginId origin_id;
+		int			node_id;
 
 		record = XLogReadRecord(xlogreader, start_lsn, &errormsg);
 		if (record == NULL)
@@ -571,7 +572,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 		if (XLogRecGetRmid(xlogreader) == RM_XACT_ID)
 		{
 			mtm_log(MtmReceiverFilter,
-					"load_filter_map: process local=%"INT64_MODIFIER"x, origin=%d, node=%d",
+					"load_filter_map: process local=%" INT64_MODIFIER "x, origin=%d, node=%d",
 					xlogreader->EndRecPtr, origin_id, origin_id_to_node_id(origin_id, mtm_cfg));
 		}
 
@@ -584,12 +585,12 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 		if (filter_node_id != -1 && filter_node_id != node_id)
 			continue;
 
-		// XXX: also cover standalone messages
+		/* XXX: also cover standalone messages */
 
 		if (XLogRecGetRmid(xlogreader) == RM_XACT_ID)
 		{
 			uint32		info = XLogRecGetInfo(xlogreader);
-			FilterEntry	entry;
+			FilterEntry entry;
 			bool		found;
 
 			memset(&entry, '\0', sizeof(FilterEntry));
@@ -599,26 +600,29 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 			switch (info & XLOG_XACT_OPMASK)
 			{
 				case XLOG_XACT_PREPARE:
-				{
-					xl_xact_parsed_prepare	parsed;
-					ParsePrepareRecord(info, XLogRecGetData(xlogreader), &parsed);
-					entry.origin_lsn = parsed.origin_lsn;
-					break;
-				}
+					{
+						xl_xact_parsed_prepare parsed;
+
+						ParsePrepareRecord(info, XLogRecGetData(xlogreader), &parsed);
+						entry.origin_lsn = parsed.origin_lsn;
+						break;
+					}
 				case XLOG_XACT_COMMIT_PREPARED:
-				{
-					xl_xact_parsed_commit parsed;
-					ParseCommitRecord(info, (xl_xact_commit *) XLogRecGetData(xlogreader), &parsed);
-					entry.origin_lsn = parsed.origin_lsn;
-					break;
-				}
+					{
+						xl_xact_parsed_commit parsed;
+
+						ParseCommitRecord(info, (xl_xact_commit *) XLogRecGetData(xlogreader), &parsed);
+						entry.origin_lsn = parsed.origin_lsn;
+						break;
+					}
 				case XLOG_XACT_ABORT_PREPARED:
-				{
-					xl_xact_parsed_abort parsed;
-					ParseAbortRecord(info, (xl_xact_abort *) XLogRecGetData(xlogreader), &parsed);
-					entry.origin_lsn = parsed.origin_lsn;
-					break;
-				}
+					{
+						xl_xact_parsed_abort parsed;
+
+						ParseAbortRecord(info, (xl_xact_abort *) XLogRecGetData(xlogreader), &parsed);
+						entry.origin_lsn = parsed.origin_lsn;
+						break;
+					}
 				default:
 					continue;
 			}
@@ -631,7 +635,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 				continue;
 
 			Assert(entry.origin_lsn != InvalidXLogRecPtr);
-			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %"INT64_MODIFIER"x } %d (%"INT64_MODIFIER"x)",
+			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %" INT64_MODIFIER "x } %d (%" INT64_MODIFIER "x)",
 					entry.node_id, entry.origin_lsn, info & XLOG_XACT_OPMASK, xlogreader->EndRecPtr);
 			hash_search(filter_map, &entry, HASH_ENTER, &found);
 			Assert(!found);
