@@ -1,270 +1,3 @@
-*** contrib/mmts/../../src/test/regress/expected/enum.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/enum.out	CENSORED
-***************
-*** 40,45 ****
---- 40,46 ----
-  (3 rows)
-  
-  ALTER TYPE planets ADD VALUE 'uranus';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT enumlabel, enumsortorder
-  FROM pg_enum
-  WHERE enumtypid = 'planets'::regtype
-***************
-*** 49,76 ****
-   venus     |             1
-   earth     |             2
-   mars      |             3
-!  uranus    |             4
-! (4 rows)
-  
-  ALTER TYPE planets ADD VALUE 'mercury' BEFORE 'venus';
-  ALTER TYPE planets ADD VALUE 'saturn' BEFORE 'uranus';
-  ALTER TYPE planets ADD VALUE 'jupiter' AFTER 'mars';
-  ALTER TYPE planets ADD VALUE 'neptune' AFTER 'uranus';
-  SELECT enumlabel, enumsortorder
-  FROM pg_enum
-  WHERE enumtypid = 'planets'::regtype
-  ORDER BY 2;
-   enumlabel | enumsortorder 
-  -----------+---------------
--  mercury   |             0
-   venus     |             1
-   earth     |             2
-   mars      |             3
-!  jupiter   |          3.25
-!  saturn    |           3.5
-!  uranus    |             4
-!  neptune   |             5
-! (8 rows)
-  
-  SELECT enumlabel, enumsortorder
-  FROM pg_enum
---- 50,75 ----
-   venus     |             1
-   earth     |             2
-   mars      |             3
-! (3 rows)
-  
-  ALTER TYPE planets ADD VALUE 'mercury' BEFORE 'venus';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  ALTER TYPE planets ADD VALUE 'saturn' BEFORE 'uranus';
-+ ERROR:  "uranus" is not an existing enum label
-  ALTER TYPE planets ADD VALUE 'jupiter' AFTER 'mars';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  ALTER TYPE planets ADD VALUE 'neptune' AFTER 'uranus';
-+ ERROR:  "uranus" is not an existing enum label
-  SELECT enumlabel, enumsortorder
-  FROM pg_enum
-  WHERE enumtypid = 'planets'::regtype
-  ORDER BY 2;
-   enumlabel | enumsortorder 
-  -----------+---------------
-   venus     |             1
-   earth     |             2
-   mars      |             3
-! (3 rows)
-  
-  SELECT enumlabel, enumsortorder
-  FROM pg_enum
-***************
-*** 78,92 ****
-  ORDER BY enumlabel::planets;
-   enumlabel | enumsortorder 
-  -----------+---------------
--  mercury   |             0
-   venus     |             1
-   earth     |             2
-   mars      |             3
-!  jupiter   |          3.25
-!  saturn    |           3.5
-!  uranus    |             4
-!  neptune   |             5
-! (8 rows)
-  
-  -- errors for adding labels
-  ALTER TYPE planets ADD VALUE
---- 77,86 ----
-  ORDER BY enumlabel::planets;
-   enumlabel | enumsortorder 
-  -----------+---------------
-   venus     |             1
-   earth     |             2
-   mars      |             3
-! (3 rows)
-  
-  -- errors for adding labels
-  ALTER TYPE planets ADD VALUE
-***************
-*** 98,120 ****
-  -- if not exists tests
-  --  existing value gives error
-  ALTER TYPE planets ADD VALUE 'mercury';
-! ERROR:  enum label "mercury" already exists
-  -- unless IF NOT EXISTS is specified
-  ALTER TYPE planets ADD VALUE IF NOT EXISTS 'mercury';
-! NOTICE:  enum label "mercury" already exists, skipping
-  -- should be neptune, not mercury
-  SELECT enum_last(NULL::planets);
-   enum_last 
-  -----------
-!  neptune
-  (1 row)
-  
-  ALTER TYPE planets ADD VALUE IF NOT EXISTS 'pluto';
-  -- should be pluto, i.e. the new value
-  SELECT enum_last(NULL::planets);
-   enum_last 
-  -----------
-!  pluto
-  (1 row)
-  
-  --
---- 92,115 ----
-  -- if not exists tests
-  --  existing value gives error
-  ALTER TYPE planets ADD VALUE 'mercury';
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- unless IF NOT EXISTS is specified
-  ALTER TYPE planets ADD VALUE IF NOT EXISTS 'mercury';
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- should be neptune, not mercury
-  SELECT enum_last(NULL::planets);
-   enum_last 
-  -----------
-!  mars
-  (1 row)
-  
-  ALTER TYPE planets ADD VALUE IF NOT EXISTS 'pluto';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- should be pluto, i.e. the new value
-  SELECT enum_last(NULL::planets);
-   enum_last 
-  -----------
-!  mars
-  (1 row)
-  
-  --
-***************
-*** 122,156 ****
---- 117,181 ----
-  --
-  create type insenum as enum ('L1', 'L2');
-  alter type insenum add value 'i1' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i2' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i3' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i4' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i5' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i6' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i7' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i8' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i9' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i10' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i11' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i12' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i13' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i14' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i15' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i16' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i17' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i18' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i19' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i20' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i21' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i22' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i23' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i24' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i25' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i26' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i27' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i28' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i29' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter type insenum add value 'i30' before 'L2';
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- The exact values of enumsortorder will now depend on the local properties
-  -- of float4, but in any reasonable implementation we should get at least
-  -- 20 splits before having to renumber; so only hide values > 20.
-***************
-*** 162,199 ****
-   enumlabel | so 
-  -----------+----
-   L1        |  1
-!  i1        |  2
-!  i2        |  3
-!  i3        |  4
-!  i4        |  5
-!  i5        |  6
-!  i6        |  7
-!  i7        |  8
-!  i8        |  9
-!  i9        | 10
-!  i10       | 11
-!  i11       | 12
-!  i12       | 13
-!  i13       | 14
-!  i14       | 15
-!  i15       | 16
-!  i16       | 17
-!  i17       | 18
-!  i18       | 19
-!  i19       | 20
-!  i20       |   
-!  i21       |   
-!  i22       |   
-!  i23       |   
-!  i24       |   
-!  i25       |   
-!  i26       |   
-!  i27       |   
-!  i28       |   
-!  i29       |   
-!  i30       |   
-!  L2        |   
-! (32 rows)
-  
-  --
-  -- Basic table creation, row selection
---- 187,194 ----
-   enumlabel | so 
-  -----------+----
-   L1        |  1
-!  L2        |  2
-! (2 rows)
-  
-  --
-  -- Basic table creation, row selection
-
-======================================================================
-
 *** contrib/mmts/../../src/test/regress/expected/opr_sanity.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/opr_sanity.out	CENSORED
 ***************
@@ -417,253 +150,6 @@
 
 ======================================================================
 
-*** contrib/mmts/../../src/test/regress/expected/hash_index.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/hash_index.out	CENSORED
-***************
-*** 168,190 ****
-  UPDATE hash_f8_heap
-     SET random = '-1234.1234'::float8
-     WHERE hash_f8_heap.seqno = 8906;
-  SELECT h.seqno AS i8096, h.random AS f1234_1234
-     FROM hash_f8_heap h
-     WHERE h.random = '-1234.1234'::float8;
-   i8096 | f1234_1234 
-  -------+------------
-!   8906 | -1234.1234
-! (1 row)
-  
-  UPDATE hash_f8_heap
-     SET seqno = 20000
-     WHERE hash_f8_heap.random = '488912369'::float8;
-  SELECT h.seqno AS f20000
-     FROM hash_f8_heap h
-     WHERE h.random = '488912369'::float8;
-   f20000 
-  --------
-!   20000
-  (1 row)
-  
-  -- UPDATE hash_ovfl_heap
---- 168,191 ----
-  UPDATE hash_f8_heap
-     SET random = '-1234.1234'::float8
-     WHERE hash_f8_heap.seqno = 8906;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT h.seqno AS i8096, h.random AS f1234_1234
-     FROM hash_f8_heap h
-     WHERE h.random = '-1234.1234'::float8;
-   i8096 | f1234_1234 
-  -------+------------
-! (0 rows)
-  
-  UPDATE hash_f8_heap
-     SET seqno = 20000
-     WHERE hash_f8_heap.random = '488912369'::float8;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT h.seqno AS f20000
-     FROM hash_f8_heap h
-     WHERE h.random = '488912369'::float8;
-   f20000 
-  --------
-!    8932
-  (1 row)
-  
-  -- UPDATE hash_ovfl_heap
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/privileges.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/privileges.out	CENSORED
-***************
-*** 1240,1249 ****
-  (1 row)
-  
-  revoke select on table mytable from regress_priv_user3;
-  select has_column_privilege('mytable',2::int2,'select');
-   has_column_privilege 
-  ----------------------
-!  
-  (1 row)
-  
-  drop table mytable;
---- 1240,1250 ----
-  (1 row)
-  
-  revoke select on table mytable from regress_priv_user3;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  select has_column_privilege('mytable',2::int2,'select');
-   has_column_privilege 
-  ----------------------
-!  t
-  (1 row)
-  
-  drop table mytable;
-***************
-*** 1300,1310 ****
-  ERROR:  must have admin option on role "regress_priv_group2"
-  SELECT dogrant_ok();			-- ok: SECURITY DEFINER conveys ADMIN
-  NOTICE:  role "regress_priv_user5" is already a member of role "regress_priv_group2"
-!  dogrant_ok 
-! ------------
-!  
-! (1 row)
-! 
-  SET ROLE regress_priv_group2;
-  GRANT regress_priv_group2 TO regress_priv_user5; -- fails: SET ROLE did not help
-  ERROR:  must have admin option on role "regress_priv_group2"
---- 1301,1307 ----
-  ERROR:  must have admin option on role "regress_priv_group2"
-  SELECT dogrant_ok();			-- ok: SECURITY DEFINER conveys ADMIN
-  NOTICE:  role "regress_priv_user5" is already a member of role "regress_priv_group2"
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  SET ROLE regress_priv_group2;
-  GRANT regress_priv_group2 TO regress_priv_user5; -- fails: SET ROLE did not help
-  ERROR:  must have admin option on role "regress_priv_group2"
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/matview.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/matview.out	CENSORED
-***************
-*** 186,198 ****
-  (3 rows)
-  
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_tm;
-  REFRESH MATERIALIZED VIEW mvtest_tvm;
-  SELECT * FROM mvtest_tm ORDER BY type;
-   type | totamt 
-  ------+--------
-   x    |      5
-   y    |     12
-!  z    |     24
-  (3 rows)
-  
-  SELECT * FROM mvtest_tvm ORDER BY type;
---- 186,199 ----
-  (3 rows)
-  
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_tm;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  REFRESH MATERIALIZED VIEW mvtest_tvm;
-  SELECT * FROM mvtest_tm ORDER BY type;
-   type | totamt 
-  ------+--------
-   x    |      5
-   y    |     12
-!  z    |     11
-  (3 rows)
-  
-  SELECT * FROM mvtest_tvm ORDER BY type;
-***************
-*** 274,280 ****
-  SELECT * FROM mvtest_tmm;
-   grandtot 
-  ----------
-!        41
-  (1 row)
-  
-  SELECT * FROM mvtest_tvmm;
---- 275,281 ----
-  SELECT * FROM mvtest_tmm;
-   grandtot 
-  ----------
-!        28
-  (1 row)
-  
-  SELECT * FROM mvtest_tvmm;
-***************
-*** 304,310 ****
-  ------+------+------
-   x    |    5 |    5
-   y    |   12 |   12
-!  z    |   24 |   24
-  (3 rows)
-  
-  -- make sure that dependencies are reported properly when they block the drop
---- 305,311 ----
-  ------+------+------
-   x    |    5 |    5
-   y    |   12 |   12
-!  z    |   11 |   24
-  (3 rows)
-  
-  -- make sure that dependencies are reported properly when they block the drop
-***************
-*** 405,410 ****
---- 406,412 ----
-  INSERT INTO mvtest_foo VALUES(3, 4, 5);
-  REFRESH MATERIALIZED VIEW mvtest_mv;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  DROP TABLE mvtest_foo CASCADE;
-  NOTICE:  drop cascades to materialized view mvtest_mv
-  -- allow subquery to reference unpopulated matview if WITH NO DATA is specified
-***************
-*** 423,433 ****
-  CREATE UNIQUE INDEX mvtest_boxmv_id ON mvtest_boxmv (id);
-  UPDATE mvtest_boxes SET b = '(2,2),(1,1)' WHERE id = 2;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_boxmv;
-  SELECT * FROM mvtest_boxmv ORDER BY id;
-   id |              b              
-  ----+-----------------------------
-    1 | (32,32),(31,31)
-!   2 | (2,2),(1,1)
-    3 | (1.9999996,1.9999996),(1,1)
-  (3 rows)
-  
---- 425,436 ----
-  CREATE UNIQUE INDEX mvtest_boxmv_id ON mvtest_boxmv (id);
-  UPDATE mvtest_boxes SET b = '(2,2),(1,1)' WHERE id = 2;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_boxmv;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  SELECT * FROM mvtest_boxmv ORDER BY id;
-   id |              b              
-  ----+-----------------------------
-    1 | (32,32),(31,31)
-!   2 | (2.0000004,2.0000004),(1,1)
-    3 | (1.9999996,1.9999996),(1,1)
-  (3 rows)
-  
-***************
-*** 449,454 ****
---- 452,458 ----
-  REFRESH MATERIALIZED VIEW mvtest_mv_v;
-  UPDATE mvtest_v SET j = 3 WHERE x = 1;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv_v;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  REFRESH MATERIALIZED VIEW mvtest_mv_v_2;
-  REFRESH MATERIALIZED VIEW mvtest_mv_v_3;
-  REFRESH MATERIALIZED VIEW mvtest_mv_v_4;
-***************
-*** 461,467 ****
-  SELECT * FROM mvtest_mv_v;
-   ii | jj 
-  ----+----
-!   1 |  3
-  (1 row)
-  
-  SELECT * FROM mvtest_mv_v_2;
---- 465,471 ----
-  SELECT * FROM mvtest_mv_v;
-   ii | jj 
-  ----+----
-!   1 |  2
-  (1 row)
-  
-  SELECT * FROM mvtest_mv_v_2;
-***************
-*** 562,567 ****
---- 566,572 ----
-  RESET ROLE;
-  REFRESH MATERIALIZED VIEW mvtest_mv_foo;
-  REFRESH MATERIALIZED VIEW CONCURRENTLY mvtest_mv_foo;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  DROP OWNED BY regress_user_mvtest CASCADE;
-  DROP ROLE regress_user_mvtest;
-  -- make sure that create WITH NO DATA works via SPI
-
-======================================================================
-
 *** contrib/mmts/../../src/test/regress/expected/rowsecurity.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/rowsecurity.out	CENSORED
 ***************
@@ -749,50 +235,8 @@
 *** contrib/mmts/../../src/test/regress/expected/atx.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/atx.out	CENSORED
 ***************
-*** 434,445 ****
-  $body$ language plpgsql;
-  commit;
-  select atx_2_update_func();
-!  atx_2_update_func 
-! -------------------
-!                100
-! (1 row)
-! 
-  drop table atx_2_t1;
-  drop table atx_2_t2;
-  -- 3
-  drop table if exists atx_3_t1;
---- 434,445 ----
-  $body$ language plpgsql;
-  commit;
-  select atx_2_update_func();
-! ERROR:  SPI_finish failed: SPI_ERROR_UNCONNECTED
-! CONTEXT:  PL/pgSQL function atx_2_tmp_trigger_func() line 5 during exception cleanup
-! SQL statement "update atx_2_t1 set name = txid_current()::text where id in ( select id from tmp1 )"
-! PL/pgSQL function atx_2_update_func() line 6 at SQL statement
-  drop table atx_2_t1;
-+ ERROR:  StartTransactionCommand: unexpected state STARTED
-  drop table atx_2_t2;
-  -- 3
-  drop table if exists atx_3_t1;
-***************
-*** 545,554 ****
---- 545,556 ----
-      create temp table tmp1 on commit drop as select atx_4_t1.id from atx_4_t1 left join atx_4_t2 on atx_4_t1.id = atx_4_t2.id where atx_4_t2.id is null;
-      delete from atx_4_t1 where id in ( select id from tmp1 );
-    end;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-    begin autonomous;
-      create temp table tmp1 on commit drop as select atx_4_t2.id from atx_4_t2 left join atx_4_t1 on atx_4_t1.id = atx_4_t2.id where atx_4_t1.id is null;
-      delete from atx_4_t2 where id in ( select id from tmp1 );
-    end;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  commit;
-  drop table atx_4_t1;
-  drop table atx_4_t2;
-***************
 *** 1148,1153 ****
---- 1150,1156 ----
+--- 1148,1154 ----
   RESET client_min_messages;
   create database regression_atx_test_database;
   ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
@@ -800,30 +244,6 @@
   \c regression_atx_test_database
   create table atx_test as select 1 as id;
   begin;
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/atx3.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/atx3.out	CENSORED
-***************
-*** 28,37 ****
-  end;
-  $body$ language plpgsql;
-  select atx_28_update_func();
-!  atx_28_update_func 
-! --------------------
-!                   1
-! (1 row)
-! 
-  drop table atx_28_t1;
-  drop function atx_28_update_func();
---- 28,33 ----
-  end;
-  $body$ language plpgsql;
-  select atx_28_update_func();
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  drop table atx_28_t1;
-  drop function atx_28_update_func();
 
 ======================================================================
 
@@ -994,6 +414,23 @@
   pg_tables| SELECT n.nspname AS schemaname,
       c.relname AS tablename,
       pg_get_userbyid(c.relowner) AS tableowner,
+***************
+*** 2360,2365 ****
+--- 2390,2403 ----
+             FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot)), ( SELECT pg_control_snapshot.recent_snapshot
+             FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot))) snap_id(snap_id)
+    WHERE pg_snapshot_exists(snap_id.snap_id);
++ stat_bgwpool| SELECT node_bgwpool_stat.nworkers,
++     node_bgwpool_stat.active,
++     node_bgwpool_stat.pending,
++     node_bgwpool_stat.size,
++     node_bgwpool_stat.head,
++     node_bgwpool_stat.tail,
++     node_bgwpool_stat.receivername
++    FROM mtm.node_bgwpool_stat() node_bgwpool_stat(nworkers, active, pending, size, head, tail, receivername);
+  street| SELECT r.name,
+      r.thepath,
+      c.cname
 
 ======================================================================
 
@@ -1049,930 +486,49 @@
 
 ======================================================================
 
-*** contrib/mmts/../../src/test/regress/expected/guc.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/guc.out	CENSORED
+*** contrib/mmts/../../src/test/regress/expected/prepare.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/prepare.out	CENSORED
 ***************
-*** 537,543 ****
---- 537,545 ----
-  SET vacuum_cost_delay = 13;
-  CREATE TEMP TABLE tmp_foo (data text) ON COMMIT DELETE ROWS;
-  CREATE ROLE regress_guc_user;
+*** 124,150 ****
+  	SELECT * FROM tenk1 WHERE unique1 = $1 OR stringu1 = $2
+  	ORDER BY unique1;
+  CREATE TEMPORARY TABLE q5_prep_results AS EXECUTE q5(200, 'DTAAAA');
+  SELECT * FROM q5_prep_results;
+!  unique1 | unique2 | two | four | ten | twenty | hundred | thousand | twothousand | fivethous | tenthous | odd | even | stringu1 | stringu2 | string4 
+! ---------+---------+-----+------+-----+--------+---------+----------+-------------+-----------+----------+-----+------+----------+----------+---------
+!      200 |    9441 |   0 |    0 |   0 |      0 |       0 |      200 |         200 |       200 |      200 |   0 |    1 | SHAAAA   | DZNAAA   | HHHHxx
+!      497 |    9092 |   1 |    1 |   7 |     17 |      97 |      497 |         497 |       497 |      497 | 194 |  195 | DTAAAA   | SLNAAA   | AAAAxx
+!     1173 |    6699 |   1 |    1 |   3 |     13 |      73 |      173 |        1173 |      1173 |     1173 | 146 |  147 | DTAAAA   | RXJAAA   | VVVVxx
+!     1849 |    8143 |   1 |    1 |   9 |      9 |      49 |      849 |        1849 |      1849 |     1849 |  98 |   99 | DTAAAA   | FBMAAA   | VVVVxx
+!     2525 |      64 |   1 |    1 |   5 |      5 |      25 |      525 |         525 |      2525 |     2525 |  50 |   51 | DTAAAA   | MCAAAA   | AAAAxx
+!     3201 |    7309 |   1 |    1 |   1 |      1 |       1 |      201 |        1201 |      3201 |     3201 |   2 |    3 | DTAAAA   | DVKAAA   | HHHHxx
+!     3877 |    4060 |   1 |    1 |   7 |     17 |      77 |      877 |        1877 |      3877 |     3877 | 154 |  155 | DTAAAA   | EAGAAA   | AAAAxx
+!     4553 |    4113 |   1 |    1 |   3 |     13 |      53 |      553 |         553 |      4553 |     4553 | 106 |  107 | DTAAAA   | FCGAAA   | HHHHxx
+!     5229 |    6407 |   1 |    1 |   9 |      9 |      29 |      229 |        1229 |       229 |     5229 |  58 |   59 | DTAAAA   | LMJAAA   | VVVVxx
+!     5905 |    9537 |   1 |    1 |   5 |      5 |       5 |      905 |        1905 |       905 |     5905 |  10 |   11 | DTAAAA   | VCOAAA   | HHHHxx
+!     6581 |    4686 |   1 |    1 |   1 |      1 |      81 |      581 |         581 |      1581 |     6581 | 162 |  163 | DTAAAA   | GYGAAA   | OOOOxx
+!     7257 |    1895 |   1 |    1 |   7 |     17 |      57 |      257 |        1257 |      2257 |     7257 | 114 |  115 | DTAAAA   | XUCAAA   | VVVVxx
+!     7933 |    4514 |   1 |    1 |   3 |     13 |      33 |      933 |        1933 |      2933 |     7933 |  66 |   67 | DTAAAA   | QRGAAA   | OOOOxx
+!     8609 |    5918 |   1 |    1 |   9 |      9 |       9 |      609 |         609 |      3609 |     8609 |  18 |   19 | DTAAAA   | QTIAAA   | OOOOxx
+!     9285 |    8469 |   1 |    1 |   5 |      5 |      85 |      285 |        1285 |      4285 |     9285 | 170 |  171 | DTAAAA   | TNMAAA   | HHHHxx
+!     9961 |    2058 |   1 |    1 |   1 |      1 |      61 |      961 |        1961 |      4961 |     9961 | 122 |  123 | DTAAAA   | EBDAAA   | OOOOxx
+! (16 rows)
+! 
+  -- unknown or unspecified parameter types: should succeed
+  PREPARE q6 AS
+      SELECT * FROM tenk1 WHERE unique1 = $1 AND stringu1 = $2;
+--- 124,134 ----
+  	SELECT * FROM tenk1 WHERE unique1 = $1 OR stringu1 = $2
+  	ORDER BY unique1;
+  CREATE TEMPORARY TABLE q5_prep_results AS EXECUTE q5(200, 'DTAAAA');
 + ERROR:  [multimaster] failed to prepare transaction at peer node
-  SET SESSION AUTHORIZATION regress_guc_user;
-+ ERROR:  role "regress_guc_user" does not exist
-  -- look changes
-  SELECT pg_listening_channels();
-   pg_listening_channels 
-***************
-*** 572,578 ****
-  SELECT current_user = 'regress_guc_user';
-   ?column? 
-  ----------
-!  t
-  (1 row)
-  
-  -- discard everything
---- 574,580 ----
-  SELECT current_user = 'regress_guc_user';
-   ?column? 
-  ----------
-!  f
-  (1 row)
-  
-  -- discard everything
-***************
-*** 611,616 ****
---- 613,619 ----
-  (1 row)
-  
-  DROP ROLE regress_guc_user;
-+ ERROR:  role "regress_guc_user" does not exist
-  --
-  -- search_path should react to changes in pg_namespace
-  --
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/plancache.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/plancache.out	CENSORED
-***************
-*** 237,257 ****
-  NOTICE:  1
-  NOTICE:  2
-  NOTICE:  3
-!  cachebug 
-! ----------
-!  
-! (1 row)
-! 
-  select cachebug();
-! NOTICE:  drop cascades to view vv
-  NOTICE:  1
-  NOTICE:  2
-  NOTICE:  3
-!  cachebug 
-! ----------
-!  
-! (1 row)
-! 
-  -- Check that addition or removal of any partition is correctly dealt with by
-  -- default partition table when it is being used in prepared statement.
-  create table pc_list_parted (a int) partition by list(a);
---- 237,249 ----
-  NOTICE:  1
-  NOTICE:  2
-  NOTICE:  3
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  select cachebug();
-! NOTICE:  table "temptable" does not exist, skipping
-  NOTICE:  1
-  NOTICE:  2
-  NOTICE:  3
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  -- Check that addition or removal of any partition is correctly dealt with by
-  -- default partition table when it is being used in prepared statement.
-  create table pc_list_parted (a int) partition by list(a);
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/copy2.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/copy2.out	CENSORED
-***************
-*** 258,354 ****
-  CREATE TABLE vistest (LIKE testeoc);
-  COPY vistest FROM stdin CSV;
-  COMMIT;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  a0
-!  b
-! (2 rows)
-! 
-  BEGIN;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  a1
-!  b
-! (2 rows)
-! 
-  SAVEPOINT s1;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d1
-!  e
-! (2 rows)
-! 
-  COMMIT;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d1
-!  e
-! (2 rows)
-! 
-  BEGIN;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV FREEZE;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  a2
-!  b
-! (2 rows)
-! 
-  SAVEPOINT s1;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV FREEZE;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d2
-!  e
-! (2 rows)
-! 
-  COMMIT;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d2
-!  e
-! (2 rows)
-! 
-  BEGIN;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV FREEZE;
-  SELECT * FROM vistest;
-!  a 
-! ---
-!  x
-!  y
-! (2 rows)
-! 
-  COMMIT;
-  TRUNCATE vistest;
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  cannot perform FREEZE because the table was not created or truncated in the current subtransaction
-! BEGIN;
-  TRUNCATE vistest;
-  SAVEPOINT s1;
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  cannot perform FREEZE because the table was not created or truncated in the current subtransaction
-  COMMIT;
-  BEGIN;
-  INSERT INTO vistest VALUES ('z');
-  SAVEPOINT s1;
-  TRUNCATE vistest;
-  ROLLBACK TO SAVEPOINT s1;
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  cannot perform FREEZE because the table was not created or truncated in the current subtransaction
-  COMMIT;
-  CREATE FUNCTION truncate_in_subxact() RETURNS VOID AS
-  $$
-  BEGIN
---- 258,393 ----
-  CREATE TABLE vistest (LIKE testeoc);
-  COPY vistest FROM stdin CSV;
-  COMMIT;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  SELECT * FROM vistest;
-! ERROR:  relation "vistest" does not exist
-! LINE 1: SELECT * FROM vistest;
+  SELECT * FROM q5_prep_results;
+! ERROR:  relation "q5_prep_results" does not exist
+! LINE 1: SELECT * FROM q5_prep_results;
 !                       ^
-  BEGIN;
-  TRUNCATE vistest;
-+ ERROR:  relation "vistest" does not exist
-  COPY vistest FROM stdin CSV;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ a1
-+ b
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "a1"
-! LINE 1: a1
-!         ^
-  SAVEPOINT s1;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  TRUNCATE vistest;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  COPY vistest FROM stdin CSV;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ d1
-+ e
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "d1"
-! LINE 1: d1
-!         ^
-  COMMIT;
-  SELECT * FROM vistest;
-! ERROR:  relation "vistest" does not exist
-! LINE 1: SELECT * FROM vistest;
-!                       ^
-  BEGIN;
-  TRUNCATE vistest;
-+ ERROR:  relation "vistest" does not exist
-  COPY vistest FROM stdin CSV FREEZE;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ a2
-+ b
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "a2"
-! LINE 1: a2
-!         ^
-  SAVEPOINT s1;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  TRUNCATE vistest;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  COPY vistest FROM stdin CSV FREEZE;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ d2
-+ e
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "d2"
-! LINE 1: d2
-!         ^
-  COMMIT;
-  SELECT * FROM vistest;
-! ERROR:  relation "vistest" does not exist
-! LINE 1: SELECT * FROM vistest;
-!                       ^
-  BEGIN;
-  TRUNCATE vistest;
-+ ERROR:  relation "vistest" does not exist
-  COPY vistest FROM stdin CSV FREEZE;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ x
-+ y
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "x"
-! LINE 1: x
-!         ^
-  COMMIT;
-  TRUNCATE vistest;
-+ ERROR:  relation "vistest" does not exist
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  relation "vistest" does not exist
-! p
-! g
-! \.
-! invalid command \.
-! BEGIN;
-! ERROR:  syntax error at or near "p"
-! LINE 1: p
-!         ^
-  TRUNCATE vistest;
-+ ERROR:  relation "vistest" does not exist
-  SAVEPOINT s1;
-+ ERROR:  SAVEPOINT can only be used in transaction blocks
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  relation "vistest" does not exist
-! m
-! k
-! \.
-! invalid command \.
-  COMMIT;
-+ ERROR:  syntax error at or near "m"
-+ LINE 1: m
-+         ^
-  BEGIN;
-  INSERT INTO vistest VALUES ('z');
-+ ERROR:  relation "vistest" does not exist
-+ LINE 1: INSERT INTO vistest VALUES ('z');
-+                     ^
-  SAVEPOINT s1;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  TRUNCATE vistest;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  ROLLBACK TO SAVEPOINT s1;
-+ ERROR:  savepoint "s1" does not exist
-  COPY vistest FROM stdin CSV FREEZE;
-! ERROR:  current transaction is aborted, commands ignored until end of transaction block
-! d3
-! e
-! \.
-! invalid command \.
-  COMMIT;
-+ ERROR:  syntax error at or near "d3"
-+ LINE 1: d3
-+         ^
-  CREATE FUNCTION truncate_in_subxact() RETURNS VOID AS
-  $$
-  BEGIN
-***************
-*** 358,387 ****
-  	INSERT INTO vistest VALUES ('subxact failure');
-  END;
-  $$ language plpgsql;
-  BEGIN;
-  INSERT INTO vistest VALUES ('z');
-  SELECT truncate_in_subxact();
-!  truncate_in_subxact 
-! ---------------------
-!  
-! (1 row)
-! 
-  COPY vistest FROM stdin CSV FREEZE;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d4
-!  e
-! (2 rows)
-! 
-  COMMIT;
-  SELECT * FROM vistest;
-!  a  
-! ----
-!  d4
-!  e
-! (2 rows)
-! 
-  -- Test FORCE_NOT_NULL and FORCE_NULL options
-  CREATE TEMP TABLE forcetest (
-      a INT NOT NULL,
---- 397,424 ----
-  	INSERT INTO vistest VALUES ('subxact failure');
-  END;
-  $$ language plpgsql;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  BEGIN;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  INSERT INTO vistest VALUES ('z');
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  SELECT truncate_in_subxact();
-! ERROR:  current transaction is aborted, commands ignored until end of transaction block
-  COPY vistest FROM stdin CSV FREEZE;
-+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
-+ d4
-+ e
-+ \.
-+ invalid command \.
-  SELECT * FROM vistest;
-! ERROR:  syntax error at or near "d4"
-! LINE 1: d4
-!         ^
-  COMMIT;
-  SELECT * FROM vistest;
-! ERROR:  relation "vistest" does not exist
-! LINE 1: SELECT * FROM vistest;
-!                       ^
-  -- Test FORCE_NOT_NULL and FORCE_NULL options
-  CREATE TEMP TABLE forcetest (
-      a INT NOT NULL,
-***************
-*** 577,583 ****
---- 614,622 ----
-  -- clean up
-  DROP TABLE forcetest;
-  DROP TABLE vistest;
-+ ERROR:  table "vistest" does not exist
-  DROP FUNCTION truncate_in_subxact();
-+ ERROR:  function truncate_in_subxact() does not exist
-  DROP TABLE x, y;
-  DROP TABLE rls_t1 CASCADE;
-  DROP ROLE regress_rls_copy_user;
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/temp.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/temp.out	CENSORED
-***************
-*** 139,162 ****
-  CREATE TEMP TABLE temptest3(col int PRIMARY KEY) ON COMMIT DELETE ROWS;
-  CREATE TEMP TABLE temptest4(col int REFERENCES temptest3);
-  COMMIT;
-- ERROR:  unsupported ON COMMIT and foreign key combination
-- DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  -- Test manipulation of temp schema's placement in search path
-  create table public.whereami (f1 text);
-  insert into public.whereami values ('public');
-  create temp table whereami (f1 text);
-  insert into whereami values ('temp');
-  create function public.whoami() returns text
-    as $$select 'public'::text$$ language sql;
-  create function pg_temp.whoami() returns text
-    as $$select 'temp'::text$$ language sql;
-  -- default should have pg_temp implicitly first, but only for tables
-  select * from whereami;
-!   f1  
-! ------
-!  temp
-! (1 row)
-! 
-  select whoami();
-   whoami 
-  --------
---- 139,160 ----
-  CREATE TEMP TABLE temptest3(col int PRIMARY KEY) ON COMMIT DELETE ROWS;
-  CREATE TEMP TABLE temptest4(col int REFERENCES temptest3);
-  COMMIT;
-  -- Test manipulation of temp schema's placement in search path
-  create table public.whereami (f1 text);
-  insert into public.whereami values ('public');
-  create temp table whereami (f1 text);
-  insert into whereami values ('temp');
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  create function public.whoami() returns text
-    as $$select 'public'::text$$ language sql;
-  create function pg_temp.whoami() returns text
-    as $$select 'temp'::text$$ language sql;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  -- default should have pg_temp implicitly first, but only for tables
-  select * from whereami;
-! ERROR:  unsupported ON COMMIT and foreign key combination
-! DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  select whoami();
-   whoami 
-  --------
-***************
-*** 166,176 ****
-  -- can list temp first explicitly, but it still doesn't affect functions
-  set search_path = pg_temp, public;
-  select * from whereami;
-!   f1  
-! ------
-!  temp
-! (1 row)
-! 
-  select whoami();
-   whoami 
-  --------
---- 164,171 ----
-  -- can list temp first explicitly, but it still doesn't affect functions
-  set search_path = pg_temp, public;
-  select * from whereami;
-! ERROR:  unsupported ON COMMIT and foreign key combination
-! DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  select whoami();
-   whoami 
-  --------
-***************
-*** 193,203 ****
-  
-  -- you can invoke a temp function explicitly, though
-  select pg_temp.whoami();
-!  whoami 
-! --------
-!  temp
-! (1 row)
-! 
-  drop table public.whereami;
-  -- For partitioned temp tables, ON COMMIT actions ignore storage-less
-  -- partitioned tables.
---- 188,197 ----
-  
-  -- you can invoke a temp function explicitly, though
-  select pg_temp.whoami();
-! ERROR:  function pg_temp.whoami() does not exist
-! LINE 1: select pg_temp.whoami();
-!                ^
-! HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
-  drop table public.whereami;
-  -- For partitioned temp tables, ON COMMIT actions ignore storage-less
-  -- partitioned tables.
-***************
-*** 209,221 ****
-    for values in (1) on commit delete rows;
-  insert into temp_parted_oncommit values (1);
-  commit;
-  -- partitions are emptied by the previous commit
-  select * from temp_parted_oncommit;
-!  a 
-! ---
-! (0 rows)
-! 
-  drop table temp_parted_oncommit;
-  -- Check dependencies between ON COMMIT actions with a partitioned
-  -- table and its partitions.  Using ON COMMIT DROP on a parent removes
-  -- the whole set.
---- 203,217 ----
-    for values in (1) on commit delete rows;
-  insert into temp_parted_oncommit values (1);
-  commit;
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  -- partitions are emptied by the previous commit
-  select * from temp_parted_oncommit;
-! ERROR:  relation "temp_parted_oncommit" does not exist
-! LINE 1: select * from temp_parted_oncommit;
-!                       ^
-  drop table temp_parted_oncommit;
-+ ERROR:  table "temp_parted_oncommit" does not exist
-  -- Check dependencies between ON COMMIT actions with a partitioned
-  -- table and its partitions.  Using ON COMMIT DROP on a parent removes
-  -- the whole set.
-***************
-*** 230,235 ****
---- 226,233 ----
-    for values in (2) on commit drop;
-  insert into temp_parted_oncommit_test values (1), (2);
-  commit;
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  -- no relations remain in this case.
-  select relname from pg_class where relname like 'temp_parted_oncommit_test%';
-   relname 
-***************
-*** 249,271 ****
-    for values in (2) on commit drop;
-  insert into temp_parted_oncommit_test values (1), (2);
-  commit;
-  -- Data from the remaining partition is still here as its rows are
-  -- preserved.
-  select * from temp_parted_oncommit_test;
-!  a 
-! ---
-!  1
-! (1 row)
-! 
-  -- two relations remain in this case.
-  select relname from pg_class where relname like 'temp_parted_oncommit_test%';
-!           relname           
-! ----------------------------
-!  temp_parted_oncommit_test
-!  temp_parted_oncommit_test1
-! (2 rows)
-  
-  drop table temp_parted_oncommit_test;
-  -- Check dependencies between ON COMMIT actions with inheritance trees.
-  -- Using ON COMMIT DROP on a parent removes the whole set.
-  begin;
---- 247,268 ----
-    for values in (2) on commit drop;
-  insert into temp_parted_oncommit_test values (1), (2);
-  commit;
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  -- Data from the remaining partition is still here as its rows are
-  -- preserved.
-  select * from temp_parted_oncommit_test;
-! ERROR:  relation "temp_parted_oncommit_test" does not exist
-! LINE 1: select * from temp_parted_oncommit_test;
-!                       ^
-  -- two relations remain in this case.
-  select relname from pg_class where relname like 'temp_parted_oncommit_test%';
-!  relname 
-! ---------
-! (0 rows)
-  
-  drop table temp_parted_oncommit_test;
-+ ERROR:  table "temp_parted_oncommit_test" does not exist
-  -- Check dependencies between ON COMMIT actions with inheritance trees.
-  -- Using ON COMMIT DROP on a parent removes the whole set.
-  begin;
-***************
-*** 274,279 ****
---- 271,278 ----
-    inherits(temp_inh_oncommit_test) on commit delete rows;
-  insert into temp_inh_oncommit_test1 values (1);
-  commit;
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  -- no relations remain in this case
-  select relname from pg_class where relname like 'temp_inh_oncommit_test%';
-   relname 
-***************
-*** 288,306 ****
-  insert into temp_inh_oncommit_test1 values (1);
-  insert into temp_inh_oncommit_test values (1);
-  commit;
-  select * from temp_inh_oncommit_test;
-!  a 
-! ---
-! (0 rows)
-! 
-  -- one relation remains
-  select relname from pg_class where relname like 'temp_inh_oncommit_test%';
-!         relname         
-! ------------------------
-!  temp_inh_oncommit_test
-! (1 row)
-  
-  drop table temp_inh_oncommit_test;
-  -- Tests with two-phase commit
-  -- Transactions creating objects in a temporary namespace cannot be used
-  -- with two-phase commit.
---- 287,306 ----
-  insert into temp_inh_oncommit_test1 values (1);
-  insert into temp_inh_oncommit_test values (1);
-  commit;
-+ ERROR:  unsupported ON COMMIT and foreign key combination
-+ DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  select * from temp_inh_oncommit_test;
-! ERROR:  relation "temp_inh_oncommit_test" does not exist
-! LINE 1: select * from temp_inh_oncommit_test;
-!                       ^
-  -- one relation remains
-  select relname from pg_class where relname like 'temp_inh_oncommit_test%';
-!  relname 
-! ---------
-! (0 rows)
-  
-  drop table temp_inh_oncommit_test;
-+ ERROR:  table "temp_inh_oncommit_test" does not exist
-  -- Tests with two-phase commit
-  -- Transactions creating objects in a temporary namespace cannot be used
-  -- with two-phase commit.
-***************
-*** 314,323 ****
-  -- Function drop
-  create function pg_temp.twophase_func() returns void as
-    $$ select '2pc_func'::text $$ language sql;
-  begin;
-  drop function pg_temp.twophase_func();
-  prepare transaction 'twophase_func';
-- ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  -- Operator creation
-  begin;
-  create operator pg_temp.@@ (leftarg = int4, rightarg = int4, procedure = int4mi);
---- 314,324 ----
-  -- Function drop
-  create function pg_temp.twophase_func() returns void as
-    $$ select '2pc_func'::text $$ language sql;
-+ ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  begin;
-  drop function pg_temp.twophase_func();
-+ ERROR:  function pg_temp.twophase_func() does not exist
-  prepare transaction 'twophase_func';
-  -- Operator creation
-  begin;
-  create operator pg_temp.@@ (leftarg = int4, rightarg = int4, procedure = int4mi);
-***************
-*** 327,341 ****
-  begin;
-  create type pg_temp.twophase_type as (a int);
-  prepare transaction 'twophase_type';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  begin;
-  create view pg_temp.twophase_view as select 1;
-  prepare transaction 'twophase_view';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  begin;
-  create sequence pg_temp.twophase_seq;
-  prepare transaction 'twophase_sequence';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  -- Temporary tables cannot be used with two-phase commit.
-  create temp table twophase_tab (a int);
-  begin;
---- 328,342 ----
-  begin;
-  create type pg_temp.twophase_type as (a int);
-  prepare transaction 'twophase_type';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  begin;
-  create view pg_temp.twophase_view as select 1;
-  prepare transaction 'twophase_view';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  begin;
-  create sequence pg_temp.twophase_seq;
-  prepare transaction 'twophase_sequence';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
-  -- Temporary tables cannot be used with two-phase commit.
-  create temp table twophase_tab (a int);
-  begin;
-***************
-*** 345,363 ****
-  (0 rows)
-  
-  prepare transaction 'twophase_tab';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  begin;
-  insert into twophase_tab values (1);
-  prepare transaction 'twophase_tab';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  begin;
-  lock twophase_tab in access exclusive mode;
-  prepare transaction 'twophase_tab';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  begin;
-  drop table twophase_tab;
-  prepare transaction 'twophase_tab';
-! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
-  -- Corner case: current_schema may create a temporary schema if namespace
-  -- creation is pending, so check after that.  First reset the connection
-  -- to remove the temporary namespace, and make sure that non-parallel plans
---- 346,367 ----
-  (0 rows)
-  
-  prepare transaction 'twophase_tab';
-! ERROR:  unsupported ON COMMIT and foreign key combination
-! DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  begin;
-  insert into twophase_tab values (1);
-  prepare transaction 'twophase_tab';
-! ERROR:  unsupported ON COMMIT and foreign key combination
-! DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  begin;
-  lock twophase_tab in access exclusive mode;
-  prepare transaction 'twophase_tab';
-! ERROR:  unsupported ON COMMIT and foreign key combination
-! DETAIL:  Table "temptest4" references "temptest3", but they do not have the same ON COMMIT setting.
-  begin;
-  drop table twophase_tab;
-  prepare transaction 'twophase_tab';
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- Corner case: current_schema may create a temporary schema if namespace
-  -- creation is pending, so check after that.  First reset the connection
-  -- to remove the temporary namespace, and make sure that non-parallel plans
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/domain.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/domain.out	CENSORED
-***************
-*** 316,398 ****
-  create domain dcomptypea as comptype[];
-  create table dcomptable (d1 dcomptypea unique);
-  insert into dcomptable values (array[row(1,2)]::dcomptypea);
-  insert into dcomptable values (array[row(3,4), row(5,6)]::comptype[]);
-  insert into dcomptable values (array[row(7,8)::comptype, row(9,10)::comptype]);
-  insert into dcomptable values (array[row(1,2)]::dcomptypea);  -- fail on uniqueness
-! ERROR:  duplicate key value violates unique constraint "dcomptable_d1_key"
-! DETAIL:  Key (d1)=({"(1,2)"}) already exists.
-  insert into dcomptable (d1[1]) values(row(9,10));
-  insert into dcomptable (d1[1].r) values(11);
-  select * from dcomptable;
-!          d1         
-! --------------------
-!  {"(1,2)"}
-!  {"(3,4)","(5,6)"}
-!  {"(7,8)","(9,10)"}
-!  {"(9,10)"}
-!  {"(11,)"}
-! (5 rows)
-  
-  select d1[2], d1[1].r, d1[1].i from dcomptable;
-!    d1   | r  | i  
-! --------+----+----
-!         |  1 |  2
-!  (5,6)  |  3 |  4
-!  (9,10) |  7 |  8
-!         |  9 | 10
-!         | 11 |   
-! (5 rows)
-  
-  update dcomptable set d1[2] = row(d1[2].i, d1[2].r);
-  select * from dcomptable;
-!          d1         
-! --------------------
-!  {"(1,2)","(,)"}
-!  {"(3,4)","(6,5)"}
-!  {"(7,8)","(10,9)"}
-!  {"(9,10)","(,)"}
-!  {"(11,)","(,)"}
-! (5 rows)
-  
-  update dcomptable set d1[1].r = d1[1].r + 1 where d1[1].i > 0;
-  select * from dcomptable;
-!          d1         
-! --------------------
-!  {"(11,)","(,)"}
-!  {"(2,2)","(,)"}
-!  {"(4,4)","(6,5)"}
-!  {"(8,8)","(10,9)"}
-!  {"(10,10)","(,)"}
-! (5 rows)
-  
-  alter domain dcomptypea add constraint c1 check (value[1].r <= value[1].i);
-  alter domain dcomptypea add constraint c2 check (value[1].r > value[1].i);  -- fail
-- ERROR:  column "d1" of table "dcomptable" contains values that violate the new constraint
-  select array[row(2,1)]::dcomptypea;  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  insert into dcomptable values (array[row(1,2)]::comptype[]);
-  insert into dcomptable values (array[row(2,1)]::comptype[]);  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  insert into dcomptable (d1[1].r) values(99);
-  insert into dcomptable (d1[1].r, d1[1].i) values(99, 100);
-  insert into dcomptable (d1[1].r, d1[1].i) values(100, 99);  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  update dcomptable set d1[1].r = d1[1].r + 1 where d1[1].i > 0;  -- fail
-- ERROR:  value for domain dcomptypea violates check constraint "c1"
-  update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
-    where d1[1].i > 0;
-  select * from dcomptable;
-!          d1         
-! --------------------
-!  {"(11,)","(,)"}
-!  {"(99,)"}
-!  {"(1,3)","(,)"}
-!  {"(3,5)","(6,5)"}
-!  {"(7,9)","(10,9)"}
-!  {"(9,11)","(,)"}
-!  {"(0,3)"}
-!  {"(98,101)"}
-! (8 rows)
-  
-  explain (verbose, costs off)
-    update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
---- 316,375 ----
-  create domain dcomptypea as comptype[];
-  create table dcomptable (d1 dcomptypea unique);
-  insert into dcomptable values (array[row(1,2)]::dcomptypea);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable values (array[row(3,4), row(5,6)]::comptype[]);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable values (array[row(7,8)::comptype, row(9,10)::comptype]);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable values (array[row(1,2)]::dcomptypea);  -- fail on uniqueness
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable (d1[1]) values(row(9,10));
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable (d1[1].r) values(11);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  select * from dcomptable;
-!  d1 
-! ----
-! (0 rows)
-  
-  select d1[2], d1[1].r, d1[1].i from dcomptable;
-!  d1 | r | i 
-! ----+---+---
-! (0 rows)
-  
-  update dcomptable set d1[2] = row(d1[2].i, d1[2].r);
-  select * from dcomptable;
-!  d1 
-! ----
-! (0 rows)
-  
-  update dcomptable set d1[1].r = d1[1].r + 1 where d1[1].i > 0;
-  select * from dcomptable;
-!  d1 
-! ----
-! (0 rows)
-  
-  alter domain dcomptypea add constraint c1 check (value[1].r <= value[1].i);
-  alter domain dcomptypea add constraint c2 check (value[1].r > value[1].i);  -- fail
-  select array[row(2,1)]::dcomptypea;  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  insert into dcomptable values (array[row(1,2)]::comptype[]);
-+ ERROR:  value for domain dcomptypea violates check constraint "c2"
-  insert into dcomptable values (array[row(2,1)]::comptype[]);  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  insert into dcomptable (d1[1].r) values(99);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  insert into dcomptable (d1[1].r, d1[1].i) values(99, 100);
-+ ERROR:  value for domain dcomptypea violates check constraint "c2"
-  insert into dcomptable (d1[1].r, d1[1].i) values(100, 99);  -- fail
-  ERROR:  value for domain dcomptypea violates check constraint "c1"
-  update dcomptable set d1[1].r = d1[1].r + 1 where d1[1].i > 0;  -- fail
-  update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
-    where d1[1].i > 0;
-  select * from dcomptable;
-!  d1 
-! ----
-! (0 rows)
-  
-  explain (verbose, costs off)
-    update dcomptable set d1[1].r = d1[1].r - 1, d1[1].i = d1[1].i + 1
-***************
-*** 708,714 ****
---- 685,693 ----
-  ALTER DOMAIN things VALIDATE CONSTRAINT meow;
-  ERROR:  column "stuff" of table "thethings" contains values that violate the new constraint
-  UPDATE thethings SET stuff = 10;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  ALTER DOMAIN things VALIDATE CONSTRAINT meow;
-+ ERROR:  column "stuff" of table "thethings" contains values that violate the new constraint
-  -- Confirm ALTER DOMAIN with RULES.
-  create table domtab (col1 integer);
-  create domain dom as integer;
-***************
-*** 879,884 ****
---- 858,864 ----
-  create domain ddtest1d as ddtest1;
-  create table ddtest2(f1 ddtest1d);
-  insert into ddtest2 values('(-1)');
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter domain posint add constraint c1 check(value >= 0);
-  ERROR:  cannot alter type "posint" because column "ddtest2.f1" uses it
-  drop table ddtest2;
-***************
-*** 887,892 ****
---- 867,873 ----
-  create domain ddtest1d as ddtest1[];
-  create table ddtest2(f1 ddtest1d);
-  insert into ddtest2 values('{(-1)}');
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  alter domain posint add constraint c1 check(value >= 0);
-  ERROR:  cannot alter type "posint" because column "ddtest2.f1" uses it
-  drop table ddtest2;
+  -- unknown or unspecified parameter types: should succeed
+  PREPARE q6 AS
+      SELECT * FROM tenk1 WHERE unique1 = $1 AND stringu1 = $2;
 
 ======================================================================
 
@@ -2026,38 +582,6 @@
 
 ======================================================================
 
-*** contrib/mmts/../../src/test/regress/expected/alter_table.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/alter_table.out	CENSORED
-***************
-*** 3598,3608 ****
-  DROP TABLE temp_parted, perm_part;
-  -- check that the table being attached is not a typed table
-  CREATE TYPE mytype AS (a int);
-  CREATE TABLE fail_part OF mytype;
-  ALTER TABLE list_parted ATTACH PARTITION fail_part FOR VALUES IN (1);
-! ERROR:  cannot attach a typed table as partition
-  DROP TYPE mytype CASCADE;
-! NOTICE:  drop cascades to table fail_part
-  -- check existence (or non-existence) of oid column
-  ALTER TABLE list_parted SET WITH OIDS;
-  CREATE TABLE fail_part (a int);
---- 3598,3610 ----
-  DROP TABLE temp_parted, perm_part;
-  -- check that the table being attached is not a typed table
-  CREATE TYPE mytype AS (a int);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  CREATE TABLE fail_part OF mytype;
-+ ERROR:  type "mytype" does not exist
-  ALTER TABLE list_parted ATTACH PARTITION fail_part FOR VALUES IN (1);
-! ERROR:  relation "fail_part" does not exist
-  DROP TYPE mytype CASCADE;
-! ERROR:  type "mytype" does not exist
-  -- check existence (or non-existence) of oid column
-  ALTER TABLE list_parted SET WITH OIDS;
-  CREATE TABLE fail_part (a int);
-
-======================================================================
-
 *** contrib/mmts/../../src/test/regress/expected/sequence.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/sequence.out	CENSORED
 ***************
@@ -2077,6 +601,212 @@
   CREATE TABLE sequence_test_table (a int);
   CREATE SEQUENCE sequence_testx OWNED BY sequence_test_table.b;  -- wrong column
   ERROR:  column "b" of relation "sequence_test_table" does not exist
+***************
+*** 34,42 ****
+--- 34,44 ----
+  CREATE SEQUENCE sequence_test7 AS bigint;
+  CREATE SEQUENCE sequence_test8 AS integer MAXVALUE 100000;
+  CREATE SEQUENCE sequence_test9 AS integer INCREMENT BY -1;
++ ERROR:  [multimaster] failed to prepare transaction at peer node
+  CREATE SEQUENCE sequence_test10 AS integer MINVALUE -100000 START 1;
+  CREATE SEQUENCE sequence_test11 AS smallint;
+  CREATE SEQUENCE sequence_test12 AS smallint INCREMENT -1;
++ ERROR:  [multimaster] failed to prepare transaction at peer node
+  CREATE SEQUENCE sequence_test13 AS smallint MINVALUE -32768;
+  CREATE SEQUENCE sequence_test14 AS smallint MAXVALUE 32767 INCREMENT -1;
+  CREATE SEQUENCE sequence_testx AS text;
+***************
+*** 54,64 ****
+--- 56,68 ----
+  ERROR:  MAXVALUE (100000) is out of range for sequence data type smallint
+  ALTER SEQUENCE sequence_test8 AS smallint MAXVALUE 20000;  -- ok now
+  ALTER SEQUENCE sequence_test9 AS smallint;  -- success, min will be adjusted
++ ERROR:  relation "sequence_test9" does not exist
+  ALTER SEQUENCE sequence_test10 AS smallint;  -- fail, min has to be adjusted
+  ERROR:  MINVALUE (-100000) is out of range for sequence data type smallint
+  ALTER SEQUENCE sequence_test10 AS smallint MINVALUE -20000;  -- ok now
+  ALTER SEQUENCE sequence_test11 AS int;  -- max will be adjusted
+  ALTER SEQUENCE sequence_test12 AS int;  -- min will be adjusted
++ ERROR:  relation "sequence_test12" does not exist
+  ALTER SEQUENCE sequence_test13 AS int;  -- min and max will be adjusted
+  ALTER SEQUENCE sequence_test14 AS int;  -- min and max will be adjusted
+  ---
+***************
+*** 317,322 ****
+--- 321,327 ----
+  ERROR:  "serialtest1" is not a sequence
+  CREATE SEQUENCE sequence_test2 START WITH 32;
+  CREATE SEQUENCE sequence_test4 INCREMENT BY -1;
++ ERROR:  [multimaster] failed to prepare transaction at peer node
+  SELECT nextval('sequence_test2');
+   nextval 
+  ---------
+***************
+*** 324,334 ****
+  (1 row)
+  
+  SELECT nextval('sequence_test4');
+!  nextval 
+! ---------
+!       -1
+! (1 row)
+! 
+  ALTER SEQUENCE sequence_test2 RESTART;
+  SELECT nextval('sequence_test2');
+   nextval 
+--- 329,337 ----
+  (1 row)
+  
+  SELECT nextval('sequence_test4');
+! ERROR:  relation "sequence_test4" does not exist
+! LINE 1: SELECT nextval('sequence_test4');
+!                        ^
+  ALTER SEQUENCE sequence_test2 RESTART;
+  SELECT nextval('sequence_test2');
+   nextval 
+***************
+*** 339,345 ****
+  ALTER SEQUENCE sequence_test2 RESTART WITH 0;  -- error
+  ERROR:  RESTART value (0) cannot be less than MINVALUE (1)
+  ALTER SEQUENCE sequence_test4 RESTART WITH 40;  -- error
+! ERROR:  RESTART value (40) cannot be greater than MAXVALUE (-1)
+  -- test CYCLE and NO CYCLE
+  ALTER SEQUENCE sequence_test2 RESTART WITH 24
+    INCREMENT BY 4 MAXVALUE 36 MINVALUE 5 CYCLE;
+--- 342,348 ----
+  ALTER SEQUENCE sequence_test2 RESTART WITH 0;  -- error
+  ERROR:  RESTART value (0) cannot be less than MINVALUE (1)
+  ALTER SEQUENCE sequence_test4 RESTART WITH 40;  -- error
+! ERROR:  relation "sequence_test4" does not exist
+  -- test CYCLE and NO CYCLE
+  ALTER SEQUENCE sequence_test2 RESTART WITH 24
+    INCREMENT BY 4 MAXVALUE 36 MINVALUE 5 CYCLE;
+***************
+*** 479,546 ****
+  SELECT * FROM information_schema.sequences
+    WHERE sequence_name ~ ANY(ARRAY['sequence_test', 'serialtest'])
+    ORDER BY sequence_name ASC;
+!  sequence_catalog | sequence_schema |   sequence_name    | data_type | numeric_precision | numeric_precision_radix | numeric_scale | start_value |    minimum_value     |    maximum_value    | increment | cycle_option 
+! ------------------+-----------------+--------------------+-----------+-------------------+-------------------------+---------------+-------------+----------------------+---------------------+-----------+--------------
+!  regression       | public          | sequence_test10    | smallint  |                16 |                       2 |             0 | 1           | -20000               | 32767               | 1         | NO
+!  regression       | public          | sequence_test11    | integer   |                32 |                       2 |             0 | 1           | 1                    | 2147483647          | 1         | NO
+!  regression       | public          | sequence_test12    | integer   |                32 |                       2 |             0 | -1          | -2147483648          | -1                  | -1        | NO
+!  regression       | public          | sequence_test13    | integer   |                32 |                       2 |             0 | -32768      | -2147483648          | 2147483647          | 1         | NO
+!  regression       | public          | sequence_test14    | integer   |                32 |                       2 |             0 | 32767       | -2147483648          | 2147483647          | -1        | NO
+!  regression       | public          | sequence_test2     | bigint    |                64 |                       2 |             0 | 32          | 5                    | 36                  | 4         | YES
+!  regression       | public          | sequence_test3     | bigint    |                64 |                       2 |             0 | 1           | 1                    | 9223372036854775807 | 1         | NO
+!  regression       | public          | sequence_test4     | bigint    |                64 |                       2 |             0 | -1          | -9223372036854775808 | -1                  | -1        | NO
+!  regression       | public          | sequence_test5     | smallint  |                16 |                       2 |             0 | 1           | 1                    | 32767               | 1         | NO
+!  regression       | public          | sequence_test6     | smallint  |                16 |                       2 |             0 | 1           | 1                    | 32767               | 1         | NO
+!  regression       | public          | sequence_test7     | bigint    |                64 |                       2 |             0 | 1           | 1                    | 9223372036854775807 | 1         | NO
+!  regression       | public          | sequence_test8     | smallint  |                16 |                       2 |             0 | 1           | 1                    | 20000               | 1         | NO
+!  regression       | public          | sequence_test9     | smallint  |                16 |                       2 |             0 | -1          | -32768               | -1                  | -1        | NO
+!  regression       | public          | serialtest1_f2_foo | integer   |                32 |                       2 |             0 | 1           | 1                    | 2147483647          | 1         | NO
+!  regression       | public          | serialtest2_f2_seq | integer   |                32 |                       2 |             0 | 1           | 1                    | 2147483647          | 1         | NO
+!  regression       | public          | serialtest2_f3_seq | smallint  |                16 |                       2 |             0 | 1           | 1                    | 32767               | 1         | NO
+!  regression       | public          | serialtest2_f4_seq | smallint  |                16 |                       2 |             0 | 1           | 1                    | 32767               | 1         | NO
+!  regression       | public          | serialtest2_f5_seq | bigint    |                64 |                       2 |             0 | 1           | 1                    | 9223372036854775807 | 1         | NO
+!  regression       | public          | serialtest2_f6_seq | bigint    |                64 |                       2 |             0 | 1           | 1                    | 9223372036854775807 | 1         | NO
+! (19 rows)
+  
+  SELECT schemaname, sequencename, start_value, min_value, max_value, increment_by, cycle, cache_size, last_value
+  FROM pg_sequences
+  WHERE sequencename ~ ANY(ARRAY['sequence_test', 'serialtest'])
+    ORDER BY sequencename ASC;
+!  schemaname |    sequencename    | start_value |      min_value       |      max_value      | increment_by | cycle | cache_size | last_value 
+! ------------+--------------------+-------------+----------------------+---------------------+--------------+-------+------------+------------
+!  public     | sequence_test10    |           1 |               -20000 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test11    |           1 |                    1 |          2147483647 |            1 | f     |          1 |           
+!  public     | sequence_test12    |          -1 |          -2147483648 |                  -1 |           -1 | f     |          1 |           
+!  public     | sequence_test13    |      -32768 |          -2147483648 |          2147483647 |            1 | f     |          1 |           
+!  public     | sequence_test14    |       32767 |          -2147483648 |          2147483647 |           -1 | f     |          1 |           
+!  public     | sequence_test2     |          32 |                    5 |                  36 |            4 | t     |          1 |          5
+!  public     | sequence_test3     |           1 |                    1 | 9223372036854775807 |            1 | f     |          1 |           
+!  public     | sequence_test4     |          -1 | -9223372036854775808 |                  -1 |           -1 | f     |          1 |         -1
+!  public     | sequence_test5     |           1 |                    1 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test6     |           1 |                    1 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test7     |           1 |                    1 | 9223372036854775807 |            1 | f     |          1 |           
+!  public     | sequence_test8     |           1 |                    1 |               20000 |            1 | f     |          1 |           
+!  public     | sequence_test9     |          -1 |               -32768 |                  -1 |           -1 | f     |          1 |           
+!  public     | serialtest1_f2_foo |           1 |                    1 |          2147483647 |            1 | f     |          1 |          3
+!  public     | serialtest2_f2_seq |           1 |                    1 |          2147483647 |            1 | f     |          1 |          2
+!  public     | serialtest2_f3_seq |           1 |                    1 |               32767 |            1 | f     |          1 |          2
+!  public     | serialtest2_f4_seq |           1 |                    1 |               32767 |            1 | f     |          1 |          2
+!  public     | serialtest2_f5_seq |           1 |                    1 | 9223372036854775807 |            1 | f     |          1 |          2
+!  public     | serialtest2_f6_seq |           1 |                    1 | 9223372036854775807 |            1 | f     |          1 |          2
+! (19 rows)
+  
+  SELECT * FROM pg_sequence_parameters('sequence_test4'::regclass);
+!  start_value |    minimum_value     | maximum_value | increment | cycle_option | cache_size | data_type 
+! -------------+----------------------+---------------+-----------+--------------+------------+-----------
+!           -1 | -9223372036854775808 |            -1 |        -1 | f            |          1 |        20
+! (1 row)
+! 
+  \d sequence_test4
+-                        Sequence "public.sequence_test4"
+-   Type  | Start |       Minimum        | Maximum | Increment | Cycles? | Cache 
+- --------+-------+----------------------+---------+-----------+---------+-------
+-  bigint |    -1 | -9223372036854775808 |      -1 |        -1 | no      |     1
+- 
+  \d serialtest2_f2_seq
+                   Sequence "public.serialtest2_f2_seq"
+    Type   | Start | Minimum |  Maximum   | Increment | Cycles? | Cache 
+--- 482,536 ----
+  SELECT * FROM information_schema.sequences
+    WHERE sequence_name ~ ANY(ARRAY['sequence_test', 'serialtest'])
+    ORDER BY sequence_name ASC;
+!  sequence_catalog | sequence_schema |   sequence_name    | data_type | numeric_precision | numeric_precision_radix | numeric_scale | start_value | minimum_value |    maximum_value    | increment | cycle_option 
+! ------------------+-----------------+--------------------+-----------+-------------------+-------------------------+---------------+-------------+---------------+---------------------+-----------+--------------
+!  regression       | public          | sequence_test10    | smallint  |                16 |                       2 |             0 | 1           | -20000        | 32767               | 1         | NO
+!  regression       | public          | sequence_test11    | integer   |                32 |                       2 |             0 | 1           | 1             | 2147483647          | 1         | NO
+!  regression       | public          | sequence_test13    | integer   |                32 |                       2 |             0 | -32768      | -2147483648   | 2147483647          | 1         | NO
+!  regression       | public          | sequence_test14    | integer   |                32 |                       2 |             0 | 32767       | -2147483648   | 2147483647          | -1        | NO
+!  regression       | public          | sequence_test2     | bigint    |                64 |                       2 |             0 | 32          | 5             | 36                  | 4         | YES
+!  regression       | public          | sequence_test3     | bigint    |                64 |                       2 |             0 | 1           | 1             | 9223372036854775807 | 1         | NO
+!  regression       | public          | sequence_test5     | smallint  |                16 |                       2 |             0 | 1           | 1             | 32767               | 1         | NO
+!  regression       | public          | sequence_test6     | smallint  |                16 |                       2 |             0 | 1           | 1             | 32767               | 1         | NO
+!  regression       | public          | sequence_test7     | bigint    |                64 |                       2 |             0 | 1           | 1             | 9223372036854775807 | 1         | NO
+!  regression       | public          | sequence_test8     | smallint  |                16 |                       2 |             0 | 1           | 1             | 20000               | 1         | NO
+!  regression       | public          | serialtest1_f2_foo | integer   |                32 |                       2 |             0 | 1           | 1             | 2147483647          | 1         | NO
+!  regression       | public          | serialtest2_f2_seq | integer   |                32 |                       2 |             0 | 1           | 1             | 2147483647          | 1         | NO
+!  regression       | public          | serialtest2_f3_seq | smallint  |                16 |                       2 |             0 | 1           | 1             | 32767               | 1         | NO
+!  regression       | public          | serialtest2_f4_seq | smallint  |                16 |                       2 |             0 | 1           | 1             | 32767               | 1         | NO
+!  regression       | public          | serialtest2_f5_seq | bigint    |                64 |                       2 |             0 | 1           | 1             | 9223372036854775807 | 1         | NO
+!  regression       | public          | serialtest2_f6_seq | bigint    |                64 |                       2 |             0 | 1           | 1             | 9223372036854775807 | 1         | NO
+! (16 rows)
+  
+  SELECT schemaname, sequencename, start_value, min_value, max_value, increment_by, cycle, cache_size, last_value
+  FROM pg_sequences
+  WHERE sequencename ~ ANY(ARRAY['sequence_test', 'serialtest'])
+    ORDER BY sequencename ASC;
+!  schemaname |    sequencename    | start_value |  min_value  |      max_value      | increment_by | cycle | cache_size | last_value 
+! ------------+--------------------+-------------+-------------+---------------------+--------------+-------+------------+------------
+!  public     | sequence_test10    |           1 |      -20000 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test11    |           1 |           1 |          2147483647 |            1 | f     |          1 |           
+!  public     | sequence_test13    |      -32768 | -2147483648 |          2147483647 |            1 | f     |          1 |           
+!  public     | sequence_test14    |       32767 | -2147483648 |          2147483647 |           -1 | f     |          1 |           
+!  public     | sequence_test2     |          32 |           5 |                  36 |            4 | t     |          1 |          5
+!  public     | sequence_test3     |           1 |           1 | 9223372036854775807 |            1 | f     |          1 |           
+!  public     | sequence_test5     |           1 |           1 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test6     |           1 |           1 |               32767 |            1 | f     |          1 |           
+!  public     | sequence_test7     |           1 |           1 | 9223372036854775807 |            1 | f     |          1 |           
+!  public     | sequence_test8     |           1 |           1 |               20000 |            1 | f     |          1 |           
+!  public     | serialtest1_f2_foo |           1 |           1 |          2147483647 |            1 | f     |          1 |          3
+!  public     | serialtest2_f2_seq |           1 |           1 |          2147483647 |            1 | f     |          1 |          2
+!  public     | serialtest2_f3_seq |           1 |           1 |               32767 |            1 | f     |          1 |          2
+!  public     | serialtest2_f4_seq |           1 |           1 |               32767 |            1 | f     |          1 |          2
+!  public     | serialtest2_f5_seq |           1 |           1 | 9223372036854775807 |            1 | f     |          1 |          2
+!  public     | serialtest2_f6_seq |           1 |           1 | 9223372036854775807 |            1 | f     |          1 |          2
+! (16 rows)
+  
+  SELECT * FROM pg_sequence_parameters('sequence_test4'::regclass);
+! ERROR:  relation "sequence_test4" does not exist
+! LINE 1: SELECT * FROM pg_sequence_parameters('sequence_test4'::regcl...
+!                                              ^
+  \d sequence_test4
+  \d serialtest2_f2_seq
+                   Sequence "public.serialtest2_f2_seq"
+    Type   | Start | Minimum |  Maximum   | Increment | Cycles? | Cache 
 
 ======================================================================
 
@@ -2117,26 +847,15 @@
   
   -- NOTE: large objects require transactions
 ***************
-*** 310,320 ****
-  -- lo_unlink(lobjId oid) returns integer
-  -- return value appears to always be 1
-  SELECT lo_unlink(loid) from lotest_stash_values;
-!  lo_unlink 
-! -----------
-!          1
-! (1 row)
-! 
-  TRUNCATE lotest_stash_values;
-  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/CENSORED/tenk.data');
-  BEGIN;
---- 311,317 ----
-  -- lo_unlink(lobjId oid) returns integer
-  -- return value appears to always be 1
-  SELECT lo_unlink(loid) from lotest_stash_values;
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  TRUNCATE lotest_stash_values;
-  INSERT INTO lotest_stash_values (loid) SELECT lo_import('/CENSORED/tenk.data');
-  BEGIN;
+*** 379,384 ****
+--- 380,386 ----
+  (1 row)
+  
+  END;
++ ERROR:  [multimaster] failed to prepare transaction at peer node
+  SELECT lo_export(loid, '/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
+   lo_export 
+  -----------
 ***************
 *** 400,410 ****
   (0 rows)
@@ -2150,7 +869,7 @@
   TRUNCATE lotest_stash_values;
   \lo_unlink :newloid
   \lo_import '/CENSORED/lotest.txt'
---- 397,403 ----
+--- 402,408 ----
   (0 rows)
   
   SELECT lo_unlink(loid) FROM lotest_stash_values;
@@ -2158,57 +877,6 @@
   TRUNCATE lotest_stash_values;
   \lo_unlink :newloid
   \lo_import '/CENSORED/lotest.txt'
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/with.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/with.out	CENSORED
-***************
-*** 1875,1892 ****
---- 1875,1897 ----
-  WITH aa AS (SELECT 1 a, 2 b)
-  INSERT INTO withz VALUES(1, 'insert')
-  ON CONFLICT (k) DO UPDATE SET v = (SELECT b || ' update' FROM aa WHERE a = 1 LIMIT 1);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  WITH aa AS (SELECT 1 a, 2 b)
-  INSERT INTO withz VALUES(1, 'insert')
-  ON CONFLICT (k) DO UPDATE SET v = ' update' WHERE withz.k = (SELECT a FROM aa);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  WITH aa AS (SELECT 1 a, 2 b)
-  INSERT INTO withz VALUES(1, 'insert')
-  ON CONFLICT (k) DO UPDATE SET v = (SELECT b || ' update' FROM aa WHERE a = 1 LIMIT 1);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  WITH aa AS (SELECT 'a' a, 'b' b UNION ALL SELECT 'a' a, 'b' b)
-  INSERT INTO withz VALUES(1, 'insert')
-  ON CONFLICT (k) DO UPDATE SET v = (SELECT b || ' update' FROM aa WHERE a = 'a' LIMIT 1);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  WITH aa AS (SELECT 1 a, 2 b)
-  INSERT INTO withz VALUES(1, (SELECT b || ' insert' FROM aa WHERE a = 1 ))
-  ON CONFLICT (k) DO UPDATE SET v = (SELECT b || ' update' FROM aa WHERE a = 1 LIMIT 1);
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  -- Update a row more than once, in different parts of a wCTE. That is
-  -- an allowed, presumably very rare, edge case, but since it was
-  -- broken in the past, having a test seems worthwhile.
-***************
-*** 1899,1908 ****
-  INSERT INTO withz VALUES(2, 'Red') ON CONFLICT (k) DO
-  UPDATE SET (k, v) = (SELECT k, v FROM upsert_cte WHERE upsert_cte.k = withz.k)
-  RETURNING k, v;
-!  k | v 
-! ---+---
-! (0 rows)
-! 
-  DROP TABLE withz;
-  -- check that run to completion happens in proper ordering
-  TRUNCATE TABLE y;
---- 1904,1910 ----
-  INSERT INTO withz VALUES(2, 'Red') ON CONFLICT (k) DO
-  UPDATE SET (k, v) = (SELECT k, v FROM upsert_cte WHERE upsert_cte.k = withz.k)
-  RETURNING k, v;
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  DROP TABLE withz;
-  -- check that run to completion happens in proper ordering
-  TRUNCATE TABLE y;
 
 ======================================================================
 
