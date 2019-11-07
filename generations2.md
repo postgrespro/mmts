@@ -1,4 +1,9 @@
-Basics:
+# Generations
+
+
+
+## Basics:
+
  - We use ACP (atomic commit protocol -- e3pc, paxos, whatever) to ensure that
    each xact either committed or aborted everywhere.
  - However, if minority fails, we want to continue working. Thus we are
@@ -37,8 +42,7 @@ change, in particular A and B could throw C off the cluster. We need some
 causal relationship between these events to make sure apply is safe.
 
 
-------------------------------------------------------------
-The algorithm.
+## The algorithm.
 
 The goal is to avoid reordering of conflicting xacts. We don't want to always
 wait for all nodes PREPARE confirmation before committing; however, dealing with
@@ -72,6 +76,8 @@ TBD why this is true.
 
 
 Some data structures:
+
+```c
 
 struct Generation {
   int64 num; /* generation number */
@@ -125,9 +131,11 @@ struct GenState {
    */
   Generation last_vote;
 }
+```
 
 The voting procedure:
 In addition to structures above, when conducting voting,
+```c
 struct Vote {
   NodeId voter;
   Generation last_online_in;
@@ -136,7 +144,9 @@ struct Campaign {
   Generation proposed_gen;
   Vote []collected_votes; /* register received votes here */
 } my_campaign;
+```
 is also kept in shmem.
+
 Initially we set first generation <1, all nodes>, in which everyone is recovered
 (last_online_in = 1).
  - Whenever node decides to change generation (i.e. wants to join the cluster), it
@@ -161,9 +171,12 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
  - Processing of messages above by elections initiator:
      On VoteGenNumTooLow, restart elections with number at least
        received last_vote.num + 1 (local last_vote.num adjusted accordingly)
+
      On VoteOk, remember the vote in collected_votes if we are still conducting
      elections with this num. If majority is collected, vote is successfull,
      calculate donors which are members of last gen among last_online_in in votes:
+
+     ```c
      {
        Generation latest_gen = { .num = 0 }
        foreach v in my_campaign->collected_votes {
@@ -172,6 +185,7 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
          donors = latest_gen.members
        }
      }
+     ```
      execute ConsiderGenSwitch(my_campaign->proposed_gen, donors) and broadcast
      CurrentGenIs<current_gen, donors>
  - On CurrentGenIs<gen, donors> receival, ConsiderGenSwitch(gen, donors) is always executed.
@@ -180,11 +194,12 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
    proposed_members.
 
 
-------------------------------
-Generation switching procedure, executed whenever node learned about existence
+## Generation switching procedure
+executed whenever node learned about existence
 of generation higher than its current (CurrentGenIs, START_REPLICATION
 command, PREPARE, parallel safe arrived, PREPARE replies):
 
+```c
 bool ConsiderGenSwitch(Generation gen, nodemask_t donors) {
   LWLockAcquire(GenLock, LW_EXCLUSIVE);
   if (genstate->current_gen.num >= gen.num) {
@@ -309,10 +324,12 @@ void EnableMyself() {
     * Now backends and walreceivers may proceed */
    genstate->status = ONLINE;
 }
+```
 
 
-------------------------------
-Backend actions:
+
+## Backend actions:
+
  - During writing PREPARE to wal, lock GenLock in shared mode and
      - if !IsMemberOfGen(me, genstate->current_gen), bail out with 'not a member of current gen'
      - if genstate->status == RECOVERY, bail out with 'node is in recovery'
@@ -329,9 +346,9 @@ because if e.g. we had BC, then sausage A-B-C, and clique convention says to us
 that in this case quorum must be AB, next gen might exclude C even if C is alive
 and connected to B.
 
-------------------------------
-Walreceiver:
+## Walreceiver:
 
+```c
 enum
 {
   REPLMODE_RECOVERY, /* stream all origins */
@@ -535,9 +552,10 @@ HandleCommit(record, rcv_ctx) {
   }
 }
 
+```
 
-------------------------------
-Liveness.
+
+## Liveness.
 
 As said above, anyone can at any time propose any generations and we ought to be
 safe. However, to make sure the system is live, sane generations should be
