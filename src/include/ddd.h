@@ -1,8 +1,6 @@
 #ifndef __DDD_H__
 #define __DDD_H__
 
-#include "mm.h"
-
 extern void MtmDeadlockDetectorInit(int n_nodes);
 extern void MtmDeadlockDetectorShmemStartup(int n_nodes);
 

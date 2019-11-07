@@ -47,7 +47,6 @@
 #include "libpq-fe.h"
 
 #include "multimaster.h"
-#include "mm.h"
 #include "syncpoint.h"
 #include "logger.h"
 

@@ -18,7 +18,6 @@
 
 #include "ddd.h"
 #include "bytebuf.h"
-#include "mm.h"
 #include "state.h"
 #include "logger.h"
 #include "commit.h"

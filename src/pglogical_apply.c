@@ -60,7 +60,6 @@
 #include "utils/inval.h"
 
 #include "multimaster.h"
-#include "mm.h"
 #include "ddd.h"
 #include "pglogical_relid_map.h"
 #include "spill.h"

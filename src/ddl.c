@@ -45,7 +45,6 @@
 #include "storage/ipc.h"
 #include "miscadmin.h"
 
-#include "mm.h"
 #include "ddl.h"
 #include "logger.h"
 #include "commit.h"
