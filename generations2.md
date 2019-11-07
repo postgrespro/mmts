@@ -174,15 +174,19 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
 
      On VoteOk, remember the vote in collected_votes if we are still conducting
      elections with this num. If majority is collected, vote is successfull,
-     calculate donors which are members of last gen among last_online_in in votes:
+     calculate donors which are online members of last gen among last_online_in in votes:
 
      ```c
      {
        Generation latest_gen = { .num = 0 }
        foreach v in my_campaign->collected_votes {
-         if v.last_online_in.num > latest_gen
+         if v.last_online_in.num > latest_gen {
            latest_gen = v.last_online_in
-         donors = latest_gen.members
+		   donors = [ v.voter ]
+		 }
+		 if v.last_online_in.num == latest_gen.num {
+		   donors += v.voter
+		 }
        }
      }
      ```
@@ -433,7 +437,7 @@ reconnect:
      /*
       * the rest of records is not affected by generations at all, accept them
       * always.
-      *
+      */
      } else if record.type is PC, CP, AP {
        if rcv_ctx.mode == REPLMODE_NORMAL {
          feed record to parallel worker, c.f. parallel_worker_main
@@ -565,11 +569,12 @@ degree (RECOVERY state in current mtm). Here we discuss how this can be done.
 
 DMQ heartbeats carrying view mask should constantly flow between live nodes. A
 heartbeat has some timeout during which it is considered fresh and thus included
-into clique (and that view mask in heartbeats) calculation. On each node
-periodically (probably also forced on node connect/disconnect) clique is
-calculated. Clique must be calculated in unequivocal manner so that in sausages
-like A-B-C majority comes to the same stable clique.
-Node wants to change the generation whenever either
+into clique (and that view mask in heartbeats) calculation. Each node
+periodically (probably also forced on node connect/disconnect) considers whether
+is should change gen. First, clique is calculated. Clique must be calculated
+in unequivocal manner so that in sausages like A-B-C majority comes to the
+same stable clique. Node wants to change the generation whenever either it is
+present in the clique and
  1) node is not member of genstate->current_gen, but clique includes it
  2) node is member of genstate->current_gen, but clique misses some nodes which
    present in current_gen.
@@ -581,8 +586,9 @@ current_gen (apart from me, of course)*. Because we never want to propose adding
 non-me members even if they are in clique as they might be arbitrary lagging;
 let them decide on their own when to join.
 
-Point 2 means we should exclude someone to proceed. Again, We ought to propose
-gen with current clique minus nodes who are not present in current_gen.
+Point 2) means we should exclude someone to proceed. Again, we ought to propose
+gen with current clique minus nodes who are not present in current_gen to avoid
+adding nodes whose state we don't know.
 
 Point 3) is related to promises of not joining gens < n after voting for n.
 WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
