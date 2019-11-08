@@ -97,7 +97,7 @@ n. Node gets online in generation n in two cases:
    ParallelSafe<n>.
 
 First, why donors of generation n have all xacts of gens < n in correct order?
-Appearance of generation n with some donor A means the following has happended:
+Appearance of generation n with some donor A means the following has happened:
  - Majority of nodes had voted for gen n. With each vote, they had sent their
    current last_online_in (last generation in which they participated online,
    i.e. created and applied prepares) and had promised that they will never be
@@ -676,7 +676,7 @@ WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
 How to recover initially, to decrease the lag without forcing nodes to wait for
 us? One idea is to collect with heartbeats also last_online_in of neightbours.
 And whenever current generation doesn't include us, before initiaing voting in
-1) we recover from any node which is online in this generation until lag is
+1 we recover from any node which is online in this generation until lag is
 less than some configured bound (or just to last fsync as currently).
 
 Whom to propose exactly? Generally, a clique, but here is a kind of issue: we
