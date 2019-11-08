@@ -89,6 +89,8 @@ my $res_diff = TestLib::slurp_file('../../src/test/regress/regression.diffs');
 $res_diff =~ s/(--- ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
 $res_diff =~ s/(\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
 $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
+#SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
+$res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
 unlink('results/regression.diffs');
 TestLib::append_to_file('results/regression.diffs', $res_diff);
 

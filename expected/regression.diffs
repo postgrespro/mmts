@@ -853,7 +853,7 @@
   
   END;
 + ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT lo_export(loid, '/Users/stas/code/postgres/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
+  SELECT lo_export(loid, '/CENSORED/lotest.txt') FROM lotest_stash_values;
    lo_export 
   -----------
 ***************
