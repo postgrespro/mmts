@@ -42,7 +42,7 @@ change, in particular A and B could throw C off the cluster. We need some
 causal relationship between these events to make sure apply is safe.
 
 
-## The algorithm.
+## The algorithm for safety
 
 The goal is to avoid reordering of conflicting xacts. We don't want to always
 wait for all nodes PREPARE confirmation before committing; however, dealing with
@@ -66,13 +66,77 @@ for cliques here. Ideally we should also ensure only reasonably recovered nodes
 (lag not too high) get elected, but that's an optimization; let's focus on safety
 for now.
 
+Node which is a member of some generation n considers itself *online* or in
+recovery in it. If it is online, it means node must have in its WAL all PREPAREs
+of all gens < n who might ever get committed; no new committable prepares of
+those old generations are possible. Otherwise (node not online in gen where it
+is a member) node must recover and then become online.
+
+Note that conflicting committable transactions (we might for simplicity here
+assume all xacts are conflicting -- otherwise, their order doesn't matter) lie
+in the same order on all generation members, because xact won't be committed
+unless *all* generation members confirmed PREPARE receival.
+
 General statement about generations is the following. If node is online
 (recovered) in gen n, it definitely has all prepares who can be committed of all
-gens < n. For each m < n, all committable of gen m lie before all committable
-prepares of gen m + 1; and the order of committable prepares within one gen is
-the same as order of them on this gen's members.*
+gens < n. For each m < n, all committable prepares of gen m lie before all
+committable prepares of gen m + 1; and the order of committable prepares within
+one gen is the same as order of them on this gen's members.
 
-TBD why this is true.
+The algorithm itself it described below. Here let's show by induction that this
+statment is true. (here and below, comparing generations means comparing
+their numbers)
+
+Initially all nodes live in gen < 1, all nodes> and everyone is online there.
+For n <= 1 statement is trivially true: there are no xacts of gens < 1.
+
+Now, let this statement be true for all m < n. We need to prove it is true for
+n. Node gets online in generation n in two cases:
+ 1) It is donor of generation n.
+ 2) It recovers in single-threaded mode from donor of generation n until
+   ParallelSafe<n>.
+
+First, why donors of generation n have all xacts of gens < n in correct order?
+Appearance of generation n with some donor A means the following has happended:
+ - Majority of nodes had voted for gen n. With each vote, they had sent their
+   current last_online_in (last generation in which they participated online,
+   i.e. created and applied prepares) and had promised that they will never be
+   enabled in gens m: last_online_in < m < n.
+ - Let A's last_online_in during voting was p. p < n because
+   last_online_in can't be greater than current_gen, which in turn can't be
+   greater last_vote, and we never vote if last_vote >= than proposed gen num.
+   Which, by assumption, means that A has all committable prepares of gens < p.
+ - By construction, p >= than collected last_online_in of all voters. Which means
+   all voters never were and never will be enabled in generations m: p < m < n
+   by their promises. 'All voters' is majority, and any generation
+   contains at least majority members, so they have to intersect; thus,
+   committable transactions of gens m: p < m < n don't exist as at least one
+   member of each such gen would never be online in it -- he will never accept
+   PREPARE.
+ - As for the generation p itself, once A becomes aware that gen n was chosen, it
+   switches into it and stops applying PREPAREs of gen p, which means at this
+   moment it has all commitable xacts of gen p (no xacts can commit without A's
+   consent). To summarize, immediately after
+   switching,
+    - A has all committable prepares of gens < p in right order by assumption.
+	- A has all committable prepares of gen p because he is a participant which
+	  stopped applying. All of them lie after prepares of gens < p because
+	  A won't apply/create prepares of gen p until becoming online in p, at
+	  which point all < p are already there by assumption.
+    - Committable prepares of gens m: p < m < n don't exist.
+
+   So, A has all committable prepares of all gens < n in right order.
+
+Why some other non-donor nodes, e.g. B, will have all xacts < n in right order
+once it will be enabled? Well, B switches to n only if its current_gen < n.
+Which means its q = last_online_in also < n, as discussed above. By assumption,
+B has all xacts < q in right order. Order of q's xacts is also fine because B
+was member of q; they follow xacts < q, because B start accepting/writing q
+prepares only after enabling itself. In gens m: q < m < n node B never was
+enabled, otherwise last_online_in would be updated. This means it never got any
+such xact in normal mode. It will get them only in gen n in recovery mode
+(single-threaded, all origins) from gen n's donor which, as shown above, has all
+of them and in correct order, enabling itself only afterwards (on ParallelSafe).
 
 
 Some data structures:
@@ -133,7 +197,8 @@ struct GenState {
 }
 ```
 
-The voting procedure:
+### The voting procedure:
+
 In addition to structures above, when conducting voting,
 ```c
 struct Vote {
@@ -198,7 +263,7 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
    proposed_members.
 
 
-## Generation switching procedure
+### Generation switching procedure
 executed whenever node learned about existence
 of generation higher than its current (CurrentGenIs, START_REPLICATION
 command, PREPARE, parallel safe arrived, PREPARE replies):
@@ -332,7 +397,7 @@ void EnableMyself() {
 
 
 
-## Backend actions:
+### Backend actions:
 
  - During writing PREPARE to wal, lock GenLock in shared mode and
      - if !IsMemberOfGen(me, genstate->current_gen), bail out with 'not a member of current gen'
@@ -350,7 +415,7 @@ because if e.g. we had BC, then sausage A-B-C, and clique convention says to us
 that in this case quorum must be AB, next gen might exclude C even if C is alive
 and connected to B.
 
-## Walreceiver:
+### Walreceiver:
 
 ```c
 enum
@@ -612,7 +677,7 @@ How to recover initially, to decrease the lag without forcing nodes to wait for
 us? One idea is to collect with heartbeats also last_online_in of neightbours.
 And whenever current generation doesn't include us, before initiaing voting in
 1) we recover from any node which is online in this generation until lag is
-less than some configured bound.
+less than some configured bound (or just to last fsync as currently).
 
 Whom to propose exactly? Generally, a clique, but here is a kind of issue: we
 shouldn't propose other nodes if they were not present in current gen even if
