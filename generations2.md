@@ -691,3 +691,21 @@ their beginning we still want to change current_gen, which shouldn't fire
 immediate election restart. We should restart them after either some nodes
 died/connected or proposed gen members have changed or probably after configurable
 timeout -- elections is just one roundtrip, after all.
+
+
+## Alternatives
+
+'Promises' not to join generations up to some n seems elegant on the first
+glance and resembles first phase of Paxos, however it a bit complicates choosing
+when to propose new generation and with which members, as discussed above. One
+alternative is don't give such promises, but collect last_online_in to determine
+donor in rountrip *after* voting completed, i.e. ask it along with 'elections
+finished' announce. That complicates process of switching into gen as each node
+need determine donors in additional roundtrip after learning about gen existence
+though. Yet another alternative is just recover from all gen members -- at least
+one of them would be right donor, however it seems even harder and more
+expensive.
+
+There is also a possibility that we might get away without generations at
+all. Probably each node still can determine whom it waits for on its own and we
+still would be fine, this needs to be checked.
