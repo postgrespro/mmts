@@ -461,7 +461,9 @@ bool HandleParallelSafe(ps) {
    * Either we are not interested in this gen (we are in newer one or promised
    * not to join this one or not a member of it) or we are already online.
    */
-  if (genstate->current_gen.num != ps.gen.num || !IsMemberOfGen(me, genstate->current_gen) ||
+  if (genstate->current_gen.num != ps.gen.num ||
+      genstate->current_gen.num < last_vote.num ||
+      !IsMemberOfGen(me, genstate->current_gen) ||
       genstate->status == ONLINE) {
     LWLockRelease(GenLock);
     return false;
@@ -567,24 +569,25 @@ proposed. Apart from simple 'offer only nodes who seem to be alive now',
 restored node should offer itself when it already recovered to some reasonable
 degree (RECOVERY state in current mtm). Here we discuss how this can be done.
 
-DMQ heartbeats carrying view mask should constantly flow between live nodes. A
-heartbeat has some timeout during which it is considered fresh and thus included
-into clique (and that view mask in heartbeats) calculation. Each node
-periodically (probably also forced on node connect/disconnect) considers whether
-is should change gen. First, clique is calculated. Clique must be calculated
-in unequivocal manner so that in sausages like A-B-C majority comes to the
-same stable clique. Node wants to change the generation whenever either it is
-present in the clique and
- 1) node is not member of genstate->current_gen, but clique includes it
+DMQ heartbeats carrying view mask and current gen should constantly flow between
+live nodes. A heartbeat has some timeout during which it is considered fresh
+and thus included into clique (and that view mask in heartbeats) calculation.
+Each node periodically (probably also forced on node connect/disconnect)
+considers whether is should change gen. First, clique is calculated.
+Clique must be calculated in unequivocal manner so that in sausages like A-B-C
+majority comes to the same stable clique. Node wants to change the
+generation whenever it is present in the clique and either
+ 1) node is not member of genstate->current_gen (but clique includes it)
  2) node is member of genstate->current_gen, but clique misses some nodes which
    present in current_gen.
- 3) its genstate->last_vote.num is larger than genstate->current_gen
+ 3) node is member of genstate->current_gen and in clique, but
+   its genstate->last_vote.num is larger than genstate->current_gen
 
-Point 1) is obvious, here we need to decrease the lag and then propose gen with
-us. Specifically, it should be clique *without nodes which were not present in
-current_gen (apart from me, of course)*. Because we never want to propose adding
-non-me members even if they are in clique as they might be arbitrary lagging;
-let them decide on their own when to join.
+Point 1) means we have restored, here we need to decrease the lag and then
+propose gen with us. Specifically, it should be clique *without nodes which were
+not present in current_gen (apart from me, of course)*. Because we never want to
+propose adding non-me members even if they are in clique as they might be
+arbitrary lagging; let them decide on their own when to join.
 
 Point 2) means we should exclude someone to proceed. Again, we ought to propose
 gen with current clique minus nodes who are not present in current_gen to avoid
@@ -593,10 +596,10 @@ adding nodes whose state we don't know.
 Point 3) is related to promises of not joining gens < n after voting for n.
 WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
  - C is online in gen 5 BC
- - Some nodes/network problems
- - B proposes to vote for gen 8 BC
+ - Gen 6 AB appears, B in it.
+ - Another switch, now B proposes to vote for gen 8 BC
  - C agrees to 8 BC
- - B gets C's vote and declares 8 ABC as chosen.
+ - B gets C's vote and declares 8 BC as chosen.
  - A proposes to vote for gen 10 ABC
  - C agrees to 10 ABC, thus promising never enter gens < 10
  - A dies
@@ -604,4 +607,22 @@ WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
    promise -- thus we should propose new gen, though current clique is BC and
    both B and C live in BC.
 
-TBD
+
+How to recover initially, to decrease the lag without forcing nodes to wait for
+us? One idea is to collect with heartbeats also last_online_in of neightbours.
+And whenever current generation doesn't include us, before initiaing voting in
+1) we recover from any node which is online in this generation until lag is
+less than some configured bound.
+
+Whom to propose exactly? Generally, a clique, but here is a kind of issue: we
+shouldn't propose other nodes if they were not present in current gen even if
+they are in clique, because their lag might be arbitrary big. Thus, as a straw
+man, we could propose
+ current_gen->members & clique + me (if not in current_gen), if these nodes form majority;
+ if not, we could add other nodes from clique until majority is reached.
+
+Of course, elections themselves doesn't happen instantly, and immediately after
+their beginning we still want to change current_gen, which shouldn't fire
+immediate election restart. We should restart them after either some nodes
+died/connected or proposed gen members have changed or probably after configurable
+timeout -- elections is just one roundtrip, after all.
