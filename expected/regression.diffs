@@ -585,23 +585,6 @@
 *** contrib/mmts/../../src/test/regress/expected/sequence.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/sequence.out	CENSORED
 ***************
-*** 23,29 ****
-  CREATE SEQUENCE sequence_testx OWNED BY pg_class_oid_index.oid;  -- not a table
-  ERROR:  referenced relation "pg_class_oid_index" is not a table or foreign table
-  CREATE SEQUENCE sequence_testx OWNED BY pg_class.relname;  -- not same schema
-! ERROR:  sequence must be in same schema as table it is linked to
-  CREATE TABLE sequence_test_table (a int);
-  CREATE SEQUENCE sequence_testx OWNED BY sequence_test_table.b;  -- wrong column
-  ERROR:  column "b" of relation "sequence_test_table" does not exist
---- 23,29 ----
-  CREATE SEQUENCE sequence_testx OWNED BY pg_class_oid_index.oid;  -- not a table
-  ERROR:  referenced relation "pg_class_oid_index" is not a table or foreign table
-  CREATE SEQUENCE sequence_testx OWNED BY pg_class.relname;  -- not same schema
-! ERROR:  sequence must have same owner as table it is linked to
-  CREATE TABLE sequence_test_table (a int);
-  CREATE SEQUENCE sequence_testx OWNED BY sequence_test_table.b;  -- wrong column
-  ERROR:  column "b" of relation "sequence_test_table" does not exist
-***************
 *** 34,42 ****
 --- 34,44 ----
   CREATE SEQUENCE sequence_test7 AS bigint;
@@ -807,76 +790,6 @@
   \d serialtest2_f2_seq
                    Sequence "public.serialtest2_f2_seq"
     Type   | Start | Minimum |  Maximum   | Increment | Cycles? | Cache 
-
-======================================================================
-
-*** contrib/mmts/../../src/test/regress/expected/largeobject.out	CENSORED
---- contrib/mmts/../../src/test/regress/results/largeobject.out	CENSORED
-***************
-*** 17,31 ****
-  		|| ' OWNER TO regress_lo_user';
-    END
-  $$;
-  SELECT
-  	rol.rolname
-  FROM
-  	lotest_stash_values s
-  	JOIN pg_largeobject_metadata lo ON s.loid = lo.oid
-  	JOIN pg_authid rol ON lo.lomowner = rol.oid;
-!      rolname     
-! -----------------
-!  regress_lo_user
-  (1 row)
-  
-  -- NOTE: large objects require transactions
---- 17,32 ----
-  		|| ' OWNER TO regress_lo_user';
-    END
-  $$;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT
-  	rol.rolname
-  FROM
-  	lotest_stash_values s
-  	JOIN pg_largeobject_metadata lo ON s.loid = lo.oid
-  	JOIN pg_authid rol ON lo.lomowner = rol.oid;
-!   rolname   
-! ------------
-!  regression
-  (1 row)
-  
-  -- NOTE: large objects require transactions
-***************
-*** 379,384 ****
---- 380,386 ----
-  (1 row)
-  
-  END;
-+ ERROR:  [multimaster] failed to prepare transaction at peer node
-  SELECT lo_export(loid, '/CENSORED/lotest.txt') FROM lotest_stash_values;
-   lo_export 
-  -----------
-***************
-*** 400,410 ****
-  (0 rows)
-  
-  SELECT lo_unlink(loid) FROM lotest_stash_values;
-!  lo_unlink 
-! -----------
-!          1
-! (1 row)
-! 
-  TRUNCATE lotest_stash_values;
-  \lo_unlink :newloid
-  \lo_import '/CENSORED/lotest.txt'
---- 402,408 ----
-  (0 rows)
-  
-  SELECT lo_unlink(loid) FROM lotest_stash_values;
-! ERROR:  [multimaster] failed to prepare transaction at peer node
-  TRUNCATE lotest_stash_values;
-  \lo_unlink :newloid
-  \lo_import '/CENSORED/lotest.txt'
 
 ======================================================================
 
