@@ -48,13 +48,13 @@ The goal is to avoid reordering of conflicting xacts. We don't want to always
 wait for all nodes PREPARE confirmation before committing; however, dealing with
 any node waiting for whoever it wants is... cumbersome. Let's then instead
 invent generations. Generation is <generation_number, list of members who must
-at be at least majority>.  Generation numbers are unique. Each transaction is
-assigned generation number it belongs to (current generation of the
-coordinator). The idea is that xact can't be committed unless all its
-generation members received PREPARE. Once node switched into some generation
-and, if needed, recovered (more on this below), it accepts (and creates) only
-xacts belonging to this generation; there is a barrier between writing down
-PREPARES of old and new generation.
+at be at least majority>.  Generation numbers are unique; they act as logical
+clocks. Each transaction is assigned generation number it belongs to
+(current generation of the coordinator). The idea is that xact can't be
+committed unless all its generation members received PREPARE. Once node
+switched into some generation and, if needed, recovered (more on this below),
+it accepts (and creates) only xacts belonging to this generation;
+there is a barrier between writing down PREPARES of old and new generation.
 
 We don't need raft/paxos or something for choosing generations, because there is
 no trade on single value: we don't have problem 'we already voted and can't do
