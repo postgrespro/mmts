@@ -8,7 +8,8 @@
    each xact either committed or aborted everywhere.
  - However, if minority fails, we want to continue working. Thus we are
    cheating: unlike in traditional ACP, we want to be able to commit xact
-   without asking minority's opinion at all. We follow ACP in everything apart
+   without asking some nodes' (minority, to be able to progress when majority is live)
+   opinion at all. We follow ACP in everything apart
    from this detail, so the consensus on xact status will definitely be
    preserved: commit or abort everywhere. But this cheat introduces problem of
    ordering: if we commit xact without minority's opinion, we must
