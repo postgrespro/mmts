@@ -69,8 +69,12 @@ for now.
 Node which is a member of some generation n considers itself *online* or in
 recovery in it. If it is online, it means node must have in its WAL all PREPAREs
 of all gens < n who might ever get committed; no new committable prepares of
-those old generations are possible. Otherwise (node not online in gen where it
-is a member) node must recover and then become online.
+those old generations are possible. Only online node can participate in voting
+for xacts of its generation. Otherwise (node not online in gen where it
+is a member) node must recover and then become online. If node is not a member
+of generation at all, it never participates in voting for this gen xacts. It
+does nothing or (see notes on liveness) recovers in single-threadeded, all
+origins mode.
 
 Note that conflicting committable transactions (we might for simplicity here
 assume all xacts are conflicting -- otherwise, their order doesn't matter) lie
