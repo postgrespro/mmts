@@ -248,8 +248,7 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
          if v.last_online_in.num > latest_gen {
            latest_gen = v.last_online_in
 		   donors = [ v.voter ]
-		 }
-		 if v.last_online_in.num == latest_gen.num {
+		 } else if v.last_online_in.num == latest_gen.num {
 		   donors += v.voter
 		 }
        }
@@ -536,8 +535,8 @@ bool HandleParallelSafe(ps) {
 
   /*
    * Catching p.s. in normal mode and tranferring to its gen is not allowed;
-   * we could just give out all prepares before it to parallel workers without
-   * applying them. Reconnect in recovery.
+   * we probably just have given out all prepares before it to parallel
+   * workers without applying them. Reconnect in recovery.
    */
   if (ctx->replMode == ONLINE) {
    LWLockRelease(GenLock);
