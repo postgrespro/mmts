@@ -542,7 +542,7 @@ MtmOnNodeConnect(char *node_name)
 	LWLockRelease(mtm_state->lock);
 }
 
-#ifdef FALSE
+#if 0
 /**
  * Build internode connectivity mask. 1 - means that node is disconnected.
  */
@@ -701,7 +701,7 @@ MtmRefreshClusterStatus()
 
 	return;
 
-#ifdef FALSE
+#if 0
 	/* Mtm->clique = (((nodemask_t)1 << Mtm->nAllNodes) - 1); */
 	/* return; */
 
