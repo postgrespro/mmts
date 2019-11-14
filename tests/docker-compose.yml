@@ -5,7 +5,7 @@ services:
   node1:
     container_name: node1
     build: ..
-    shm_size: '512mb'
+    shm_size: '1024mb'
     privileged: true
     ulimits:
       core: 14294967296
@@ -26,7 +26,7 @@ services:
   node2:
     container_name: node2
     build: ..
-    shm_size: '512mb'
+    shm_size: '1024mb'
     privileged: true
     ulimits:
       core: 14294967296
@@ -47,7 +47,7 @@ services:
   node3:
     container_name: node3
     build: ..
-    shm_size: '512mb'
+    shm_size: '1024mb'
     privileged: true
     ulimits:
       core: 14294967296
