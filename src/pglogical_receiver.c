@@ -1031,6 +1031,7 @@ MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
 		elog(ERROR, "Failed to start receiver worker");
 
 	status = WaitForBackgroundWorkerStartup(handle, &pid);
-	Assert(status == BGWH_STARTED);
+	if (status != BGWH_STARTED)
+		mtm_log(ERROR,  "could not start background process");
 	return handle;
 }
