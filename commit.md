@@ -77,21 +77,86 @@ So we can assemble following algorithm for postgres:
 
 ```python
 
-# map of namedtuple('GTrans', ['gid', 'n_proposal', 'n_accept', 'resolver_state'])
-self.global_txs = {}
+
+#
+#   Each node has following global state
+#
+self.n_nodes
+self.generate_new_term = False
+self.majority = self.n_nodes // 2 + 1
+self.global_txs = {} # Dict[gid:str, GTX]
+
+#
+#   Each self.global_txs membel has following fields
+#
+@dataclass
+class GTX:
+    acquired_by: int
+    gid: str
+    proposal_term: Tuple[int, int]
+    accepted_term: Tuple[int, int]
+    # node_id -> StatusResp[gid, node_id, status, proposal_term, accepted_term]
+    remote_statuses: Dict[int, StatusResp]
+    # node_id -> AckResp[gid, node_id, status]
+    resolver_acks: Dict[int, AckResp]
 
 
-create_gtx
-aquire_gtx
-gtx_acquire_or_load
-    # if we load non-final status from disk it is an error since we already should do that in recovery?
+#
+#   Helper functions for concurrent work with gtxes
+#
 
-release_gtx
-delete_gtx -- just delete on release if status is final?
+def create_gtx(gid):
+    pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
+    gtx = GTX()
+    gtx.gid = gid
+    gtx.proposal_term = (1,0)
+    gtx.accepted_term = (0,0)
+    gtx.acquired_by = pg.MyProcId
+    self.global_txs[gid] = gtx
+    pg.LWLockRelease(pg.GtxLock)
+    return gtx
 
-gather(amount) -- throws an error when unable to collect needed amount of messages
+def aquire_gtx(gid, locked=False):
+    if not locked:
+        pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
 
-self.majority
+    while self.global_txs[gid].acquired_by != 0:
+        pg.LWLockRelease(pg.GtxLock)
+        time.sleep(0.1)
+        pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
+
+    gtx = self.global_txs[gid]
+    pg.LWLockRelease(pg.GtxLock)
+    return gtx
+
+# XXX: if we load non-final status from disk it is an error since we
+# already should do that in recovery, or no?
+def gtx_acquire_or_load(gid)
+    pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
+    if gid in self.global_txs:
+        return aquire_gtx(gid)
+    else:
+        gtx = pg.WalReaderLoadStatus(gid)
+        self.global_txs[gid] = gtx
+        pg.LWLockRelease(pg.GtxLock)
+        return gtx
+
+def release_gtx(gtx)
+    pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
+    gtx = self.global_txs[gid]
+    gtx.acquired_by = 0
+    if gtx.status == "commited" or gtx.status == "aborted":
+        del self.global_txs[gid]
+    pg.LWLockRelease(pg.GtxLock)
+
+#
+#   Called from mtm-launcher during boot
+#
+def load_gtx_on_start(gtx)
+    pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
+    for pgtx in pg.GetPreparedTransactions:
+        self.global_txs[pgtx.gid] = GTX(parse(pgtx.3pc_state))
+    pg.LWLockRelease(pg.GtxLock)
 
 
 def local_last_term(self):
@@ -112,7 +177,7 @@ def backend_commit(self, gid):
     gtx.status = "prepared"
     release_gtx(gtx)
 
-    # gather from all
+    # Gather from all alive nodes.
     votes = dmq_gather('all')
 
     if 'aborted' in votes:
@@ -120,6 +185,11 @@ def backend_commit(self, gid):
         pg.FinishPreparedTransaction(gid, false)
         delete_gtx(gtx)
         raise "Aborted on peer node"
+
+    # If some node disconnects during gather error will not be raised unless
+    # we lost majority. So after we need to check that n_votes == n_alive_nodes.
+    if len(votes) != self.n_nodes:
+        raise "Commit sequence interrupted"
 
     gtx = aquire_gtx(gid)
     if gtx.proposal_term != (1, 0):
@@ -160,7 +230,7 @@ def apply_commit(self, record):
     elif record.type = "precommit" or record.type = "preabort":
         gtx = aquire_gtx(record.gid)
         if gtx.proposal_term != record.term:
-            gtx.resolver_state = "idle"
+            gtx.resolver_state = "idle" # XXX
         gtx.proposal_term = record.term
         gtx.accepted_term = record.term
         gtx.status = record.type
@@ -178,62 +248,73 @@ def apply_commit(self, record):
 #
 def resolver(self, tx_to_resolve):
 
-    if resolver_state == "idle":
-        time.sleep(1)
+    while True:
+
+        # any arrivng message will wake us form this
+        pg.WaitLatch(MyLatch)
+
         # XXX: resolver probably should also periodically check if there
         # any:
         # * transactions from this node that aren't belonging to
         #   any active backend
         # * transactions from disconnected nodes
+        # and set self.generate_new_term to True if needed.
+        #
         # It looks like that is more robust than fighting races between
         # node disconnect and resolver start.
 
-    elif resolver_state == "started":
-        dmq_scatter("get_last_term")
-        max_term = max(dmq_gather())
-        max_term = max(max_term, local_last_term())
-        new_term = (max_term[0] + 1, node_id)
+        if self.generate_new_term:
+            dmq_scatter("get_last_term")
+            max_term = max(dmq_gather())
+            max_term = max(max_term, local_last_term())
+            new_term = (max_term[0] + 1, node_id)
 
-        for gid in tx_to_resolve:
-            gtx = gtx_acquire(gid)
-            gtx.proposal_term = new_term
-            # that probably can be optimized to write only once to WAL for
-            # all transactions, but at cost of complicating recovery
-            pg.FinishPreparedTransaction(gid, gtx.status, gtx)
-            gtx_release(gtx)
+            for gid in tx_to_resolve:
+                gtx = gtx_acquire(gid)
+                gtx.proposal_term = new_term
+                # that probably can be optimized to write only once to WAL for
+                # all transactions, but at cost of complicating recovery
+                pg.FinishPreparedTransaction(gid, gtx.status, gtx)
+                gtx_release(gtx)
 
-        for gid, gtx in global_txs.items():
-            dmq_scatter("get_status", gid)
+            for gid, gtx in global_txs.items():
+                dmq_scatter("get_status", gid)
 
-        resolver_state = "recv_statuses"
+            self.generate_new_term = False
 
-    elif resolver_state == "recv_statuses":
+
         response = dmq_pop()
 
         gtx = gtx_acquire(response.gid)
         if not gtx.awaiting_acks:
 
-            if gtx.status == "commit" or gtx.status == "abort":
-                pg.FinishPreparedTransaction(gid, record.type == "commit")
+            if response.status == "commit" or response.status == "abort":
+                pg.FinishPreparedTransaction(gid, response.status == "commit")
 
             else:
-                gtx.remote_statuses[response.node_id] = response
-                max_attempt = max([r.accepted_term for r in gtx.statuses] + [gtx.accepted_term])
-                quorum = (1 + len(gtx.remote_statuses)) >= self.majority
+                if response.proposal_term = gtx.proposal_term:
+                    gtx.remote_statuses[response.node_id] = response
+                    max_attempt = max([r.accepted_term for r in gtx.statuses] + [gtx.accepted_term])
+                    quorum = (1 + len(gtx.remote_statuses)) >= self.majority
 
-                max_attempt_statuses = [r.status for r in gtx.remote_statuses if r.accepted_term == max_attempt] 
-                max_attempt_statuses += [gtx.status] if gtx.accepted_term == max_attempt] else {}
-                imac = set(max_attempt_statuses) == {'pc'}
+                    max_attempt_statuses = [r.status for r in gtx.remote_statuses if r.accepted_term == max_attempt]
+                    max_attempt_statuses += [gtx.status] if gtx.accepted_term == max_attempt] else {}
+                    imac = set(max_attempt_statuses) == {'pc'}
 
-                if quorum and imac:
-                    gtx.accepted_term = record.term
-                    pg.SetPreparedTransactionState(gid, "precommit", gtx)
-                elif quorum and not imac:
-                    gtx.accepted_term = record.term
-                    pg.SetPreparedTransactionState(gid, "preabort", gtx)
+                    if quorum:
+                        decision = "precommit" if imac else "preabort"
+                        gtx.accepted_term = record.term
+                        gtx.awaiting_acks = True
+                        pg.SetPreparedTransactionState(gid, decision, gtx)
 
         else:
-            
+            if response.proposal_term = gtx.proposal_term:
+                gtx.resolver_acks[response.node_id] = response
+                n_acks = len(gtx.resolver_acks)
+                n_acks += 1 if gtx.proposal_term == response.proposal_term] else 0
+                if n_acks > self.majority:
+                    pg.FinishPreparedTransaction(gid, gtx.status == "precommit")
+
         gtx_release(gtx)
 
 
@@ -256,6 +337,10 @@ def status(self):
 
 ```
 
+
+## Model
+
+More or less same algorithm is implemented in [commit.tla] and can be checked in tla model checker.
 
 
 
