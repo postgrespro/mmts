@@ -9,6 +9,8 @@ use TestLib;
 use Test::More tests => 1;
 use Data::Dumper;
 
+use POSIX ":sys_wait_h";
+
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();
@@ -32,6 +34,7 @@ foreach (0..$#{$cluster->{nodes}})
 sub isalive {
 	my $benches = $_[0];
 	my $any_alive = 0;
+	waitpid(-1, WNOHANG);
 	$any_alive = ($any_alive or (kill 0,$_->{'KIDS'}->[0]->{'PID'})) foreach @{$benches};
 	return $any_alive;
 }
