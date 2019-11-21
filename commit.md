@@ -1,16 +1,16 @@
 # Atomic commit
 
-For performance reasons we allow receiver workers to reorder transaction they receive, so some transactions may fail to be applied due to the conflict with local transaction [1] or due to a global deadlock. So in order to maintain atomicity we first need to ensure that all parties are certain that they can commit given transaction. Such promise should also be persistent to survive node reboot. Or in other words wee need two-phase commit (`2PC`) protocol. Luckily postgres have such functionality buil-in in form of `PREPARE TRANSACTION`/`COMMIT PREPARED`/`ABORT PREPARED` statements.
+For performance reasons we allow receiver workers to reorder transactions, so some transactions may fail to be applied due to the conflict with local transactions [1] or due to a global deadlock. So to maintain atomicity we first need to ensure that all parties are certain that they can commit given transaction. Such promise should also be persistent to survive node reboot. Or in other words, we need a two-phase commit (`2PC`) protocol. Luckily Postgres have such functionality built-in in form of `PREPARE TRANSACTION`/`COMMIT PREPARED`/`ABORT PREPARED` statements.
 
-Also we want for our cluster to survive failure of some nodes, so we need to reach a decision to commit or abort transaction when some participants are absend. Such a property of of commit protocol called non-blocking property. Unfortunately, two-phase commit is blocking in that sence. In a simplest example imagine that we have three nodes in states (committed, prepapred, prepared) and first node crashes. So two survived nodes have only (prepared,prepared) states and can't neither commit nor abort since first one can be commited or aborted. If we state that transaction coordinator is one of the nodes and will prepare and commit transaction on itself strictly before doing that on other nodes, then it may seem as we can devise non-blocking recovery rules for `2PC` for 3 nodes: in case when we see two prepared nodes and coordinator is among them we should abort as third node may be in aborted or prepared state; when we see two prepared nodes and coordinator is not among them we should commit as coordinator definetly prepared this transaction and possibly committed it. However such rules contravene with non-recowery protocol: if we prepared transaction everywhere we want to commit such transaction, not abort it. So if original coordinator is working simultaneosly with transaction recovery process on other node they may reach different conclusions. Also in case of 5 or more nodes blocking still be a problem if coordinator dies along with one other node -- there are just not enough information on alive nodes to commit or abort transaction.
+Also, we want our cluster to survive the failure of some nodes, so we need to decide to commit or abort the transaction when some participants are absent. Such a property of commit protocol called non-blocking property. Unfortunately, the two-phase commit is blocking in that sense. In the simplest example imagine that we have three nodes in states (committed, prepared, prepared) and first node crashes. So two survived nodes have only (prepared, prepared) states and can neither commit nor abort since the first one can be committed or aborted. If we state that transaction coordinator is one of the nodes and will prepare and commit transaction on itself strictly before doing that on other nodes, then it may seem as we can devise non-blocking recovery rules for `2PC` for 3 nodes: in case when we see two prepared nodes and coordinator is among them we should abort as the third node may be in aborted or prepared state; when we see two prepared nodes and coordinator is not among them we should commit as coordinator definitely prepared this transaction and possibly committed it. However such rules contravene with non-recovery protocol: if we prepared a transaction everywhere including coordinator we want to commit that transaction, not abort it. So if the original coordinator is working simultaneously with the transaction recovery process on another node they may reach a different conclusion. Also in case of 5 or more nodes blocking still be a problem if the coordinator dies along with one other node -- there is just not enough information on alive nodes to commit or abort the transaction.
 
-To address problem of blocking in presence of failures Skeen developed [Ske82] quorum-based three-phase commit (`Q3PC` or just `3PC`) and also proved that no protocol with single committable state (e.g. `2PC`) can be non-blocking. But that algorithm can still block a quorum in case when several recovery processes were coexistent or in case when failures cascade [Kei94]. Keidar and Dolev later developed an `E3PC` algorithm [Kei94] that has the same message flow in non-faulty case as in `3PC`, but always allows quorum of nodes always to proceed if there were no failures for a sufficienly long period. However it is actually not easy to derive algoritm implementation out of [Kei94] for two reasons: at first paper state the new coordinator should be elected but without discussing how to do it; at second paper mostly discuss so-called Strong Atomic Commit (if all sites voted Prepare and there were no failures, then decision should be commit) that can be solved only with perfect failure detectors. At the end authors discuss that perfect failure detector is not practical and that given algoritm should also solve Weak Atomic Commit (if all sites voted Prepare and there were no suspection about failures, then decision should be commit) but without discussing how that change affect coordinator election and recovery protocol restart. Luckily `E3PC` actually employs the same protocol for reaching consesus on a single value as in viewstamped replication [Lis] and single decree paxos (also known as synod) [Lam89] that were created few year before and had full description without refering to external election algoritm, and unclear parts of `E3PC` can be taken out of paxos.
+To address the problem of blocking in presence of failures Skeen developed [Ske82] quorum-based three-phase commit (`Q3PC` or just `3PC`) and also proved that no protocol with the single committable state (e.g. `2PC`) can be non-blocking. But that algorithm can still block a quorum in the case when several recovery processes were coexistent or in the case when failures cascade [Kei95]. Keidar and Dolev later developed an `E3PC` algorithm [Kei95] that has the same message flow in the non-faulty case as in 3PC, but always allows quorum of nodes to proceed if there were no failures for a sufficiently long period. However it is actually not easy to derive algorithm implementation out of [Kei95] for two reasons: at first paper state the new coordinator should be elected but without discussing how to do it; at second paper mostly discuss so-called Strong Atomic Commit (if all sites voted Prepare and there were no failures, then decision should be committed) that can be solved only with perfect failure detectors. In the end, authors discuss that perfect failure detector is not practical and that given algorithm should also solve Weak Atomic Commit (if all sites voted Prepare and there were no suspicion about failures, then a decision should be to commit) but without discussing how that change affects coordinator election and recovery protocol restart. Luckily `E3PC` employs the same protocol for reaching consensus on a single value as in Viewstamped replication [Lis] and single decree Paxos (also known as Synod) [Lam01] that were created a few years before and had full description without referring to external election algorithm, and unclear parts of `E3PC` can be taken out of Paxos.
 
-So taking into account all aforementioned statements it looks that it is easier to start discussion of our commit protocol by looking at single decree paxos for any value without reffering to commit problem at all, an then specialise it for commit.
+So taking into account all aforementioned statements it looks that it is easier to start a discussion of our commit protocol by looking at single decree Paxos for any value without referring to commit problem at all, and then specialize it for commit.
 
-## Single decree paxos
+## Single decree Paxos
 
-Single decree paxos allow for group of processes to reach a decision for some value and then never change it. Protocol itself is formulated in terms of three types of processes: `proposers`, `acceptors` and `learners`. That separation exits mostly for explanatory purposes to bring some modularity to protocol, but in practical system it make sence for each node to colocate all roles. Protocol starts when client connects to `proposers` and gives a value to propose, then following procedure happens (citing [Lam01]):
+Single decree Paxos allow for a group of processes to reach a decision for some value and then never change it. The protocol itself is formulated in terms of three types of processes: `proposers`, `acceptors`, and `learners`. That separation exits mostly for explanatory purposes to bring some modularity to the protocol, but in the practical system, it is totally okay for each node to colocate all roles. The protocol starts when the client connects to `proposer` and gives a value to propose, then the following procedure happens (citing [Lam01]):
 ```
 Phase 1.
     (a) A proposer selects a proposal number n and sends a prepare request with number n to a majority of acceptors.
@@ -59,35 +59,33 @@ The same procedure in pseudocode ([6.824]):
     25     reply accept_reject
 ```
 
-## E3PC
+## `E3PC`
 
-Having reviewed single decree paxos it is now strightforward to construct consensus on a commit: await responses for all prepares, calculate logical conjunction of results and run a concensus round on an obtained value. We also con following adjustments to protocol:
+Having reviewed single decree Paxos it is now straightforward to construct commit protocol: await responses for all prepares, calculate logical conjunction of results and run a consensus round on an obtained value. We also can do the following adjustments to the protocol:
 
-* In a failure-free case we may skip phase 1 completly by initialising `np` on all acceptor to some predefined constant and requring that all proposers should use strictly bigger proposal numbers. Or putting the same in other words information flow from phase 1 for initial proposer can be done not by the means of network communications in a runtime, but by a programmer at develop time.
-* Only safety requirement for choosing prososal numbers for acceptors is that they should be unique among set of proposers. Usually this is done by generating numbers of form $n = n_nodes * local_count + node_id$, however we follow `E3PC` and choose `n` to to be tuples of `< local_count, node_id >` and compare such `n`'s lexicographically. It looks that such proposal numbers will be more informative in cases when things went south.
-* When proposer hears phase1b message from majority of nodes it should choose value with maximal acceptance number among phase1b responses. Taking into account that we are agreing on a boolen variable (with values being 'precommit' of 'preabort') we may follow `E3PC` and choose value by a following procedure, where statuses is a set of phase1b responses from all nodes including self:
-$$
-    ma = max({msg.na : msg \in responses})
-    is_max_attempt_commitable = \A msg \in responses: (msg.la = ma) => msg.state = "precommit"
-$$
-(_XXX is that acually possible to have different accepted values if proposal numbers were unique?_)
+* In a failure-free case, we may skip phase 1 completely by initializing `np` on all acceptor to some predefined constant and requiring that all proposers should use strictly bigger proposal numbers. Or putting the same in other words information flow from phase 1 for initial proposer can be done not by the means of network communications at runtime, but by a programmer at development time.
+* Only safety requirement for choosing proposal numbers for acceptors is that they should be unique among the set of proposers. Usually this is done by generating numbers of form $n = n_nodes * local_count + node_id$, however we follow ``E3PC`` and choose `n` to to be tuples of `< local_count, node_id >` and compare such `n` lexicographically. It looks that such proposal numbers will be more informative in cases when things went south.
+* When proposer hears phase1b message from the majority of nodes it should choose a value with maximal acceptance number among phase1b responses. Taking into account that we are agreeing on a boolean variable (with values being 'precommit' of 'preabort') we may follow ``E3PC`` and choose a value by the following procedure, where statuses is a set of phase1b responses from all nodes including self:
+```math
+ma = max(\{msg.na : msg \in responses\}) \\
+is\_max\_attempt\_commitable = \forall msg \in responses: (msg.la = ma) => msg.state = "precommit"
+```
+(_XXX is that actually possible to have different accepted values if proposal numbers were unique?_)
 
-So we can assemble following algorithm for postgres:
+So we can assemble the following algorithm for Postgres:
 
 
 ```python
-
-
 #
 #   Each node has following global state
 #
 self.n_nodes
 self.generate_new_term = False
 self.majority = self.n_nodes // 2 + 1
-self.global_txs = {} # Dict[gid:str, GTX]
+self.global_txs = {} # Dict[gid:str -> GTX]
 
 #
-#   Each self.global_txs membel has following fields
+#   Each self.global_txs member has following fields
 #
 @dataclass
 class GTX:
@@ -101,9 +99,11 @@ class GTX:
     resolver_acks: Dict[int, AckResp]
 
 
+###############################################################################
 #
 #   Helper functions for concurrent work with gtxes
 #
+###############################################################################
 
 def create_gtx(gid):
     pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
@@ -129,7 +129,7 @@ def aquire_gtx(gid, locked=False):
     pg.LWLockRelease(pg.GtxLock)
     return gtx
 
-# XXX: if we load non-final status from disk it is an error since we
+# XXX: if we load non-final status from disk is it an error since we
 # already should do that in recovery, or no?
 def gtx_acquire_or_load(gid)
     pg.LWLockAcquire(pg.GtxLock, LW_EXCLUSIVE)
@@ -166,9 +166,20 @@ def local_last_term(self):
     return last_term
 
 
+###############################################################################
 #
-#   backend_commit is called when client start transaction commit and
-#   changes ordinary commit to our protocol
+#   Algorithm itself:
+#       backend_commit -- tx backend, original coordinator
+#       apply_commit -- walreceiver handler of transaction finish
+#       resolver -- resolver worker
+#       status -- status worker
+#
+###############################################################################
+
+
+#
+#   backend_commit is called when a client start transaction commit and
+#   changes ordinary commit to our protocol.
 #
 def backend_commit(self, gid):
 
@@ -212,7 +223,7 @@ def backend_commit(self, gid):
 
 #
 #   apply_commit is a walreceiver worker function that is called upon
-#   receiving transaction finish records.
+#   receiving transaction finish record.
 #
 def apply_commit(self, record):
 
@@ -243,7 +254,7 @@ def apply_commit(self, record):
 
 
 #
-#   Resolver is a bgworker that is signalled to wakeup on node disconnect
+#   resolver is a bgworker that is signalled to wakeup on node disconnect
 #   and before recovery.
 #
 def resolver(self, tx_to_resolve):
@@ -334,7 +345,6 @@ def status(self):
             resp = (gid, gtx.proposal_term, gtx.accepted_term, gtx.status)
             dmq_push(request.sender, "get_status", resp)
         gtx_release(gid)
-
 ```
 
 
@@ -351,6 +361,9 @@ Notes:
 Bibliography:
 
 [Ske82] D. Skeen. A Quorum Based Commit Protocol. Berkeley Workshopon Distributed Data Management and Computer Networks,(6):69-80, February 1982
+
 [Kei95] I. Keidar, D. Dolev. Increasing the resilience of atomic commit, at no additional cost. Proc. of the 14th ACM PoDs, pages 245-254, May 1995.
+
 [Lam01] L. Lamport. Paxos made simple. ACM SIGACT News (Distributed Computing Column), 2001.
+
 [6.824] http://nil.csail.mit.edu/6.824/2015/notes/paxos-code.html
