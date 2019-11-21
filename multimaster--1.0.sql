@@ -141,13 +141,13 @@ CREATE FUNCTION mtm.make_table_local(relation regclass) RETURNS void
 AS 'MODULE_PATHNAME','mtm_make_table_local'
 LANGUAGE C;
 
-CREATE FUNCTION mtm.dump_lock_graph() RETURNS text
-AS 'MODULE_PATHNAME','mtm_dump_lock_graph'
-LANGUAGE C;
+-- CREATE FUNCTION mtm.dump_lock_graph() RETURNS text
+-- AS 'MODULE_PATHNAME','mtm_dump_lock_graph'
+-- LANGUAGE C;
 
-CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean
-AS 'MODULE_PATHNAME','mtm_check_deadlock'
-LANGUAGE C;
+-- CREATE FUNCTION mtm.check_deadlock(xid bigint) RETURNS boolean
+-- AS 'MODULE_PATHNAME','mtm_check_deadlock'
+-- LANGUAGE C;
 
 CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void
 AS 'MODULE_PATHNAME','mtm_set_temp_schema'

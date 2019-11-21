@@ -488,7 +488,7 @@ process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
 
 	/* ddd */
 	gtid->my_xid = GetCurrentTransactionId();
-	MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
+	// MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
 
 	suppress_internal_consistency_checks = true;
 
@@ -659,8 +659,8 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 				 * move DDD
 				 */
 				/* messages to dmq. */
-				mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
-				MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
+				// mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
+				// MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
 				standalone = true;
 				break;
 			}
@@ -1029,7 +1029,7 @@ process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmRecei
 				current_gtid->node = 0;
 				current_gtid->xid = InvalidTransactionId;
 				current_gtid->my_xid = InvalidTransactionId;
-				MtmDeadlockDetectorRemoveXact(xid);
+				// MtmDeadlockDetectorRemoveXact(xid);
 
 				/*
 				 * Reset on_commit_actions.
@@ -1671,7 +1671,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 		/* handle only prepare errors here */
 		if (TransactionIdIsValid(current_gtid.my_xid))
 		{
-			MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
+			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
 				mtm_send_xid_reply(current_gtid.xid, current_gtid.node,
 								   MSG_ABORTED, edata);
