@@ -3,7 +3,7 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 4;
+use Test::More tests => 5;
 
 my $cluster = new Cluster(3);
 $cluster->init();
