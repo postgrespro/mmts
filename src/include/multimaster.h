@@ -40,7 +40,6 @@
 
 #define MTM_MAX_NODES 16
 
-typedef char pgid_t[GIDSIZE];
 typedef uint64 nodemask_t;
 
 #define LSN_FMT "%" INT64_MODIFIER "x"

@@ -115,6 +115,10 @@ MtmXactCallback(XactEvent event, void *arg)
 			}
 			break;
 
+		case XACT_EVENT_ABORT:
+			global_tx_at_abort();
+			break;
+
 		default:
 			break;
 	}

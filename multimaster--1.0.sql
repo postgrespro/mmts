@@ -185,6 +185,10 @@ CREATE TABLE mtm.syncpoints(
     primary key(node_id, origin_lsn)
 );
 
+CREATE TABLE mtm.gtx_proposals(
+    gid text primary key not null,
+    state text not null
+);
 
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$

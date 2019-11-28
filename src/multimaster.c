@@ -281,6 +281,7 @@ MtmShmemStartup(void)
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
 	MtmSharedShmemStartup();
+	MtmGlobalTxShmemStartup();
 }
 
 void
@@ -463,6 +464,7 @@ _PG_init(void)
 	launcher_init();
 
 	MtmStateInit();
+	MtmGlobalTxInit();
 
 	/*
 	 * Install hooks.
