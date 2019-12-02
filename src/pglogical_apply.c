@@ -69,6 +69,8 @@
 #include "receiver.h"
 #include "syncpoint.h"
 #include "commit.h"
+#include "global_tx.h"
+#include "messaging.h"
 
 typedef struct TupleData
 {
@@ -857,13 +859,14 @@ read_rel(StringInfo s, LOCKMODE mode)
  */
 static void
 mtm_send_xid_reply(TransactionId xid, int node_id,
-				   MtmMessageCode msg_code, ErrorData *edata)
+				   GlobalTxStatus status, ErrorData *edata)
 {
 	DmqDestinationId dest_id;
-	StringInfoData msg;
+	StringInfo	packed_msg;
+	MtmTxResponse msg;
 	int32		sqlerrcode = ERRCODE_SUCCESSFUL_COMPLETION;
 
-	if (msg_code != MSG_PREPARED)
+	if (status != GTXPrepared)
 		sqlerrcode = edata ? edata->sqlerrcode : ERRCODE_T_R_SERIALIZATION_FAILURE;
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
@@ -872,29 +875,34 @@ mtm_send_xid_reply(TransactionId xid, int node_id,
 
 	Assert(dest_id >= 0);
 
-	initStringInfo(&msg);
-	pq_sendbyte(&msg, msg_code);
-	pq_sendint32(&msg, sqlerrcode);
-	pq_sendstring(&msg, edata ? edata->message : "");
+	msg.tag = T_MtmTxResponse;
+	msg.node_id = Mtm->my_node_id;
+	msg.status = status;
+	msg.term = (GlobalTxTerm) {1,0};
+	msg.errcode = sqlerrcode;
+	msg.errmsg = edata ? edata->message : "";
+	packed_msg = MtmMesagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
-					msg.data, msg.len);
+					packed_msg->data, packed_msg->len);
 
 	mtm_log(MtmApplyTrace,
 			"MtmFollowerSendReply: " XID_FMT " to node%d (dest %d)",
 			xid, node_id, dest_id);
 
-	pfree(msg.data);
+	pfree(packed_msg->data);
+	pfree(packed_msg);
 }
 
 /*
  * Send response to coordinator after PRECOMMIT or COMMIT_PREPARED.
  */
 static void
-mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
+mtm_send_gid_reply(GlobalTx *gtx, int node_id)
 {
 	DmqDestinationId dest_id;
-	StringInfoData msg;
+	StringInfo	packed_msg;
+	MtmTxResponse msg;
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
@@ -902,18 +910,21 @@ mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
 
 	Assert(dest_id >= 0);
 
-	initStringInfo(&msg);
-	pq_sendbyte(&msg, msg_code);
-	pq_sendint32(&msg, ERRCODE_SUCCESSFUL_COMPLETION);
-	pq_sendstring(&msg, "");
+	msg.tag = T_MtmTxResponse;
+	msg.node_id = Mtm->my_node_id;
+	msg.status = gtx->state.status;
+	msg.term = gtx->state.accepted;
+	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
+	msg.errmsg = "";
+	packed_msg = MtmMesagePack((MtmMessage *) &msg);
 
-	dmq_push_buffer(dest_id, gid, msg.data, msg.len);
-
+	dmq_push_buffer(dest_id, gtx->gid, packed_msg->data, packed_msg->len);
 	mtm_log(MtmApplyTrace,
 			"MtmFollowerSendReply: %s to node%d (dest %d)",
-			gid, node_id, dest_id);
+			gtx->gid, node_id, dest_id);
 
-	pfree(msg.data);
+	pfree(packed_msg->data);
+	pfree(packed_msg);
 }
 
 static void
@@ -948,36 +959,45 @@ process_remote_commit(StringInfo in,
 
 	switch (event)
 	{
-		case PGLOGICAL_PRECOMMIT_PREPARED:
+		case PGLOGICAL_PREPARE_PHASE2A:
 			{
-				bool		precommitted;
+				const char *state_3pc;
+				GlobalTx   *gtx;
+				GlobalTxStatus msg_status;
+				GlobalTxTerm _msg_prop, msg_term;
 
+				Assert(!IsTransactionState());
 				Assert(!query_cancel_allowed);
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
-				MtmBeginSession(origin_node);
+				state_3pc = pq_getmsgstring(in);
+				parse_gtx_state(state_3pc, &msg_status, &_msg_prop, &msg_term);
+				Assert(msg_status == GTXPreCommitted || msg_status == GTXPreAborted);
 
-				if (!IsTransactionState())
+				gtx = GlobalTxAcquire(gid, false);
+				if (term_cmp(msg_term, gtx->state.proposal) >= 0)
 				{
+					bool		done = false;
+					char	   *sstate;
+
+					MtmBeginSession(origin_node);
 					StartTransactionCommand();
-					precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
+
+					sstate = serialize_gtx_state(msg_status, msg_term, msg_term);
+					done = SetPreparedTransactionState(gid, sstate, false);
+					Assert(done);
+
 					CommitTransactionCommand();
-
+					gtx->state.proposal = msg_term;
+					gtx->state.accepted = msg_term;
 					MemoryContextSwitchTo(MtmApplyContext);
-				}
-				else
-					precommitted = SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, true);
 
-				if (precommitted)
 					mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+					if (receiver_ctx->parallel_allowed)
+						mtm_send_gid_reply(gtx, origin_node);
 
-				if (precommitted && receiver_ctx->parallel_allowed)
-				{
-					mtm_send_gid_reply(gid, origin_node, MSG_PRECOMMITTED);
+					MtmEndSession(origin_node, true);
 				}
-
-				MtmEndSession(origin_node, true);
-
-				mtm_log(MtmApplyTrace, "PGLOGICAL_PRECOMMIT %s", gid);
+				GlobalTxRelease(gtx);
 				return;
 			}
 		case PGLOGICAL_COMMIT:
@@ -991,6 +1011,7 @@ process_remote_commit(StringInfo in,
 				ListCell   *cur_item,
 						   *prev_item;
 				TransactionId xid = GetCurrentTransactionIdIfAny();
+				GlobalTx   *gtx;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == current_gtid->my_xid);
@@ -1008,11 +1029,14 @@ process_remote_commit(StringInfo in,
 				StartTransactionCommand();
 
 				/* PREPARE itself */
+				gtx = GlobalTxAcquire(gid, true);
 				res = PrepareTransactionBlock(gid);
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
-
 				AllowTempIn2PC = true;
 				CommitTransactionCommand();
+				gtx->state.status = GTXPrepared;
+				GlobalTxRelease(gtx);
+
 				MemoryContextSwitchTo(MtmApplyContext);
 
 				InterruptPending = false;
@@ -1022,7 +1046,7 @@ process_remote_commit(StringInfo in,
 				if (receiver_ctx->parallel_allowed)
 				{
 					mtm_send_xid_reply(current_gtid->xid, origin_node,
-									   res ? MSG_PREPARED : MSG_ABORTED, NULL);
+									   res ? GTXPrepared : GTXAborted, NULL);
 				}
 
 				/*
@@ -1069,20 +1093,28 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_COMMIT_PREPARED:
 			{
+				GlobalTx   *gtx;
+
 				Assert(!query_cancel_allowed);
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
+
 				StartTransactionCommand();
 				MtmBeginSession(origin_node);
+
+				gtx = GlobalTxAcquire(gid, false);
 				FinishPreparedTransaction(gid, true, true);
-				mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 				CommitTransactionCommand();
+				gtx->state.status = GTXCommitted;
+				GlobalTxRelease(gtx);
+
+				mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 				MemoryContextSwitchTo(MtmApplyContext);
 
-				if (receiver_ctx->parallel_allowed)
-				{
-					mtm_send_gid_reply(gid, origin_node, MSG_COMMITTED);
-				}
+				// if (receiver_ctx->parallel_allowed)
+				// {
+				// 	mtm_send_gid_reply(gtx, origin_node);
+				// }
 
 				MtmEndSession(origin_node, true);
 
@@ -1091,13 +1123,20 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_ABORT_PREPARED:
 			{
+				GlobalTx   *gtx;
+
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
 				MtmBeginSession(origin_node);
 				StartTransactionCommand();
+
+				gtx = GlobalTxAcquire(gid, false);
 				FinishPreparedTransaction(gid, false, true);
-				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				CommitTransactionCommand();
+				gtx->state.status = GTXAborted;
+				GlobalTxRelease(gtx);
+
+				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				MemoryContextSwitchTo(MtmApplyContext);
 				MtmEndSession(origin_node, true);
 				mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
@@ -1678,7 +1717,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (receiver_ctx->parallel_allowed)
 				mtm_send_xid_reply(current_gtid.xid, current_gtid.node,
-								   MSG_ABORTED, edata);
+								   GTXAborted, edata);
 		}
 
 		FreeErrorData(edata);

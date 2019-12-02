@@ -347,9 +347,12 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector, HTAB *filter_m
 	switch (event)
 	{
 		case PGLOGICAL_PREPARE:
-		case PGLOGICAL_PRECOMMIT_PREPARED:
 		case PGLOGICAL_ABORT_PREPARED:
 			gid = pq_getmsgstring(&s);
+			break;
+		case PGLOGICAL_PREPARE_PHASE2A:
+			gid = pq_getmsgstring(&s);
+			pq_getmsgstring(&s); /* state_3pc */
 			break;
 		case PGLOGICAL_COMMIT_PREPARED:
 			pq_getmsgint64(&s); /* CSN */

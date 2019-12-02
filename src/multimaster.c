@@ -29,6 +29,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "catalog/pg_authid.h"
+#include "libpq/pqformat.h"
 
 #include "multimaster.h"
 #include "ddd.h"
@@ -36,6 +37,7 @@
 #include "state.h"
 #include "logger.h"
 #include "commit.h"
+#include "messaging.h"
 
 #include "compat.h"
 
@@ -116,6 +118,21 @@ bool		MtmBreakConnection;
 
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
+
+
+int
+popcount(nodemask_t mask)
+{
+	int			i,
+				count = 0;
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (BIT_CHECK(mask, i))
+			count++;
+	}
+	return count;
+}
 
 
 /*
@@ -1439,4 +1456,128 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
 	tuplestore_donestoring(tupstore);
 
 	return (Datum) 0;
+}
+
+
+/*****************************************************************************
+ *
+ * Network messages packing/unpacking.
+ *
+ *****************************************************************************/
+
+
+StringInfo
+MtmMesagePack(MtmMessage *anymsg)
+{
+	StringInfo	s = makeStringInfo();
+
+	pq_sendbyte(s, anymsg->tag);
+
+	switch (messageTag(anymsg))
+	{
+		case T_MtmTxResponse:
+		{
+			MtmTxResponse   *msg = (MtmTxResponse *) anymsg;
+
+			pq_sendint32(s, msg->node_id);
+			pq_sendbyte(s, msg->status);
+			pq_sendint32(s, msg->term.ballot);
+			pq_sendint32(s, msg->term.node_id);
+			pq_sendint32(s, msg->errcode);
+			pq_sendstring(s, msg->errmsg);
+			break;
+		}
+
+		case T_MtmTxRequest:
+		{
+			MtmTxRequest   *msg = (MtmTxRequest *) anymsg;
+
+			pq_sendbyte(s, msg->type);
+			pq_sendint32(s, msg->term.ballot);
+			pq_sendint32(s, msg->term.node_id);
+			pq_sendstring(s, msg->gid);
+			break;
+		}
+
+		case T_MtmTxStatusResponse:
+		{
+			MtmTxStatusResponse   *msg = (MtmTxStatusResponse *) anymsg;
+
+			pq_sendint32(s, msg->node_id);
+			pq_sendbyte(s, msg->status);
+			pq_sendint32(s, msg->proposed.ballot);
+			pq_sendint32(s, msg->proposed.node_id);
+			pq_sendint32(s, msg->accepted.ballot);
+			pq_sendint32(s, msg->accepted.node_id);
+			pq_sendstring(s, msg->gid);
+			break;
+		}
+
+		default:
+			Assert(false);
+	}
+
+	return s;
+}
+
+MtmMessage *
+MtmMesageUnpack(StringInfo s)
+{
+	MtmMessageTag msg_tag = pq_getmsgbyte(s);
+	MtmMessage *anymsg;
+
+	switch (msg_tag)
+	{
+		case T_MtmTxResponse:
+		{
+			MtmTxResponse   *msg = palloc0(sizeof(MtmTxResponse));
+
+			msg->tag = msg_tag;
+			msg->node_id = pq_getmsgint(s, 4);
+			msg->status = pq_getmsgbyte(s);
+			msg->term.ballot = pq_getmsgint(s, 4);
+			msg->term.node_id = pq_getmsgint(s, 4);
+			msg->errcode = pq_getmsgint(s, 4);
+			msg->errmsg = pq_getmsgstring(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_MtmTxRequest:
+		{
+			MtmTxRequest *msg = palloc0(sizeof(MtmTxRequest));
+
+			msg->tag = msg_tag;
+			msg->type = pq_getmsgbyte(s);
+			msg->term.ballot = pq_getmsgint(s, 4);
+			msg->term.node_id = pq_getmsgint(s, 4);
+			msg->gid = pq_getmsgstring(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_MtmTxStatusResponse:
+		{
+			MtmTxStatusResponse   *msg = palloc0(sizeof(MtmTxStatusResponse));
+
+			msg->tag = msg_tag;
+			msg->node_id = pq_getmsgint(s, 4);
+			msg->status = pq_getmsgbyte(s);
+			msg->proposed.ballot = pq_getmsgint(s, 4);
+			msg->proposed.node_id = pq_getmsgint(s, 4);
+			msg->accepted.ballot = pq_getmsgint(s, 4);
+			msg->accepted.node_id = pq_getmsgint(s, 4);
+			msg->gid = pq_getmsgstring(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		default:
+			Assert(false);
+	}
+
+	return anymsg;
 }

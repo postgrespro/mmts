@@ -34,14 +34,8 @@
 #include "state.h"
 #include "syncpoint.h"
 #include "commit.h"
-
-typedef struct
-{
-	MtmMessageCode status;
-	int32		errcode;
-	const char *errmsg;
-	int			node_id;
-} mtm_msg;
+#include "global_tx.h"
+#include "messaging.h"
 
 static bool force_in_bgworker;
 static bool committers_incremented;
@@ -55,7 +49,7 @@ static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
 
-static void gather(uint64 participants, mtm_msg *messages, int *msg_count);
+static void gather(uint64 participants, MtmTxResponse *messages, int *msg_count);
 
 static void
 pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
@@ -116,7 +110,7 @@ MtmXactCallback(XactEvent event, void *arg)
 			break;
 
 		case XACT_EVENT_ABORT:
-			global_tx_at_abort();
+			GlobalTxAtAbort(0,0);
 			break;
 
 		default:
@@ -255,15 +249,6 @@ MtmGidParseXid(const char *gid)
 	return xid;
 }
 
-static void
-parse_reply(mtm_msg *message, StringInfo msg_buf)
-{
-	message->status = pq_getmsgbyte(msg_buf);
-	message->errcode = pq_getmsgint(msg_buf, 4);
-	message->errmsg = pq_getmsgstring(msg_buf);
-	message->node_id = -1;
-}
-
 bool
 MtmTwoPhaseCommit()
 {
@@ -272,9 +257,10 @@ MtmTwoPhaseCommit()
 	TransactionId xid;
 	char		stream[DMQ_NAME_MAXLEN];
 	char		gid[GIDSIZE];
-	mtm_msg		messages[MTM_MAX_NODES];
+	MtmTxResponse	messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
+	GlobalTx   *gtx;
 
 	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
@@ -333,6 +319,8 @@ MtmTwoPhaseCommit()
 		participants = MtmGetEnabledNodeMask() &
 			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
+		/* prepare transaction on our node */
+		gtx = GlobalTxAcquire(gid, true);
 		ret = PrepareTransactionBlock(gid);
 		if (!ret)
 		{
@@ -345,22 +333,35 @@ MtmTwoPhaseCommit()
 			SpinLockRelease(&Mtm->cb_lock);
 			committers_incremented = false;
 			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
+
+			// or just throw an error by ourselves?
+			gtx->state.status = GTXAborted;
+			GlobalTxRelease(gtx);
 			return true;
 		}
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 		AllowTempIn2PC = true;
 		CommitTransactionCommand();
-
+		gtx->state.status = GTXPrepared;
 		gather(participants, messages, &n_messages);
 		dmq_stream_unsubscribe(stream);
 
+		/* check prepare responses */
+		if (n_messages != popcount(participants))
+		{
+			ereport(ERROR,
+					(errcode(messages[i].errcode),
+						errmsg("[multimaster] commit sequence interrupted due to a network failure")));
+		}
 		for (i = 0; i < n_messages; i++)
 		{
-			Assert(messages[i].status == MSG_PREPARED || messages[i].status == MSG_ABORTED);
+			Assert(messages[i].status == GTXPrepared || messages[i].status == GTXAborted);
+			Assert(term_cmp(messages[i].term, (GlobalTxTerm) {1, 0}) == 0);
 
-			if (messages[i].status == MSG_ABORTED)
+			if (messages[i].status == GTXAborted)
 			{
 				FinishPreparedTransaction(gid, false, false);
+				gtx->state.status = GTXAborted;
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
@@ -376,14 +377,20 @@ MtmTwoPhaseCommit()
 			}
 		}
 
+		/* ok, we have all prepare responses, precommit */
 		dmq_stream_subscribe(gid);
-
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
+		SetPreparedTransactionState(gid,
+			serialize_gtx_state(GTXPreCommitted, (GlobalTxTerm) {1,0}, (GlobalTxTerm) {1,0}),
+			false);
+		gtx->state.status = GTXPreCommitted;
+		gtx->state.accepted = (GlobalTxTerm) {1, 0};
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, messages, &n_messages);
 
+		/* we have majority precommits, commit */
 		StartTransactionCommand();
 		FinishPreparedTransaction(gid, true, false);
+		gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 		/* XXX: make this conditional */
 		gather(participants, messages, &n_messages);
@@ -400,6 +407,9 @@ MtmTwoPhaseCommit()
 			committers_incremented = false;
 			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 		}
+
+		gtx->orphaned = true;
+		GlobalTxRelease(gtx);
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
@@ -411,6 +421,7 @@ MtmTwoPhaseCommit()
 	committers_incremented = false;
 	ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 
+	GlobalTxRelease(gtx);
 	dmq_stream_unsubscribe(gid);
 	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, gid);
 
@@ -420,7 +431,7 @@ MtmTwoPhaseCommit()
 }
 
 static void
-gather(uint64 participants, mtm_msg *messages, int *msg_count)
+gather(uint64 participants, MtmTxResponse *messages, int *msg_count)
 {
 	*msg_count = 0;
 	while (participants != 0)
@@ -434,8 +445,13 @@ gather(uint64 participants, mtm_msg *messages, int *msg_count)
 		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
-			parse_reply(&messages[*msg_count], &msg);
-			messages[*msg_count].node_id = sender_to_node[sender_id];
+			MtmMessage *raw_msg;
+
+			raw_msg = MtmMesageUnpack(&msg);
+			Assert(raw_msg->tag == T_MtmTxResponse);
+			messages[*msg_count] = * (MtmTxResponse *) raw_msg;
+			Assert(messages[*msg_count].node_id == sender_to_node[sender_id]);
+
 			(*msg_count)++;
 			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
 
@@ -487,7 +503,7 @@ MtmExplicitPrepare(char *gid)
 	bool		ret;
 	TransactionId xid;
 	char		stream[DMQ_NAME_MAXLEN];
-	mtm_msg		messages[MTM_MAX_NODES];
+	MtmTxResponse messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
 
@@ -523,9 +539,9 @@ MtmExplicitPrepare(char *gid)
 
 	for (i = 0; i < n_messages; i++)
 	{
-		Assert(messages[i].status == MSG_PREPARED || messages[i].status == MSG_ABORTED);
+		Assert(messages[i].status == GTXPrepared || messages[i].status == GTXAborted);
 
-		if (messages[i].status == MSG_ABORTED)
+		if (messages[i].status == GTXAborted)
 		{
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
@@ -554,7 +570,7 @@ void
 MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 {
 	nodemask_t	participants;
-	mtm_msg		messages[MTM_MAX_NODES];
+	MtmTxResponse messages[MTM_MAX_NODES];
 	int			n_messages;
 
 	PreventInTransactionBlock(isTopLevel,

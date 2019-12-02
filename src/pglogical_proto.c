@@ -425,7 +425,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 						ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
-	uint8		event = *txn->state_3pc ? PGLOGICAL_PRECOMMIT_PREPARED : PGLOGICAL_PREPARE;
+	uint8		event = *txn->state_3pc ? PGLOGICAL_PREPARE_PHASE2A : PGLOGICAL_PREPARE;
 
 	/* Ensure that we reset DDLInProgress */
 	Assert(!DDLInProgress);
@@ -451,6 +451,8 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 
 	pq_sendstring(out, txn->gid);
+	if (event == PGLOGICAL_PREPARE_PHASE2A)
+		pq_sendstring(out, txn->state_3pc);
 
 	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare %s", txn->gid);
 }

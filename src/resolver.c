@@ -208,6 +208,17 @@ load_tasks(int node_id, int n_participants)
 }
 
 void
+ResolverWake()
+{
+	pid_t		resolver_pid;
+	LWLockAcquire(resolver_state->lock, LW_SHARED);
+	resolver_pid = resolver_state->pid;
+	LWLockRelease(resolver_state->lock);
+	if (resolver_pid)
+		kill(resolver_pid, SIGUSR1);
+}
+
+void
 ResolveTransactionsForNode(int node_id, int n_all_nodes)
 {
 	pid_t		resolver_pid;

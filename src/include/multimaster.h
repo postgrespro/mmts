@@ -111,17 +111,9 @@ typedef enum
 	PGLOGICAL_PREPARE,
 	PGLOGICAL_COMMIT_PREPARED,
 	PGLOGICAL_ABORT_PREPARED,
-	PGLOGICAL_PRECOMMIT_PREPARED
+	PGLOGICAL_PREPARE_PHASE2A
 }			PGLOGICAL_EVENT;
 
-typedef enum
-{
-	MSG_INVALID,
-	MSG_PREPARED,
-	MSG_PRECOMMITTED,
-	MSG_COMMITTED,
-	MSG_ABORTED
-} MtmMessageCode;
 
 typedef struct
 {
@@ -218,5 +210,7 @@ extern void MtmStateFill(MtmConfig *cfg);
 extern bool MtmIsEnabled(void);
 
 extern void MtmToggleReplication(void);
+
+extern int popcount(nodemask_t mask);
 
 #endif							/* MULTIMASTER_H */

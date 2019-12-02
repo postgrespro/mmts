@@ -15,50 +15,13 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
+#include "storage/ipc.h"
 #include "utils/snapmgr.h"
 #include "utils/hsearch.h"
 #include "miscadmin.h"
 
-#include "multimaster.h"
+#include "global_tx.h"
 #include "logger.h"
-
-typedef struct
-{
-	int		ballot;
-	int		node_id;
-} GlobalTxTerm;
-
-typedef enum
-{
-	GTXInvalid = 0,
-	GTXPrepared,
-	GTXPreCommitted,
-	GTXPreAborted,
-	GTXCommitted,
-	GTXAborted
-} GlobalTxStatus;
-
-typedef struct
-{
-	GlobalTxStatus	status;
-	GlobalTxTerm	proposal;
-	GlobalTxTerm	accepted;
-} GTxState;
-
-typedef struct 
-{
-	char		gid[GIDSIZE];
-	int			acquired_by;
-	GTxState	state;
-	bool		orphaned;	/* Indication for resolver that current tx needs
-							 * to be picked up. Comes from a failed backend or
-							 * a disabled node. */
-	GTxState	remote_states[MTM_MAX_NODES];
-	bool		resolver_acks[MTM_MAX_NODES];
-	bool		in_table;	/* True when gtx state was written in proposals
-							 * table because we received status request before
-							 * it was prepared on our node. */
-} GlobalTx;
 
 /*
  * Definitions for the "mtm.gtx_proposals" table.
@@ -78,55 +41,63 @@ static HTAB *gid2gtx;
 static GlobalTx *my_locked_gtx;
 static bool gtx_exit_registered;
 
-static char *
-serialize_gtx_state(GlobalTx *gtx)
+int
+term_cmp(GlobalTxTerm t1, GlobalTxTerm t2)
+{
+	if (t1.ballot < t2.ballot)
+	{
+		return -1;
+	}
+	else if (t1.ballot == t2.ballot)
+	{
+		if (t1.node_id < t2.node_id)
+			return -1;
+		else if (t1.node_id == t2.node_id)
+			return 0;
+		else
+			return 1;
+	}
+	else
+		return 1;
+}
+
+
+char *
+serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop, GlobalTxTerm term_acc)
 {
 	char	   *state;
 
-	Assert(gtx->state.status == GTXPreCommitted ||
-		   gtx->state.status == GTXPreAborted);
+	Assert(status == GTXPreCommitted || status == GTXPreAborted);
 	state = psprintf("%s-%d:%d-%d:%d",
-					 gtx->state.status == GTXPreCommitted ? "pc" : "pa",
-					 gtx->state.proposal.ballot, gtx->state.proposal.node_id,
-					 gtx->state.accepted.ballot, gtx->state.accepted.node_id);
+					 status == GTXPreCommitted ? "pc" : "pa",
+					 term_prop.ballot, term_prop.node_id,
+					 term_acc.ballot, term_acc.node_id);
 	return state;
 }
 
-static void
-parse_gtx_state(const char *state, GlobalTx *gtx)
+void
+parse_gtx_state(const char *state, GlobalTxStatus *status,
+				GlobalTxTerm *term_prop, GlobalTxTerm *term_acc)
 {
 	int			n_parsed = 0;
 
-	Assert(gtx->gid[0] != '\0');
+	Assert(state[0] != '\0');
+	*status = GTXInvalid;
+	if (strncmp(state, "pc-", 3) == 0)
+		*status = GTXPreCommitted;
+	else if (strncmp(state, "pa-", 3) == 0)
+		*status = GTXPreAborted;
 
-	if (state[0] != '\0')
-	{
-		gtx->state.status = GTXInvalid;
-		if (strncmp(state, "pc-", 3) == 0)
-			gtx->state.status = GTXPreCommitted;
-		else if (strncmp(state, "pa-", 3) == 0)
-			gtx->state.status = GTXPreAborted;
+	n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
+					  &term_prop->ballot, &term_prop->node_id,
+					  &term_acc->ballot, &term_acc->node_id);
 
-		n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
-						&gtx->state.proposal.ballot,
-						&gtx->state.proposal.node_id,
-						&gtx->state.accepted.ballot,
-						&gtx->state.accepted.node_id);
-
-		if (gtx->state.status == GTXInvalid || n_parsed != 4)
-			mtm_log(ERROR, "Failed to parse 3pc state '%s' for gid '%s'",
-					state, gtx->gid);
-	}
-	else
-	{
-		gtx->state.status = GTXPrepared;
-		gtx->state.proposal = (GlobalTxTerm) {1, 0};
-		gtx->state.accepted = (GlobalTxTerm) {0, 0};
-	}
+	if (*status == GTXInvalid || n_parsed != 4)
+		mtm_log(ERROR, "Failed to parse 3pc state '%s'", state);
 }
 
 void
-global_tx_at_abort()
+GlobalTxAtAbort(int code, Datum arg)
 {
 	if (my_locked_gtx)
 	{
@@ -200,7 +171,7 @@ GlobalTxAcquire(const char *gid, bool create)
 
 	if (!gtx_exit_registered)
 	{
-		before_shmem_exit(global_tx_at_abort, 0);
+		before_shmem_exit(GlobalTxAtAbort, 0);
 		gtx_exit_registered = true;
 	}
 
@@ -252,22 +223,20 @@ GlobalTxAcquire(const char *gid, bool create)
 
 /*
  * Release our lock on this transaction and remove it from hash if it is in the
- * decided state.
+ * decided state. Also 
  */
 void
-GlobalTxRelease(const char *gid)
+GlobalTxRelease(GlobalTx *gtx)
 {
-	GlobalTx   *gtx;
 	bool		found;
 
-	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
-
-	gtx = (GlobalTx *) hash_search(gid2gtx, gid, HASH_FIND, &found);
 	Assert(gtx->acquired_by == MyBackendId);
+
+	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
 
 	if (gtx->state.status == GTXCommitted || gtx->state.status == GTXAborted)
-		hash_search(gid2gtx, gid, HASH_REMOVE, &found);
+		hash_search(gid2gtx, gtx->gid, HASH_REMOVE, &found);
 
 	LWLockRelease(gtx_shared->lock);
 
@@ -306,7 +275,7 @@ GlobalTxLoadAll()
 		gtx->in_table = false;
 		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
 		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
-		parse_gtx_state(pxacts[i].state_3pc, gtx);
+		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 	}
 
 	/* Walk over proposals table */
@@ -323,16 +292,15 @@ GlobalTxLoadAll()
 	{
 		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
 		HeapTuple	tup = SPI_tuptable->vals[i];
-		bool		isnull;
 		char	   *gid;
-		char	   *state;
+		char	   *sstate;
 		bool		found;
 		GlobalTx   *gtx;
 
 		gid = SPI_getvalue(tup, tupdesc, Anum_mtm_gtx_proposals_gid);
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_gtx_proposals_gid - 1)->atttypid == TEXTOID);
 
-		state = SPI_getvalue(tup, tupdesc, Anum_mtm_gtx_proposals_state);
+		sstate = SPI_getvalue(tup, tupdesc, Anum_mtm_gtx_proposals_state);
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_gtx_proposals_state - 1)->atttypid == TEXTOID);
 
 		gtx = (GlobalTx *) hash_search(gid2gtx, gid, HASH_ENTER, &found);
@@ -343,7 +311,7 @@ GlobalTxLoadAll()
 		gtx->in_table = true;
 		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
 		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
-		parse_gtx_state(state, gtx);
+		parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 	}
 
 	if (SPI_finish() != SPI_OK_FINISH)

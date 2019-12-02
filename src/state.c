@@ -132,20 +132,6 @@ maskToString(nodemask_t mask)
 	return strMask;
 }
 
-static int
-popcount(nodemask_t mask)
-{
-	int			i,
-				count = 0;
-
-	for (i = 0; i < MTM_MAX_NODES; i++)
-	{
-		if (BIT_CHECK(mask, i))
-			count++;
-	}
-	return count;
-}
-
 void
 MtmStateFill(MtmConfig *cfg)
 {
