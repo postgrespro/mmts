@@ -29,6 +29,12 @@ typedef enum
 	GTXAborted
 } GlobalTxStatus;
 
+typedef enum
+{
+	GTRS_AwaitStatus,
+	GTRS_AwaitAcks
+} GlobalTxResolvingStage;
+
 typedef struct
 {
 	GlobalTxStatus	status;
@@ -49,7 +55,16 @@ typedef struct
 	bool		in_table;	/* True when gtx state was written in proposals
 							 * table because we received status request before
 							 * it was prepared on our node. */
+	GlobalTxResolvingStage resolver_stage;
 } GlobalTx;
+
+typedef struct
+{
+	LWLock	   *lock;
+	HTAB	   *gid2gtx;
+} gtx_shared_data;
+
+extern gtx_shared_data *gtx_shared;
 
 void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
@@ -62,5 +77,6 @@ char *serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop,
 int term_cmp(GlobalTxTerm t1, GlobalTxTerm t2);
 void parse_gtx_state(const char *state, GlobalTxStatus *status,
 				GlobalTxTerm *term_prop, GlobalTxTerm *term_acc);
+GlobalTxTerm GlobalTxGetMaxProposal();
 
 #endif							/* GLOBAL_TX_H */

@@ -15,7 +15,9 @@ typedef enum
 {
 	T_MtmTxResponse,
 	T_MtmTxRequest,
-	T_MtmTxStatusResponse
+	T_MtmTxStatusResponse,
+	T_MtmLastTermRequest,
+	T_MtmLastTermResponse
 } MtmMessageTag;
 
 typedef struct
@@ -39,7 +41,17 @@ typedef struct
 	GlobalTxTerm		term;
 	int32				errcode;
 	const char		   *errmsg;
+	const char		   *gid;
 } MtmTxResponse;
+
+/*
+ * Response on MtmLastTermRequest request, holds last proposal value.
+ */
+typedef struct
+{
+	MtmMessageTag		tag;
+	GlobalTxTerm		term;
+} MtmLastTermResponse;
 
 /*
  * Request to change transaction state. This messages are duplicate of
@@ -74,9 +86,7 @@ typedef struct
 {
 	MtmMessageTag		tag;
 	int					node_id;
-	GlobalTxStatus		status;
-	GlobalTxTerm		proposed;
-	GlobalTxTerm		accepted;
+	GTxState			state;
 	const char		   *gid;
 } MtmTxStatusResponse;
 

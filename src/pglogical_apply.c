@@ -916,6 +916,7 @@ mtm_send_gid_reply(GlobalTx *gtx, int node_id)
 	msg.term = gtx->state.accepted;
 	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = "";
+	msg.gid = term_cmp(msg.term, (GlobalTxTerm) {1,0}) == 0 ? "" : gtx->gid;
 	packed_msg = MtmMesagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, gtx->gid, packed_msg->data, packed_msg->len);
@@ -989,6 +990,7 @@ process_remote_commit(StringInfo in,
 					CommitTransactionCommand();
 					gtx->state.proposal = msg_term;
 					gtx->state.accepted = msg_term;
+					gtx->state.status = msg_status;
 					MemoryContextSwitchTo(MtmApplyContext);
 
 					mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);

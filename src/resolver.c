@@ -29,6 +29,8 @@
 #include "pgstat.h"
 #include "state.h"
 #include "commit.h"
+#include "global_tx.h"
+#include "messaging.h"
 
 /*
  * Definition for data in shared memory. It's not publicly visible, but used
@@ -37,24 +39,24 @@
 
 typedef struct
 {
-	LWLock	   *lock;
+	// LWLock	   *lock;
 	pid_t		pid;
 } resolver_state_data;
 
 static resolver_state_data *resolver_state;
 
-/*
- * Map of all unresolver transactions.
- */
-typedef struct
-{
-	char		gid[GIDSIZE];
-	MtmTxState	state[MTM_MAX_NODES];
-	int			xact_node_id;
-	int			n_participants;
-} resolver_tx;
+// /*
+//  * Map of all unresolver transactions.
+//  */
+// typedef struct
+// {
+// 	char		gid[GIDSIZE];
+// 	MtmTxState	state[MTM_MAX_NODES];
+// 	int			xact_node_id;
+// 	int			n_participants;
+// } resolver_tx;
 
-static HTAB *gid2tx = NULL;
+// static HTAB *gid2tx = NULL;
 
 /* sender_id to node_id mapping */
 static int	sender_to_node[MTM_MAX_NODES];
@@ -77,7 +79,7 @@ resolver_shmem_size(void)
 	Size		size = 0;
 
 	size = add_size(size, sizeof(resolver_state_data));
-	size = add_size(size, MaxBackends * sizeof(resolver_tx));
+	// size = add_size(size, MaxBackends * sizeof(resolver_tx));
 	return MAXALIGN(size);
 }
 
@@ -97,15 +99,15 @@ resolver_shmem_startup_hook()
 
 	if (!found)
 	{
-		resolver_state->lock = &(GetNamedLWLockTranche("resolver")->lock);
+		// resolver_state->lock = &(GetNamedLWLockTranche("resolver")->lock);
 		resolver_state->pid = 0;
 	}
 
-	/* init map with current unresolved transactions */
-	hash_info.keysize = GIDSIZE;
-	hash_info.entrysize = sizeof(resolver_tx);
-	gid2tx = ShmemInitHash("gid2tx", MaxBackends, 2 * MaxBackends, &hash_info,
-						   HASH_ELEM);
+	// /* init map with current unresolved transactions */
+	// hash_info.keysize = GIDSIZE;
+	// hash_info.entrysize = sizeof(resolver_tx);
+	// gid2tx = ShmemInitHash("gid2tx", MaxBackends, 2 * MaxBackends, &hash_info,
+	// 					   HASH_ELEM);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -159,53 +161,53 @@ ResolverStart(Oid db_id, Oid user_id)
 
 
 
-static bool
-load_tasks(int node_id, int n_participants)
-{
-	PreparedTransaction pxacts;
-	int			n_xacts,
-				added_xacts = 0,
-				i;
+// static bool
+// load_tasks(int node_id, int n_participants)
+// {
+// 	PreparedTransaction pxacts;
+// 	int			n_xacts,
+// 				added_xacts = 0,
+// 				i;
 
-	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
-	Assert(node_id == -1 || node_id > 0);
+// 	Assert(LWLockHeldByMeInMode(resolver_state->lock, LW_EXCLUSIVE));
+// 	Assert(node_id == -1 || node_id > 0);
 
-	n_xacts = GetPreparedTransactions(&pxacts);
+// 	n_xacts = GetPreparedTransactions(&pxacts);
 
-	for (i = 0; i < n_xacts; i++)
-	{
-		char const *gid = pxacts[i].gid;
-		int			xact_node_id;
+// 	for (i = 0; i < n_xacts; i++)
+// 	{
+// 		char const *gid = pxacts[i].gid;
+// 		int			xact_node_id;
 
-		xact_node_id = MtmGidParseNodeId(gid);
+// 		xact_node_id = MtmGidParseNodeId(gid);
 
-		/* user-generated 2pc || resolve all || resolve only our txes */
-		if (xact_node_id < 0 || node_id == -1 || node_id == xact_node_id)
-		{
-			int			j;
-			resolver_tx *tx;
+// 		/* user-generated 2pc || resolve all || resolve only our txes */
+// 		if (xact_node_id < 0 || node_id == -1 || node_id == xact_node_id)
+// 		{
+// 			int			j;
+// 			resolver_tx *tx;
 
-			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
-			added_xacts++;
+// 			tx = (resolver_tx *) hash_search(gid2tx, gid, HASH_ENTER, NULL);
+// 			added_xacts++;
 
-			tx->n_participants = n_participants;
-			tx->xact_node_id = xact_node_id;
+// 			tx->n_participants = n_participants;
+// 			tx->xact_node_id = xact_node_id;
 
-			for (j = 0; j < MTM_MAX_NODES; j++)
-				tx->state[j] = MtmTxUnknown;
+// 			for (j = 0; j < MTM_MAX_NODES; j++)
+// 				tx->state[j] = MtmTxUnknown;
 
-			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
-				tx->state[Mtm->my_node_id - 1] = MtmTxPreCommited;
-			else
-				tx->state[Mtm->my_node_id - 1] = MtmTxPrepared;
-		}
-	}
+// 			if (strcmp(pxacts[i].state_3pc, MULTIMASTER_PRECOMMITTED) == 0)
+// 				tx->state[Mtm->my_node_id - 1] = MtmTxPreCommited;
+// 			else
+// 				tx->state[Mtm->my_node_id - 1] = MtmTxPrepared;
+// 		}
+// 	}
 
-	mtm_log(ResolverTasks, "[RESOLVER] got %d transactions to resolve",
-			added_xacts);
+// 	mtm_log(ResolverTasks, "[RESOLVER] got %d transactions to resolve",
+// 			added_xacts);
 
-	return true;
-}
+// 	return true;
+// }
 
 void
 ResolverWake()
@@ -449,52 +451,119 @@ resolve_tx(const char *gid, int node_id, MtmTxState state)
  *
  *****************************************************************************/
 
+static void
+scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
+{
+	int			i;
+
+	for (i = 0; i < mtm_cfg->n_nodes; i++)
+	{
+		int			node_id = mtm_cfg->nodes[i].node_id;
+		DmqDestinationId dest_id;
+
+		LWLockAcquire(Mtm->lock, LW_SHARED);
+		dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
+		LWLockRelease(Mtm->lock);
+		Assert(dest_id >= 0);
+
+		if (BIT_CHECK(cmask, node_id - 1))
+			dmq_push_buffer(dest_id, stream_name, msg->data, msg->len);
+	}
+}
 
 static void
 scatter_status_requests(MtmConfig *mtm_cfg)
 {
 	HASH_SEQ_STATUS hash_seq;
-	resolver_tx *tx;
+	GlobalTx   *gtx;
+	bool		have_orphaned = false;
+	GlobalTxTerm new_term;
 
-	LWLockAcquire(resolver_state->lock, LW_SHARED);
+	StartTransactionCommand();
 
-	hash_seq_init(&hash_seq, gid2tx);
-	while ((tx = hash_seq_search(&hash_seq)) != NULL)
+	/* Is there any orphaned transactions? */
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
 	{
+		if (gtx->orphaned)
+			have_orphaned = true;
+	}
+	LWLockRelease(gtx_shared->lock);
+
+	/* Just rest if there no transactions to resolve */
+	if (!have_orphaned)
+		return;
+
+	/* Generate next term */
+	{
+		MtmMessage	msg = {T_MtmLastTermRequest};
+		uint64		connected;
+		MtmLastTermResponse *acks[MTM_MAX_NODES];
+		int			n_acks;
 		int			i;
 
-		for (i = 0; i < mtm_cfg->n_nodes; i++)
+		/* local max proposal */
+		new_term = GlobalTxGetMaxProposal();
+
+		/* ask peers about their last term */
+		connected = MtmGetConnectedNodeMask() &
+						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+		scatter(mtm_cfg, connected, "txreq", MtmMesagePack(&msg));
+
+		/* .. and get all responses */
+		gather(connected, acks, &n_acks, true);
+
+		for (i = 0; i < n_acks; i++)
 		{
-			int			node_id = mtm_cfg->nodes[i].node_id;
-			nodemask_t	cmask = MtmGetConnectedNodeMask();
-
-			if (BIT_CHECK(cmask, node_id - 1))
-			{
-				StringInfoData msg;
-				DmqDestinationId dest_id;
-
-				LWLockAcquire(Mtm->lock, LW_SHARED);
-				dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
-				LWLockRelease(Mtm->lock);
-				Assert(dest_id >= 0);
-
-				initStringInfo(&msg);
-				pq_send_ascii_string(&msg, tx->gid);
-				dmq_push_buffer(dest_id, "txreq", msg.data, msg.len);
-
-				mtm_log(ResolverTraceTxMsg,
-						"[RESOLVER] sent request for %s to node%d",
-						tx->gid, node_id);
-			}
+			if (term_cmp(new_term, gtx->state.proposal) < 0)
+				new_term = gtx->state.proposal;
 		}
+
+		/* And generate next term */
+		new_term.ballot += 1;
+		new_term.node_id = mtm_cfg->my_node_id;
 	}
 
-	LWLockRelease(resolver_state->lock);
+	/*
+	 * Stamp all orphaned transactions with a new proposal and send status
+	 * requests.
+	 */
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		/* skip acquired until next round */
+		if (gtx->orphaned && gtx->acquired_by == 0)
+		{
+			uint64		connected;
+			MtmTxRequest status_msg = {
+				T_MtmTxRequest,
+				MTReq_Status,
+				new_term,
+				gtx->gid
+			};
 
+			SetPreparedTransactionState(gtx->gid,
+				serialize_gtx_state(
+					gtx->state.status,
+					new_term,
+					gtx->state.accepted),
+				false);
+			gtx->state.proposal = new_term;
+
+			connected = MtmGetConnectedNodeMask() &
+						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+			scatter(mtm_cfg, connected, "txreq",  MtmMesagePack(&status_msg));
+		}
+	}
+	LWLockRelease(gtx_shared->lock);
+
+	CommitTransactionCommand();
 }
 
 static void
-handle_responses(void)
+handle_responses(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
 	StringInfoData msg;
@@ -502,22 +571,138 @@ handle_responses(void)
 
 	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
-		int			node_id;
-		const char *gid;
-		MtmTxState	state;
-
-		node_id = sender_to_node[sender_id];
-		gid = pq_getmsgrawstring(&msg);
-		state = pq_getmsgint(&msg, 4);
+		MtmMessage *raw_msg;
 
 		StartTransactionCommand();
 
-		LWLockAcquire(resolver_state->lock, LW_EXCLUSIVE);
-		resolve_tx(gid, node_id, state);
-		LWLockRelease(resolver_state->lock);
+		raw_msg = MtmMesageUnpack(&msg);
+		Assert(raw_msg->tag == T_MtmTxStatusResponse ||
+			   raw_msg->tag == T_MtmTxResponse);
+		handle_status(mtm_cfg, raw_msg);
 
 		CommitTransactionCommand();
 	}
+}
+
+static bool
+quorum(MtmConfig *mtm_cfg, GTxState * all_states)
+{
+	int i, n_states = 0;
+	GTxState my_state = all_states[mtm_cfg->my_node_id - 1];
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (my_state.status == GTXInvalid)
+			continue;
+
+		if (term_cmp(my_state.proposal, all_states[i].proposal) == 0)
+			n_states++;
+	}
+
+	return n_states >= mtm_cfg->n_nodes/2 + 1;
+}
+
+static void
+handle_status(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
+{
+	GlobalTx *gtx;
+
+	if (gtx->resolver_stage == GTRS_AwaitStatus)
+	{
+		MtmTxStatusResponse *msg;
+
+		Assert(raw_msg->tag == T_MtmTxStatusResponse);
+		msg = (MtmTxStatusResponse *) raw_msg;
+
+		gtx = GlobalTxAcquire(msg->gid, false);
+		if (!gtx)
+			return;
+
+		gtx->remote_states[mtm_cfg->my_node_id-1] = gtx->state;
+		gtx->remote_states[msg->node_id-1] = msg->state;
+
+		if (msg->state.status == GTXCommitted)
+		{
+			gtx->state.status = GTXCommitted;
+			FinishPreparedTransaction(gtx->gid, true, false);
+		}
+		else if (msg->state.status == GTXAborted)
+		{
+			gtx->state.status = GTXAborted;
+			FinishPreparedTransaction(gtx->gid, false, false);
+		}
+		else if (quorum(mtm_cfg, gtx->remote_states))
+		{
+			int			i;
+			char	   *sstate;
+			bool		done;
+			GlobalTxStatus decision = GTXInvalid;
+			GlobalTxTerm max_accepted = gtx->state.accepted;
+
+			for (i = 0; i < MTM_MAX_NODES; i++)
+			{
+				if (gtx->remote_states[i].status == GTXInvalid)
+					continue;
+
+				if (term_cmp(gtx->remote_states[i].accepted, max_accepted) > 0)
+					max_accepted = gtx->remote_states[i].accepted;
+			}
+
+			for (i = 0; i < MTM_MAX_NODES; i++)
+			{
+				if (gtx->remote_states[i].status == GTXInvalid)
+					continue;
+
+				if (term_cmp(gtx->remote_states[i].accepted, max_accepted) == 0)
+				{
+					if (gtx->remote_states[i].status == GTXPreCommitted)
+					{
+						Assert(decision != GTXPreAborted);
+						decision = GTXPreCommitted;
+					}
+					else
+					{
+						Assert(decision != GTXPreCommitted);
+						decision = GTXPreAborted;
+					}
+				}
+			}
+
+			Assert(decision != GTXInvalid);
+
+			sstate = serialize_gtx_state(decision, gtx->state.proposal,
+										 gtx->state.proposal);
+			done = SetPreparedTransactionState(gtx->gid, sstate, false);
+			gtx->state.status = decision;
+			gtx->state.accepted = gtx->state.proposal;
+			gtx->resolver_stage = GTRS_AwaitAcks;
+		}
+
+		GlobalTxRelease(gtx);
+	}
+	else if (gtx->resolver_stage == GTRS_AwaitAcks)
+	{
+		MtmTxResponse *msg;
+
+		Assert(raw_msg->tag == T_MtmTxResponse);
+		msg = (MtmTxResponse *) raw_msg;
+		Assert(msg->gid[0] != '\0');
+
+		gtx = GlobalTxAcquire(msg->gid, false);
+		if (!gtx)
+			return;
+
+
+		gtx->resolver_acks[mtm_cfg->my_node_id-1] = true;
+		gtx->resolver_acks[msg->node_id-1] = true;
+
+
+		GlobalTxRelease(gtx);
+	}
+	else
+		Assert(false);
+
+	
 }
 
 static void
@@ -602,7 +787,7 @@ ResolverMain(Datum main_arg)
 		}
 
 		/* Gather responses */
-		handle_responses();
+		handle_responses(mtm_cfg);
 
 		/* Sleep untl somebody wakes us */
 		rc = WaitLatch(MyLatch,

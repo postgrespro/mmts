@@ -1465,6 +1465,7 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
  *
  *****************************************************************************/
 
+// XXX: add also startmessage/endmessage
 
 StringInfo
 MtmMesagePack(MtmMessage *anymsg)
@@ -1485,6 +1486,7 @@ MtmMesagePack(MtmMessage *anymsg)
 			pq_sendint32(s, msg->term.node_id);
 			pq_sendint32(s, msg->errcode);
 			pq_sendstring(s, msg->errmsg);
+			pq_sendstring(s, msg->gid);
 			break;
 		}
 
@@ -1504,12 +1506,25 @@ MtmMesagePack(MtmMessage *anymsg)
 			MtmTxStatusResponse   *msg = (MtmTxStatusResponse *) anymsg;
 
 			pq_sendint32(s, msg->node_id);
-			pq_sendbyte(s, msg->status);
-			pq_sendint32(s, msg->proposed.ballot);
-			pq_sendint32(s, msg->proposed.node_id);
-			pq_sendint32(s, msg->accepted.ballot);
-			pq_sendint32(s, msg->accepted.node_id);
+			pq_sendbyte(s, msg->state.status);
+			pq_sendint32(s, msg->state.proposal.ballot);
+			pq_sendint32(s, msg->state.proposal.node_id);
+			pq_sendint32(s, msg->state.accepted.ballot);
+			pq_sendint32(s, msg->state.accepted.node_id);
 			pq_sendstring(s, msg->gid);
+			break;
+		}
+
+		case T_MtmLastTermRequest:
+			/* tag-only message */
+			break;
+
+		case T_MtmLastTermResponse:
+		{
+			MtmLastTermResponse   *msg = (MtmLastTermResponse *) anymsg;
+
+			pq_sendint32(s, msg->term.ballot);
+			pq_sendint32(s, msg->term.node_id);
 			break;
 		}
 
@@ -1539,6 +1554,7 @@ MtmMesageUnpack(StringInfo s)
 			msg->term.node_id = pq_getmsgint(s, 4);
 			msg->errcode = pq_getmsgint(s, 4);
 			msg->errmsg = pq_getmsgstring(s);
+			msg->gid = pq_getmsgstring(s);
 
 			anymsg = (MtmMessage *) msg;
 			break;
@@ -1564,12 +1580,34 @@ MtmMesageUnpack(StringInfo s)
 
 			msg->tag = msg_tag;
 			msg->node_id = pq_getmsgint(s, 4);
-			msg->status = pq_getmsgbyte(s);
-			msg->proposed.ballot = pq_getmsgint(s, 4);
-			msg->proposed.node_id = pq_getmsgint(s, 4);
-			msg->accepted.ballot = pq_getmsgint(s, 4);
-			msg->accepted.node_id = pq_getmsgint(s, 4);
+			msg->state.status = pq_getmsgbyte(s);
+			msg->state.proposal.ballot = pq_getmsgint(s, 4);
+			msg->state.proposal.node_id = pq_getmsgint(s, 4);
+			msg->state.accepted.ballot = pq_getmsgint(s, 4);
+			msg->state.accepted.node_id = pq_getmsgint(s, 4);
 			msg->gid = pq_getmsgstring(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_MtmLastTermRequest:
+		{
+			MtmMessage   *msg = palloc0(sizeof(MtmMessage));
+
+			/* tag-only message */
+			msg->tag = msg_tag;
+			anymsg = msg;
+			break;
+		}
+
+		case T_MtmLastTermResponse:
+		{
+			MtmLastTermResponse   *msg = palloc0(sizeof(MtmLastTermResponse));
+
+			msg->tag = msg_tag;
+			msg->term.ballot = pq_getmsgint(s, 4);
+			msg->term.node_id = pq_getmsgint(s, 4);
 
 			anymsg = (MtmMessage *) msg;
 			break;

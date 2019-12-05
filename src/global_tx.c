@@ -31,13 +31,7 @@
 #define Anum_mtm_gtx_proposals_gid		1	/* node_id, same accross cluster */
 #define Anum_mtm_gtx_proposals_state	2	/* connection string */
 
-typedef struct
-{
-	LWLock	   *lock;
-} gtx_shared_data;
-
-static gtx_shared_data *gtx_shared;
-static HTAB *gid2gtx;
+gtx_shared_data *gtx_shared;
 static GlobalTx *my_locked_gtx;
 static bool gtx_exit_registered;
 
@@ -141,7 +135,7 @@ MtmGlobalTxShmemStartup(void)
 	if (!found)
 		gtx_shared->lock = &(GetNamedLWLockTranche("mtm-gtx-lock"))->lock;
 
-	gid2gtx = ShmemInitHash("gid2gtx", 2*MaxConnections, 2*MaxConnections,
+	gtx_shared->gid2gtx = ShmemInitHash("gid2gtx", 2*MaxConnections, 2*MaxConnections,
 							&info, HASH_ELEM);
 
 	LWLockRelease(AddinShmemInitLock);
@@ -180,19 +174,20 @@ GlobalTxAcquire(const char *gid, bool create)
 	/* Repeat attempts to acquire a global tx */
 	while (true)
 	{
-		gtx = (GlobalTx *) hash_search(gid2gtx, gid, HASH_FIND, &found);
+		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gid, HASH_FIND, &found);
 
 		if (!found)
 		{
 			if (create)
 			{
-				gtx = (GlobalTx *) hash_search(gid2gtx, gid, HASH_ENTER, &found);
+				gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gid, HASH_ENTER, &found);
 
 				gtx->acquired_by = MyBackendId;
 				gtx->state.status = GTXInvalid;
 				gtx->state.proposal = (GlobalTxTerm) {1, 0};
 				gtx->state.accepted = (GlobalTxTerm) {0, 0};
 				gtx->orphaned = false;
+				gtx->resolver_stage = GTRS_AwaitStatus;
 				memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
 				memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
 			}
@@ -236,7 +231,7 @@ GlobalTxRelease(GlobalTx *gtx)
 	gtx->acquired_by = InvalidBackendId;
 
 	if (gtx->state.status == GTXCommitted || gtx->state.status == GTXAborted)
-		hash_search(gid2gtx, gtx->gid, HASH_REMOVE, &found);
+		hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
 
 	LWLockRelease(gtx_shared->lock);
 
@@ -267,12 +262,13 @@ GlobalTxLoadAll()
 		GlobalTx   *gtx;
 		bool		found;
 
-		gtx = (GlobalTx *) hash_search(gid2gtx, pxacts[i].gid, HASH_ENTER, &found);
+		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, pxacts[i].gid, HASH_ENTER, &found);
 		Assert(!found);
 
 		gtx->orphaned = true;
 		gtx->acquired_by = InvalidBackendId;
 		gtx->in_table = false;
+		gtx->resolver_stage = GTRS_AwaitStatus;
 		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
 		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
 		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
@@ -303,12 +299,13 @@ GlobalTxLoadAll()
 		sstate = SPI_getvalue(tup, tupdesc, Anum_mtm_gtx_proposals_state);
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_gtx_proposals_state - 1)->atttypid == TEXTOID);
 
-		gtx = (GlobalTx *) hash_search(gid2gtx, gid, HASH_ENTER, &found);
+		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gid, HASH_ENTER, &found);
 		Assert(!found);
 
 		gtx->orphaned = true;
 		gtx->acquired_by = InvalidBackendId;
 		gtx->in_table = true;
+		gtx->resolver_stage = GTRS_AwaitStatus;
 		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
 		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
 		parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
@@ -363,3 +360,24 @@ delete_table_proposal(const char *gid)
 		CommitTransactionCommand();
 }
 
+/*
+ * Get maximux proposal among all transactions.
+ */
+GlobalTxTerm
+GlobalTxGetMaxProposal()
+{
+	HASH_SEQ_STATUS hash_seq;
+	GlobalTx   *gtx;
+	GlobalTxTerm max_prop = (GlobalTxTerm) {0, 0};
+
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (term_cmp(max_prop, gtx->state.proposal) < 0)
+			max_prop = gtx->state.proposal;
+	}
+	LWLockRelease(gtx_shared->lock);
+
+	return max_prop;
+}

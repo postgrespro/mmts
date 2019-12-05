@@ -49,8 +49,6 @@ static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
 
-static void gather(uint64 participants, MtmTxResponse *messages, int *msg_count);
-
 static void
 pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
@@ -257,7 +255,7 @@ MtmTwoPhaseCommit()
 	TransactionId xid;
 	char		stream[DMQ_NAME_MAXLEN];
 	char		gid[GIDSIZE];
-	MtmTxResponse	messages[MTM_MAX_NODES];
+	MtmTxResponse *messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
 	GlobalTx   *gtx;
@@ -350,30 +348,30 @@ MtmTwoPhaseCommit()
 		if (n_messages != popcount(participants))
 		{
 			ereport(ERROR,
-					(errcode(messages[i].errcode),
+					(errcode(messages[i]->errcode),
 						errmsg("[multimaster] commit sequence interrupted due to a network failure")));
 		}
 		for (i = 0; i < n_messages; i++)
 		{
-			Assert(messages[i].status == GTXPrepared || messages[i].status == GTXAborted);
-			Assert(term_cmp(messages[i].term, (GlobalTxTerm) {1, 0}) == 0);
+			Assert(messages[i]->status == GTXPrepared || messages[i]->status == GTXAborted);
+			Assert(term_cmp(messages[i]->term, (GlobalTxTerm) {1, 0}) == 0);
 
-			if (messages[i].status == GTXAborted)
+			if (messages[i]->status == GTXAborted)
 			{
 				FinishPreparedTransaction(gid, false, false);
 				gtx->state.status = GTXAborted;
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
-							(errcode(messages[i].errcode),
+							(errcode(messages[i]->errcode),
 							 errmsg("[multimaster] failed to prepare transaction at peer node")));
 				else
 					ereport(ERROR,
-							(errcode(messages[i].errcode),
+							(errcode(messages[i]->errcode),
 							 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-									gid, messages[i].node_id),
+									gid, messages[i]->node_id),
 							 errdetail("sqlstate %s (%s)",
-									   unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+									   unpack_sql_state(messages[i]->errcode), messages[i]->errmsg)));
 			}
 		}
 
@@ -430,8 +428,8 @@ MtmTwoPhaseCommit()
 	return true;
 }
 
-static void
-gather(uint64 participants, MtmTxResponse *messages, int *msg_count)
+void
+gather(uint64 participants, MtmTxResponse **messages, int *msg_count, bool ignore_mtm_disabled)
 {
 	*msg_count = 0;
 	while (participants != 0)
@@ -448,9 +446,9 @@ gather(uint64 participants, MtmTxResponse *messages, int *msg_count)
 			MtmMessage *raw_msg;
 
 			raw_msg = MtmMesageUnpack(&msg);
-			Assert(raw_msg->tag == T_MtmTxResponse);
-			messages[*msg_count] = * (MtmTxResponse *) raw_msg;
-			Assert(messages[*msg_count].node_id == sender_to_node[sender_id]);
+			messages[*msg_count] = (MtmTxResponse *) raw_msg;
+			// Assert(raw_msg->tag == T_MtmTxResponse);
+			// Assert(messages[*msg_count]->node_id == sender_to_node[sender_id]);
 
 			(*msg_count)++;
 			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
@@ -467,7 +465,7 @@ gather(uint64 participants, MtmTxResponse *messages, int *msg_count)
 			 * became offline by this time.
 			 */
 			int			i;
-			nodemask_t	enabled = MtmGetEnabledNodeMask();
+			nodemask_t	enabled = MtmGetEnabledNodeMask(ignore_mtm_disabled);
 
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
@@ -570,7 +568,7 @@ void
 MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 {
 	nodemask_t	participants;
-	MtmTxResponse messages[MTM_MAX_NODES];
+	MtmTxResponse *messages[MTM_MAX_NODES];
 	int			n_messages;
 
 	PreventInTransactionBlock(isTopLevel,
