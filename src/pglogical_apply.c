@@ -88,10 +88,12 @@ static bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, 
 static bool build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup);
 static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
 static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
-
-static bool process_remote_begin(StringInfo s, GlobalTransactionId *gtid);
-static bool process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx);
-static void process_remote_commit(StringInfo s, GlobalTransactionId *current_gtid, MtmReceiverContext *receiver_ctx);
+static bool process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid);
+static bool process_remote_message(StringInfo s,
+								   MtmReceiverContext *receiver_ctx);
+static void process_remote_commit(StringInfo s,
+								  volatile GlobalTransactionId *current_gtid,
+								  MtmReceiverContext *receiver_ctx);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
@@ -464,7 +466,7 @@ create_rel_estate(Relation rel)
 }
 
 static bool
-process_remote_begin(StringInfo s, GlobalTransactionId *gtid)
+process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid)
 {
 	gtid->node = pq_getmsgint(s, 4);
 	gtid->xid = pq_getmsgint64(s);
@@ -915,7 +917,9 @@ mtm_send_gid_reply(char *gid, int node_id, MtmMessageCode msg_code)
 }
 
 static void
-process_remote_commit(StringInfo in, GlobalTransactionId *current_gtid, MtmReceiverContext *receiver_ctx)
+process_remote_commit(StringInfo in,
+					  volatile  GlobalTransactionId *current_gtid,
+					  MtmReceiverContext *receiver_ctx)
 {
 	uint8		event;
 	XLogRecPtr	end_lsn;
@@ -1468,7 +1472,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 	int			save_len = 0;
 	MemoryContext old_context;
 	MemoryContext top_context;
-	GlobalTransactionId current_gtid = {0, InvalidTransactionId};
+	volatile GlobalTransactionId current_gtid = {0, InvalidTransactionId, InvalidTransactionId};
 
 	s.data = work;
 	s.len = size;
