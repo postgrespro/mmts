@@ -955,11 +955,14 @@ pglogical_receiver_main(Datum main_arg)
 											   worker_proc)));
 				}
 
-				/* Else there is actually data on the socket */
+				/*
+				 * Else there is actually data on the socket, so read and we
+				 * should be able to read it.
+				 */
 				if (PQconsumeInput(conn) == 0)
 				{
-					ereport(ERROR, (MTM_ERRMSG("%s: Data remaining on the socket.",
-											   worker_proc)));
+					mtm_log(ERROR, "could not receive data from WAL stream: %s",
+							PQerrorMessage(conn));
 				}
 				continue;
 			}
