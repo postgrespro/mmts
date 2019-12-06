@@ -50,8 +50,8 @@ typedef struct
 	bool		orphaned;	/* Indication for resolver that current tx needs
 							 * to be picked up. Comes from a failed backend or
 							 * a disabled node. */
-	GTxState	remote_states[MTM_MAX_NODES];
-	bool		resolver_acks[MTM_MAX_NODES];
+	GTxState	phase1_acks[MTM_MAX_NODES];
+	GTxState	phase2_acks[MTM_MAX_NODES];
 	bool		in_table;	/* True when gtx state was written in proposals
 							 * table because we received status request before
 							 * it was prepared on our node. */
@@ -77,6 +77,9 @@ char *serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop,
 int term_cmp(GlobalTxTerm t1, GlobalTxTerm t2);
 void parse_gtx_state(const char *state, GlobalTxStatus *status,
 				GlobalTxTerm *term_prop, GlobalTxTerm *term_acc);
-GlobalTxTerm GlobalTxGetMaxProposal();
+GlobalTxTerm GlobalTxGetMaxProposal(void);
+void GlobalTxSaveInTable(const char *gid, GlobalTxStatus status,
+						 GlobalTxTerm term_prop, GlobalTxTerm term_acc);
+void GlobalTxMarkOrphaned(int node_id);
 
 #endif							/* GLOBAL_TX_H */

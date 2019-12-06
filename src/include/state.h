@@ -60,7 +60,7 @@ extern MtmReplicationMode MtmGetReplicationMode(int nodeId);
 extern MtmNodeStatus MtmGetCurrentStatus(void);
 extern nodemask_t MtmGetDisabledNodeMask(void);
 extern nodemask_t MtmGetConnectedNodeMask(void);
-extern nodemask_t MtmGetEnabledNodeMask(void);
+extern nodemask_t MtmGetEnabledNodeMask(bool ignore_disabled);
 extern int	MtmGetRecoveryCount(void);
 extern int	MtmGetNodeDisableCount(int node_id);
 

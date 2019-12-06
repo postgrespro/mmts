@@ -314,7 +314,7 @@ MtmTwoPhaseCommit()
 		}
 		ConditionVariableCancelSleep();
 
-		participants = MtmGetEnabledNodeMask() &
+		participants = MtmGetEnabledNodeMask(false) &
 			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 		/* prepare transaction on our node */
@@ -341,7 +341,7 @@ MtmTwoPhaseCommit()
 		AllowTempIn2PC = true;
 		CommitTransactionCommand();
 		gtx->state.status = GTXPrepared;
-		gather(participants, messages, &n_messages);
+		gather(participants, (MtmMessage **) messages, &n_messages, false);
 		dmq_stream_unsubscribe(stream);
 
 		/* check prepare responses */
@@ -383,7 +383,7 @@ MtmTwoPhaseCommit()
 		gtx->state.status = GTXPreCommitted;
 		gtx->state.accepted = (GlobalTxTerm) {1, 0};
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-		gather(participants, messages, &n_messages);
+		gather(participants, (MtmMessage **) messages, &n_messages, false);
 
 		/* we have majority precommits, commit */
 		StartTransactionCommand();
@@ -391,7 +391,7 @@ MtmTwoPhaseCommit()
 		gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 		/* XXX: make this conditional */
-		gather(participants, messages, &n_messages);
+		gather(participants, (MtmMessage **) messages, &n_messages, false);
 
 		RESUME_INTERRUPTS();
 	}
@@ -407,6 +407,7 @@ MtmTwoPhaseCommit()
 		}
 
 		gtx->orphaned = true;
+		ResolverWake();
 		GlobalTxRelease(gtx);
 		PG_RE_THROW();
 	}
@@ -429,7 +430,7 @@ MtmTwoPhaseCommit()
 }
 
 void
-gather(uint64 participants, MtmTxResponse **messages, int *msg_count, bool ignore_mtm_disabled)
+gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_disabled)
 {
 	*msg_count = 0;
 	while (participants != 0)
@@ -443,10 +444,7 @@ gather(uint64 participants, MtmTxResponse **messages, int *msg_count, bool ignor
 		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
-			MtmMessage *raw_msg;
-
-			raw_msg = MtmMesageUnpack(&msg);
-			messages[*msg_count] = (MtmTxResponse *) raw_msg;
+			messages[*msg_count] = MtmMesageUnpack(&msg);
 			// Assert(raw_msg->tag == T_MtmTxResponse);
 			// Assert(messages[*msg_count]->node_id == sender_to_node[sender_id]);
 
@@ -465,7 +463,7 @@ gather(uint64 participants, MtmTxResponse **messages, int *msg_count, bool ignor
 			 * became offline by this time.
 			 */
 			int			i;
-			nodemask_t	enabled = MtmGetEnabledNodeMask(ignore_mtm_disabled);
+			nodemask_t	enabled = MtmGetEnabledNodeMask(ignore_disabled);
 
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
@@ -501,7 +499,7 @@ MtmExplicitPrepare(char *gid)
 	bool		ret;
 	TransactionId xid;
 	char		stream[DMQ_NAME_MAXLEN];
-	MtmTxResponse messages[MTM_MAX_NODES];
+	MtmTxResponse *messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
 
@@ -521,7 +519,7 @@ MtmExplicitPrepare(char *gid)
 	dmq_stream_subscribe(stream);
 	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
 
-	participants = MtmGetEnabledNodeMask() &
+	participants = MtmGetEnabledNodeMask(false) &
 		~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 	ret = PrepareTransactionBlock(gid);
@@ -532,14 +530,14 @@ MtmExplicitPrepare(char *gid)
 
 	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 
-	gather(participants, messages, &n_messages);
+	gather(participants, (MtmMessage **) messages, &n_messages, false);
 	dmq_stream_unsubscribe(stream);
 
 	for (i = 0; i < n_messages; i++)
 	{
-		Assert(messages[i].status == GTXPrepared || messages[i].status == GTXAborted);
+		Assert(messages[i]->status == GTXPrepared || messages[i]->status == GTXAborted);
 
-		if (messages[i].status == GTXAborted)
+		if (messages[i]->status == GTXAborted)
 		{
 			StartTransactionCommand();
 			FinishPreparedTransaction(gid, false, false);
@@ -547,15 +545,15 @@ MtmExplicitPrepare(char *gid)
 
 			if (MtmVolksWagenMode)
 				ereport(ERROR,
-						(errcode(messages[i].errcode),
+						(errcode(messages[i]->errcode),
 						 errmsg("[multimaster] failed to prepare transaction at peer node")));
 			else
 				ereport(ERROR,
-						(errcode(messages[i].errcode),
+						(errcode(messages[i]->errcode),
 						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i].node_id),
+								gid, messages[i]->node_id),
 						 errdetail("sqlstate %s (%s)",
-								   unpack_sql_state(messages[i].errcode), messages[i].errmsg)));
+								   unpack_sql_state(messages[i]->errcode), messages[i]->errmsg)));
 		}
 	}
 
@@ -578,18 +576,18 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 	{
 		dmq_stream_subscribe(gid);
 
-		participants = MtmGetEnabledNodeMask() &
+		participants = MtmGetEnabledNodeMask(false) &
 			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
 
 		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-		gather(participants, messages, &n_messages);
+		gather(participants, (MtmMessage **) messages, &n_messages, false);
 
 		FinishPreparedTransaction(gid, true, false);
 
 		/* XXX: make this conditional */
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-		gather(participants, messages, &n_messages);
+		gather(participants, (MtmMessage **) messages, &n_messages, false);
 
 		dmq_stream_unsubscribe(gid);
 	}

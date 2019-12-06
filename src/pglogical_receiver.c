@@ -58,6 +58,7 @@
 #include "logger.h"
 #include "compat.h"
 #include "syncpoint.h"
+#include "global_tx.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 #define RECEIVER_SUSPEND_TIMEOUT (1*USECS_PER_SEC)
@@ -1000,6 +1001,10 @@ pglogical_receiver_main(Datum main_arg)
 		 * happen.
 		 */
 		BgwPoolCancel(&Mtm->pools[nodeId - 1]);
+
+		GlobalTxMarkOrphaned(nodeId);
+		ResolverWake();
+
 		MtmSleep(RECEIVER_SUSPEND_TIMEOUT);
 		mtm_log(MtmApplyError, "Receiver %s catch an error and will die", worker_proc);
 		/* and die */

@@ -4,6 +4,8 @@
  * Messaging
  *
  *****************************************************************************/
+#ifndef MESSAGING_H
+#define MESSAGING_H
 
 #include "global_tx.h"
 
@@ -92,3 +94,5 @@ typedef struct
 
 StringInfo MtmMesagePack(MtmMessage *anymsg);
 MtmMessage *MtmMesageUnpack(StringInfo s);
+
+#endif							/* MESSAGING_H */

@@ -542,7 +542,7 @@ MtmDetectGlobalDeadLockForXid(TransactionId xid)
 	ByteBufferFree(&buf);
 	for (i = 0; i < ddd_shared->n_nodes; i++)
 	{
-		if (i + 1 != Mtm->my_node_id && BIT_CHECK(MtmGetEnabledNodeMask(), i))
+		if (i + 1 != Mtm->my_node_id && BIT_CHECK(MtmGetEnabledNodeMask(false), i))
 		{
 			size_t		lockGraphSize;
 			void	   *lockGraphData;

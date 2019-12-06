@@ -474,8 +474,6 @@ _PG_init(void)
 	dmq_sender_connect_hook = MtmOnDmqSenderConnect;
 	dmq_sender_disconnect_hook = MtmOnDmqSenderDisconnect;
 
-	ResolverInit();
-
 	MtmDDLReplicationInit();
 
 	launcher_init();

@@ -21,6 +21,7 @@
 #include "bkb.h"
 #include "state.h"
 #include "logger.h"
+#include "messaging.h"
 
 char const *const MtmNeighborEventMnem[] =
 {
@@ -425,12 +426,6 @@ MtmDisableNode(int node_id)
 
 	BIT_CLEAR(mtm_state->enabled_mask, node_id - 1);
 	mtm_state->node_recovery_count[node_id - 1] += 1;
-
-	/* XXX my_node_id */
-	if (mtm_state->status == MTM_ONLINE)
-	{
-		ResolveTransactionsForNode(node_id, popcount(mtm_state->configured_mask));
-	}
 }
 
 /*
@@ -588,7 +583,7 @@ MtmGetReplicationMode(int nodeId)
 		{
 			/* Lock on us */
 			mtm_state->recovery_slot = nodeId;
-			ResolveAllTransactions(popcount(mtm_state->configured_mask));
+			// ResolveAllTransactions(popcount(mtm_state->configured_mask));
 			LWLockRelease(mtm_state->lock);
 			return REPLMODE_RECOVERY;
 		}
@@ -1031,13 +1026,13 @@ MtmGetConnectedNodeMask()
 }
 
 nodemask_t
-MtmGetEnabledNodeMask()
+MtmGetEnabledNodeMask(bool ignore_disabled)
 {
 	nodemask_t	enabled;
 
 	LWLockAcquire(mtm_state->lock, LW_SHARED);
 	enabled = mtm_state->enabled_mask;
-	if (mtm_state->status != MTM_ONLINE)
+	if (mtm_state->status != MTM_ONLINE && !ignore_disabled)
 	{
 		LWLockRelease(mtm_state->lock);
 		elog(ERROR, "our node was disabled");
@@ -1198,74 +1193,180 @@ static void
 check_status_requests(MtmConfig *mtm_cfg)
 {
 	DmqSenderId sender_id;
-	StringInfoData msg;
+	StringInfoData packed_msg;
 	bool		wait;
 
-	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_id, &packed_msg, MtmGetConnectedNodeMask(), &wait))
 	{
-		DmqDestinationId dest_id;
-		StringInfoData response_msg;
+		MtmMessage *raw_msg = MtmMesageUnpack(&packed_msg);
 		int			sender_node_id;
-		char	   *state_3pc;
-		MtmTxState	state;
-		const char *gid;
+		int			dest_id;
 
 		sender_node_id = sender_to_node[sender_id];
-		gid = pq_getmsgrawstring(&msg);
-
-		mtm_log(StatusRequest, "got status request for %s from %d",
-				gid, sender_node_id);
-
-		/*
-		 * During recovery we may answer with preliminary "notfound" message
-		 * that woul cause erroneus abort of transaction beeing asked about.
-		 */
-		if (MtmGetCurrentStatus() < MTM_RECOVERED)
-		{
-			mtm_log(StatusRequest,
-					"skipping status request as node is not recovered yet");
-			continue;
-		}
-
-		state_3pc = GetLoggedPreparedXactState(gid);
-
-		/* XXX: define this strings as constants like MULTIMASTER_PRECOMMITTED */
-		if (strncmp(state_3pc, "notfound", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxNotFound;
-		else if (strncmp(state_3pc, "prepared", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPrepared;
-		else if (strncmp(state_3pc, "precommitted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPreCommited;
-		else if (strncmp(state_3pc, "preaborted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxPreAborted;
-		else if (strncmp(state_3pc, "committed", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxCommited;
-		else if (strncmp(state_3pc, "aborted", MAX_3PC_STATE_SIZE) == 0)
-			state = MtmTxAborted;
-		else
-		{
-			Assert(false);
-		}
-
-		mtm_log(StatusRequest, "responding to %d with %s -> %s",
-				sender_node_id, gid, MtmTxStateMnem(state));
-
-		pfree(state_3pc);
-
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
 		Assert(dest_id >= 0);
 
-		initStringInfo(&response_msg);
-		pq_send_ascii_string(&response_msg, gid);
-		pq_sendint32(&response_msg, state);
-		dmq_push_buffer(dest_id, "txresp", response_msg.data, response_msg.len);
+		StartTransactionCommand();
 
-		mtm_log(StatusRequest, "responded to %d with %s -> %s",
-				sender_node_id, gid, MtmTxStateMnem(state));
+		if (raw_msg->tag == T_MtmTxRequest)
+		{
+			MtmTxRequest *msg = (MtmTxRequest *) raw_msg;
+			GlobalTx   *gtx;
+
+			if (msg->type == MTReq_Status)
+			{
+				bool		reply = false;
+
+				gtx = GlobalTxAcquire(msg->gid, true);
+				Assert(gtx != NULL);
+
+				/*
+				 * If status is GTXInvalid we've just created GTX entry.
+				 * That may happend if never saw that transaction or if we
+				 * already finished it.
+				 */
+				if (gtx->state.status == GTXInvalid)
+				{
+					char *state_3pc = GetLoggedPreparedXactState(gtx->gid);
+
+					if (strcmp(state_3pc, "committed") == 0)
+					{
+						gtx->state.status = GTXCommitted;
+					}
+					else if (strcmp(state_3pc, "aborted") == 0)
+					{
+						gtx->state.status = GTXAborted;
+					}
+					else if (strcmp(state_3pc, "notfound") == 0)
+					{
+						Assert(term_cmp(msg->term, gtx->state.proposal) > 0);
+						GlobalTxSaveInTable(gtx->gid, gtx->state.status,
+											msg->term, gtx->state.accepted);
+						gtx->state.proposal = msg->term;
+					}
+					else
+					{
+						/* It should have been loaded during boot */
+						Assert(false);
+					}
+
+					reply = true;
+				}
+				else
+				{
+					Assert(gtx->state.status == GTXPrepared ||
+						   gtx->state.status == GTXPreCommitted ||
+						   gtx->state.status == GTXPreAborted);
+
+					if (term_cmp(msg->term, gtx->state.proposal) > 0)
+					{
+						char	   *sstate;
+						bool		done;
+
+						sstate = serialize_gtx_state(gtx->state.status,
+													 msg->term,
+													 gtx->state.accepted);
+						done = SetPreparedTransactionState(gtx->gid, sstate,
+														   false);
+						Assert(done);
+						reply = true;
+					}
+				}
+
+				if (reply)
+				{
+					StringInfo	packed_msg;
+					MtmTxStatusResponse resp = {
+						T_MtmTxStatusResponse,
+						mtm_cfg->my_node_id,
+						gtx->state,
+						gtx->gid
+					};
+
+					packed_msg = MtmMesagePack((MtmMessage *) &resp);
+					dmq_push_buffer(dest_id, "txresp", packed_msg->data,
+									packed_msg->len);
+				}
+
+				GlobalTxRelease(gtx);
+			}
+			else
+			{
+
+				gtx = GlobalTxAcquire(msg->gid, false);
+				if (!gtx)
+					return;
+
+				if (msg->type == MTReq_Abort || msg->type == MTReq_Commit)
+				{
+					FinishPreparedTransaction(gtx->gid,
+											  msg->type == MTReq_Commit,
+											  false);
+				}
+				else if (msg->type == MTReq_Preabort ||
+						 msg->type == MTReq_Precommit)
+				{
+					if (term_cmp(msg->term, gtx->state.proposal) >= 0)
+					{
+						bool		done = false;
+						char	   *sstate;
+						GlobalTxStatus new_status;
+						StringInfo	packed_msg;
+						MtmTxStatusResponse resp;
+
+						new_status = msg->type == MTReq_Precommit ?
+									 GTXPreCommitted : GTXPreAborted;
+
+						sstate = serialize_gtx_state(new_status,
+													 msg->term,
+													 msg->term);
+						done = SetPreparedTransactionState(gtx->gid, sstate,
+														   false);
+						Assert(done);
+
+						gtx->state.proposal = msg->term;
+						gtx->state.accepted = msg->term;
+						gtx->state.status = new_status;
+
+						resp = (MtmTxStatusResponse) {
+							T_MtmTxStatusResponse,
+							mtm_cfg->my_node_id,
+							gtx->state,
+							gtx->gid
+						};
+						packed_msg = MtmMesagePack((MtmMessage *) &resp);
+						dmq_push_buffer(dest_id, "txresp", packed_msg->data,
+										packed_msg->len);
+					}
+				}
+				else
+					Assert(false);
+
+				GlobalTxRelease(gtx);
+			}
+		}
+		else if (raw_msg->tag == T_MtmLastTermRequest)
+		{
+			GlobalTxTerm max_proposal = GlobalTxGetMaxProposal();
+			StringInfo	packed_msg;
+			MtmLastTermResponse resp = {
+				T_MtmLastTermResponse,
+				max_proposal
+			};
+
+			packed_msg = MtmMesagePack((MtmMessage *) &resp);
+			dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
+		}
+		else
+			Assert(false);
+
+
+		CommitTransactionCommand();
 	}
 }
+
 
 static bool
 slot_exists(char *name)
@@ -1578,6 +1679,8 @@ MtmMonitor(Datum arg)
 	}
 	Assert(mtm_cfg);
 
+	GlobalTxLoadAll();
+
 	/*
 	 * Ok, we are starting from a basebackup. Delete neighbors from
 	 * mtm.cluster_nodes so we don't start receivers using wrong my_node_id.
@@ -1725,7 +1828,9 @@ MtmMonitor(Datum arg)
 		}
 
 		/* XXX: add tx start/stop to clear mcxt? */
+		replorigin_session_origin = DoNotReplicateId;
 		check_status_requests(mtm_cfg);
+		replorigin_session_origin = InvalidRepOriginId;
 
 		MtmRefreshClusterStatus();
 

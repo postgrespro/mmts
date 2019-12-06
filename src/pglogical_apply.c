@@ -975,6 +975,9 @@ process_remote_commit(StringInfo in,
 				Assert(msg_status == GTXPreCommitted || msg_status == GTXPreAborted);
 
 				gtx = GlobalTxAcquire(gid, false);
+				if (!gtx)
+					break;
+
 				if (term_cmp(msg_term, gtx->state.proposal) >= 0)
 				{
 					bool		done = false;
@@ -999,8 +1002,13 @@ process_remote_commit(StringInfo in,
 
 					MtmEndSession(origin_node, true);
 				}
+				else
+				{
+					Assert(receiver_ctx->parallel_allowed);
+				}
+
 				GlobalTxRelease(gtx);
-				return;
+				break;
 			}
 		case PGLOGICAL_COMMIT:
 			{
@@ -1105,7 +1113,9 @@ process_remote_commit(StringInfo in,
 				MtmBeginSession(origin_node);
 
 				gtx = GlobalTxAcquire(gid, false);
-				FinishPreparedTransaction(gid, true, true);
+				if (!gtx)
+					break;
+				FinishPreparedTransaction(gid, true, false);
 				CommitTransactionCommand();
 				gtx->state.status = GTXCommitted;
 				GlobalTxRelease(gtx);
@@ -1133,7 +1143,9 @@ process_remote_commit(StringInfo in,
 				StartTransactionCommand();
 
 				gtx = GlobalTxAcquire(gid, false);
-				FinishPreparedTransaction(gid, false, true);
+				if (!gtx)
+					break;
+				FinishPreparedTransaction(gid, false, false);
 				CommitTransactionCommand();
 				gtx->state.status = GTXAborted;
 				GlobalTxRelease(gtx);

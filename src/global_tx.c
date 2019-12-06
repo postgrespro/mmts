@@ -21,6 +21,7 @@
 #include "miscadmin.h"
 
 #include "global_tx.h"
+#include "commit.h"
 #include "logger.h"
 
 /*
@@ -34,6 +35,8 @@
 gtx_shared_data *gtx_shared;
 static GlobalTx *my_locked_gtx;
 static bool gtx_exit_registered;
+
+static void delete_table_proposal(const char *gid);
 
 int
 term_cmp(GlobalTxTerm t1, GlobalTxTerm t2)
@@ -60,10 +63,19 @@ char *
 serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop, GlobalTxTerm term_acc)
 {
 	char	   *state;
+	char	   *status_abbr;
 
-	Assert(status == GTXPreCommitted || status == GTXPreAborted);
+	if (status == GTXPreCommitted)
+		status_abbr = "pc";
+	else if (status == GTXPreAborted)
+		status_abbr = "pa";
+	else if (status == GTXPrepared)
+		status_abbr = "pr";
+	else
+		Assert(false);
+
 	state = psprintf("%s-%d:%d-%d:%d",
-					 status == GTXPreCommitted ? "pc" : "pa",
+					 status_abbr,
 					 term_prop.ballot, term_prop.node_id,
 					 term_acc.ballot, term_acc.node_id);
 	return state;
@@ -81,6 +93,8 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 		*status = GTXPreCommitted;
 	else if (strncmp(state, "pa-", 3) == 0)
 		*status = GTXPreAborted;
+	else if (strncmp(state, "pr-", 3) == 0)
+		*status = GTXPrepared;
 
 	n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
 					  &term_prop->ballot, &term_prop->node_id,
@@ -188,8 +202,8 @@ GlobalTxAcquire(const char *gid, bool create)
 				gtx->state.accepted = (GlobalTxTerm) {0, 0};
 				gtx->orphaned = false;
 				gtx->resolver_stage = GTRS_AwaitStatus;
-				memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
-				memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
+				memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
+				memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
 			}
 			else
 			{
@@ -226,6 +240,10 @@ GlobalTxRelease(GlobalTx *gtx)
 	bool		found;
 
 	Assert(gtx->acquired_by == MyBackendId);
+
+	if (gtx->in_table && (gtx->state.status == GTXCommitted ||
+						  gtx->state.status == GTXAborted))
+		delete_table_proposal(gtx->gid);
 
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
@@ -269,8 +287,8 @@ GlobalTxLoadAll()
 		gtx->acquired_by = InvalidBackendId;
 		gtx->in_table = false;
 		gtx->resolver_stage = GTRS_AwaitStatus;
-		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
-		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
+		memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
+		memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
 		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 	}
 
@@ -300,15 +318,21 @@ GlobalTxLoadAll()
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_gtx_proposals_state - 1)->atttypid == TEXTOID);
 
 		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gid, HASH_ENTER, &found);
-		Assert(!found);
 
-		gtx->orphaned = true;
-		gtx->acquired_by = InvalidBackendId;
-		gtx->in_table = true;
-		gtx->resolver_stage = GTRS_AwaitStatus;
-		memset(gtx->remote_states, 0, sizeof(gtx->remote_states));
-		memset(gtx->resolver_acks, 0, sizeof(gtx->resolver_acks));
-		parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
+		/*
+		 * Table entry is deleted upon commit/abort so state saved in table
+		 * have lesser priority comparing to one in 3pc_state.
+		 */
+		if (!found)
+		{
+			gtx->orphaned = true;
+			gtx->acquired_by = InvalidBackendId;
+			gtx->in_table = true;
+			gtx->resolver_stage = GTRS_AwaitStatus;
+			memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
+			memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
+			parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
+		}
 	}
 
 	if (SPI_finish() != SPI_OK_FINISH)
@@ -317,6 +341,37 @@ GlobalTxLoadAll()
 	PopActiveSnapshot();
 
 	LWLockRelease(gtx_shared->lock);
+}
+
+/*
+ * Save proposal in table. That happens when we received status request before
+ * prepare itself.
+ */
+void
+GlobalTxSaveInTable(const char *gid, GlobalTxStatus status,
+					GlobalTxTerm term_prop, GlobalTxTerm term_acc)
+{
+	int			rc;
+	char	   *sql;
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	sql = psprintf("insert into " MTM_GTX_PROPOSALS " ('%s','%s')",
+				   gid,
+				   serialize_gtx_state(status,
+									   term_prop,
+									   term_acc));
+	rc = SPI_execute(sql, false, 0);
+	if (rc < 0 || rc != SPI_OK_INSERT)
+		mtm_log(ERROR, "Failed to save global_tx proposal");
+
+	if (SPI_finish() != SPI_OK_FINISH)
+		mtm_log(ERROR, "could not finish SPI connection");
+
+	PopActiveSnapshot();
 }
 
 static void
@@ -380,4 +435,22 @@ GlobalTxGetMaxProposal()
 	LWLockRelease(gtx_shared->lock);
 
 	return max_prop;
+}
+
+
+void
+GlobalTxMarkOrphaned(int node_id)
+{
+	HASH_SEQ_STATUS hash_seq;
+	GlobalTx   *gtx;
+
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		int			tx_node_id = MtmGidParseNodeId(gtx->gid);
+		if (tx_node_id == node_id)
+			gtx->orphaned = true;
+	}
+	LWLockRelease(gtx_shared->lock);
 }

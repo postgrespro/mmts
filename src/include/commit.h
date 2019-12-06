@@ -15,6 +15,8 @@
 #include "postgres.h"
 #include "access/xact.h"
 
+#include "messaging.h"
+
 extern void MtmGenerateGid(char *gid, TransactionId xid, int node_id);
 extern int	MtmGidParseNodeId(const char *gid);
 extern TransactionId MtmGidParseXid(const char *gid);
@@ -26,6 +28,6 @@ extern void MtmXactCallback(XactEvent event, void *arg);
 extern bool MtmExplicitPrepare(char *gid);
 extern void MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit);
 
-extern void gather(uint64 participants, MtmTxResponse **messages, int *msg_count);
+extern void gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_mtm_disabled);
 
 #endif

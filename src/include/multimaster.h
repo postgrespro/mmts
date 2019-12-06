@@ -159,6 +159,8 @@ typedef struct
 
 	ConditionVariable receiver_barrier_cv;
 
+	pid_t		resolver_pid;
+
 	struct
 	{
 		MtmReplicationMode receiver_mode;
