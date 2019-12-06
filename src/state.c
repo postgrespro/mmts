@@ -583,7 +583,6 @@ MtmGetReplicationMode(int nodeId)
 		{
 			/* Lock on us */
 			mtm_state->recovery_slot = nodeId;
-			// ResolveAllTransactions(popcount(mtm_state->configured_mask));
 			LWLockRelease(mtm_state->lock);
 			return REPLMODE_RECOVERY;
 		}
@@ -1314,7 +1313,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 						char	   *sstate;
 						GlobalTxStatus new_status;
 						StringInfo	packed_msg;
-						MtmTxStatusResponse resp;
+						MtmTxResponse resp;
 
 						new_status = msg->type == MTReq_Precommit ?
 									 GTXPreCommitted : GTXPreAborted;
@@ -1330,10 +1329,13 @@ check_status_requests(MtmConfig *mtm_cfg)
 						gtx->state.accepted = msg->term;
 						gtx->state.status = new_status;
 
-						resp = (MtmTxStatusResponse) {
-							T_MtmTxStatusResponse,
+						resp = (MtmTxResponse) {
+							T_MtmTxResponse,
 							mtm_cfg->my_node_id,
-							gtx->state,
+							gtx->state.status,
+							gtx->state.accepted,
+							ERRCODE_SUCCESSFUL_COMPLETION,
+							"",
 							gtx->gid
 						};
 						packed_msg = MtmMesagePack((MtmMessage *) &resp);
@@ -1827,10 +1829,7 @@ MtmMonitor(Datum arg)
 			}
 		}
 
-		/* XXX: add tx start/stop to clear mcxt? */
-		replorigin_session_origin = DoNotReplicateId;
 		check_status_requests(mtm_cfg);
-		replorigin_session_origin = InvalidRepOriginId;
 
 		MtmRefreshClusterStatus();
 

@@ -916,7 +916,7 @@ mtm_send_gid_reply(GlobalTx *gtx, int node_id)
 	msg.term = gtx->state.accepted;
 	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = "";
-	msg.gid = term_cmp(msg.term, (GlobalTxTerm) {1,0}) == 0 ? "" : gtx->gid;
+	msg.gid = ""; /* we reply to coordinator in gid-named channel */
 	packed_msg = MtmMesagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, gtx->gid, packed_msg->data, packed_msg->len);
@@ -972,7 +972,9 @@ process_remote_commit(StringInfo in,
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 				state_3pc = pq_getmsgstring(in);
 				parse_gtx_state(state_3pc, &msg_status, &_msg_prop, &msg_term);
-				Assert(msg_status == GTXPreCommitted || msg_status == GTXPreAborted);
+				Assert(msg_status == GTXPreCommitted ||
+					   msg_status == GTXPreAborted ||
+					   msg_status == GTXPrepared);
 
 				gtx = GlobalTxAcquire(gid, false);
 				if (!gtx)
@@ -1001,10 +1003,6 @@ process_remote_commit(StringInfo in,
 						mtm_send_gid_reply(gtx, origin_node);
 
 					MtmEndSession(origin_node, true);
-				}
-				else
-				{
-					Assert(receiver_ctx->parallel_allowed);
 				}
 
 				GlobalTxRelease(gtx);

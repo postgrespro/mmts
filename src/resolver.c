@@ -37,8 +37,7 @@ static int	sender_to_node[MTM_MAX_NODES];
 static bool config_valid;
 static MtmConfig *mtm_cfg = NULL;
 
-static void
-handle_status(MtmConfig *mtm_cfg, MtmMessage *raw_msg);
+static void handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg);
 
 /*****************************************************************************
  *
@@ -179,7 +178,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	}
 	LWLockRelease(gtx_shared->lock);
 
-	/* Just rest if there no transactions to resolve */
+	/* Just rest if there is no transactions to resolve */
 	if (!have_orphaned)
 		return;
 
@@ -204,8 +203,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 		for (i = 0; i < n_acks; i++)
 		{
-			if (term_cmp(new_term, gtx->state.proposal) < 0)
-				new_term = gtx->state.proposal;
+			if (term_cmp(new_term, acks[i]->term) < 0)
+				new_term = acks[i]->term;
 		}
 
 		/* And generate next term */
@@ -266,7 +265,7 @@ handle_responses(MtmConfig *mtm_cfg)
 		raw_msg = MtmMesageUnpack(&msg);
 		Assert(raw_msg->tag == T_MtmTxStatusResponse ||
 			   raw_msg->tag == T_MtmTxResponse);
-		handle_status(mtm_cfg, raw_msg);
+		handle_response(mtm_cfg, raw_msg);
 
 		CommitTransactionCommand();
 	}
@@ -291,7 +290,7 @@ quorum(MtmConfig *mtm_cfg, GTxState * all_states)
 }
 
 static void
-handle_status(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
+handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 {
 	GlobalTx   *gtx;
 	const char *gid;
@@ -451,6 +450,15 @@ detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
 }
 
+static void
+sigUsr1Handler(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+	SetLatch(MyLatch);
+	errno = save_errno;
+}
+
+
 void
 ResolverMain(Datum main_arg)
 {
@@ -461,6 +469,8 @@ ResolverMain(Datum main_arg)
 	/* init this worker */
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 	pqsignal(SIGTERM, die);
+	pqsignal(SIGUSR1, sigUsr1Handler);
+
 	BackgroundWorkerUnblockSignals();
 
 	MtmBackgroundWorker = true;
@@ -482,9 +492,6 @@ ResolverMain(Datum main_arg)
 	Mtm->resolver_pid = MyProcPid;
 	LWLockRelease(Mtm->lock);
 	mtm_log(ResolverTraceTxMsg, "Resolver started");
-
-	/* We use dmq to scatter tx state changes */
-	replorigin_session_origin = DoNotReplicateId;
 
 	for (;;)
 	{

@@ -107,10 +107,6 @@ MtmXactCallback(XactEvent event, void *arg)
 			}
 			break;
 
-		case XACT_EVENT_ABORT:
-			GlobalTxAtAbort(0,0);
-			break;
-
 		default:
 			break;
 	}
@@ -258,7 +254,7 @@ MtmTwoPhaseCommit()
 	MtmTxResponse *messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
-	GlobalTx   *gtx;
+	GlobalTx *volatile gtx;
 
 	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
@@ -319,6 +315,8 @@ MtmTwoPhaseCommit()
 
 		/* prepare transaction on our node */
 		gtx = GlobalTxAcquire(gid, true);
+		Assert(gtx->state.status == GTXInvalid);
+
 		ret = PrepareTransactionBlock(gid);
 		if (!ret)
 		{
@@ -390,8 +388,8 @@ MtmTwoPhaseCommit()
 		FinishPreparedTransaction(gid, true, false);
 		gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-		/* XXX: make this conditional */
-		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		// /* XXX: make this conditional */
+		// gather(participants, (MtmMessage **) messages, &n_messages, false);
 
 		RESUME_INTERRUPTS();
 	}

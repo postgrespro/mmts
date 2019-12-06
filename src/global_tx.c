@@ -1,4 +1,4 @@
-/*----------------------------------------------------------------------------
+/*-----------------------------------------------------------------------------
  *
  * global_tx.c
  *	  Persistent and in-memory state necessary for our E3PC-like atommic commit
@@ -6,7 +6,7 @@
  *
  * Copyright (c) 2016-2019, Postgres Professional
  *
- *----------------------------------------------------------------------------
+ *-----------------------------------------------------------------------------
  */
 
 #include "postgres.h"
@@ -29,8 +29,8 @@
  */
 #define MTM_GTX_PROPOSALS				"mtm.gtx_proposals"
 #define Natts_mtm_gtx_proposals			2
-#define Anum_mtm_gtx_proposals_gid		1	/* node_id, same accross cluster */
-#define Anum_mtm_gtx_proposals_state	2	/* connection string */
+#define Anum_mtm_gtx_proposals_gid		1	/* gid */
+#define Anum_mtm_gtx_proposals_state	2	/* state_3pc */
 
 gtx_shared_data *gtx_shared;
 static GlobalTx *my_locked_gtx;
@@ -70,7 +70,7 @@ serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop, GlobalTxTerm 
 	else if (status == GTXPreAborted)
 		status_abbr = "pa";
 	else if (status == GTXPrepared)
-		status_abbr = "pr";
+		status_abbr = "pp";
 	else
 		Assert(false);
 
@@ -93,15 +93,14 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 		*status = GTXPreCommitted;
 	else if (strncmp(state, "pa-", 3) == 0)
 		*status = GTXPreAborted;
-	else if (strncmp(state, "pr-", 3) == 0)
+	else if (strncmp(state, "pp-", 3) == 0)
 		*status = GTXPrepared;
 
 	n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
 					  &term_prop->ballot, &term_prop->node_id,
 					  &term_acc->ballot, &term_acc->node_id);
 
-	if (*status == GTXInvalid || n_parsed != 4)
-		mtm_log(ERROR, "Failed to parse 3pc state '%s'", state);
+	Assert(*status != GTXInvalid && n_parsed == 4);
 }
 
 void
@@ -333,6 +332,10 @@ GlobalTxLoadAll()
 			memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
 			parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 		}
+		else
+		{
+			gtx->in_table = true;
+		}
 	}
 
 	if (SPI_finish() != SPI_OK_FINISH)
@@ -359,7 +362,7 @@ GlobalTxSaveInTable(const char *gid, GlobalTxStatus status,
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	sql = psprintf("insert into " MTM_GTX_PROPOSALS " ('%s','%s')",
+	sql = psprintf("insert into " MTM_GTX_PROPOSALS " values ('%s','%s')",
 				   gid,
 				   serialize_gtx_state(status,
 									   term_prop,
