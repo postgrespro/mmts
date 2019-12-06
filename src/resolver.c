@@ -166,8 +166,6 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	bool		have_orphaned = false;
 	GlobalTxTerm new_term;
 
-	StartTransactionCommand();
-
 	/* Is there any orphaned transactions? */
 	LWLockAcquire(gtx_shared->lock, LW_SHARED);
 	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
@@ -246,7 +244,6 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	}
 	LWLockRelease(gtx_shared->lock);
 
-	CommitTransactionCommand();
 }
 
 static void
@@ -516,7 +513,9 @@ ResolverMain(Datum main_arg)
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)
 		{
+			StartTransactionCommand();
 			scatter_status_requests(mtm_cfg);
+			CommitTransactionCommand();
 			send_requests = false;
 		}
 

@@ -1483,8 +1483,8 @@ MtmMesagePack(MtmMessage *anymsg)
 			pq_sendint32(s, msg->term.ballot);
 			pq_sendint32(s, msg->term.node_id);
 			pq_sendint32(s, msg->errcode);
-			pq_sendstring(s, msg->errmsg);
-			pq_sendstring(s, msg->gid);
+			pq_send_ascii_string(s, msg->errmsg);
+			pq_send_ascii_string(s, msg->gid);
 			break;
 		}
 
@@ -1495,7 +1495,7 @@ MtmMesagePack(MtmMessage *anymsg)
 			pq_sendbyte(s, msg->type);
 			pq_sendint32(s, msg->term.ballot);
 			pq_sendint32(s, msg->term.node_id);
-			pq_sendstring(s, msg->gid);
+			pq_send_ascii_string(s, msg->gid);
 			break;
 		}
 
@@ -1509,7 +1509,7 @@ MtmMesagePack(MtmMessage *anymsg)
 			pq_sendint32(s, msg->state.proposal.node_id);
 			pq_sendint32(s, msg->state.accepted.ballot);
 			pq_sendint32(s, msg->state.accepted.node_id);
-			pq_sendstring(s, msg->gid);
+			pq_send_ascii_string(s, msg->gid);
 			break;
 		}
 
@@ -1551,8 +1551,8 @@ MtmMesageUnpack(StringInfo s)
 			msg->term.ballot = pq_getmsgint(s, 4);
 			msg->term.node_id = pq_getmsgint(s, 4);
 			msg->errcode = pq_getmsgint(s, 4);
-			msg->errmsg = pq_getmsgstring(s);
-			msg->gid = pq_getmsgstring(s);
+			msg->errmsg = pq_getmsgrawstring(s);
+			msg->gid = pq_getmsgrawstring(s);
 
 			anymsg = (MtmMessage *) msg;
 			break;
@@ -1566,7 +1566,7 @@ MtmMesageUnpack(StringInfo s)
 			msg->type = pq_getmsgbyte(s);
 			msg->term.ballot = pq_getmsgint(s, 4);
 			msg->term.node_id = pq_getmsgint(s, 4);
-			msg->gid = pq_getmsgstring(s);
+			msg->gid = pq_getmsgrawstring(s);
 
 			anymsg = (MtmMessage *) msg;
 			break;
@@ -1583,7 +1583,7 @@ MtmMesageUnpack(StringInfo s)
 			msg->state.proposal.node_id = pq_getmsgint(s, 4);
 			msg->state.accepted.ballot = pq_getmsgint(s, 4);
 			msg->state.accepted.node_id = pq_getmsgint(s, 4);
-			msg->gid = pq_getmsgstring(s);
+			msg->gid = pq_getmsgrawstring(s);
 
 			anymsg = (MtmMessage *) msg;
 			break;

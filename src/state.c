@@ -1681,7 +1681,9 @@ MtmMonitor(Datum arg)
 	}
 	Assert(mtm_cfg);
 
+	StartTransactionCommand();
 	GlobalTxLoadAll();
+	CommitTransactionCommand();
 
 	/*
 	 * Ok, we are starting from a basebackup. Delete neighbors from
