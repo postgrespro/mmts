@@ -153,8 +153,16 @@ struct Generation {
   nodemask_t members; /* generation members */
 }
 
-/* node status in current generation, applies only if node is member of the gen */
+/*
+ * Node status in current generation.
+ * This status is just a convenience for readablity and less typing; it can
+ * always be computed from genstate->{current_gen, last_online_in, last_vote}
+ */
 enum StatusInGen {
+  /* can never be online in this gen */
+  DISABLED,
+
+  /* The rest of states are possible only if node is member of the gen */
   /*
    * We are in the process of recovery in this gen, genstate->donors shows from
    * whom we should recover.
@@ -236,8 +244,9 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
      else if proposed_gen.num <= last_vote.num
        respond VoteGenNumTooLow<last_vote.num>
          (can't vote, retry voting with higher gen num)
-     else, if proposed_members makes sense (i.e. clique is ok), vote:
-       - increment && fsync last_vote, respond VoteOk<proposed_gen.num, genstate->last_online_in>
+     else, if proposed_members makes sense (i.e. clique is ok), vote under GenLock:
+       - increment && fsync last_vote; if (genstate->status == RECOVERY) { genstate->status = DISABLED }
+         respond VoteOk<proposed_gen.num, genstate->last_online_in>
  - Processing of messages above by elections initiator:
      On VoteGenNumTooLow, restart elections with number at least
        received last_vote.num + 1 (local last_vote.num adjusted accordingly)
@@ -273,24 +282,12 @@ of generation higher than its current (CurrentGenIs, START_REPLICATION
 command, PREPARE, parallel safe arrived, PREPARE replies):
 
 ```c
-bool ConsiderGenSwitch(Generation gen, nodemask_t donors) {
+ConsiderGenSwitch(Generation gen, nodemask_t donors) {
   LWLockAcquire(GenLock, LW_EXCLUSIVE);
   if (genstate->current_gen.num >= gen.num) {
     /* our gen is already at least that old */
     LWLockRelease(GenLock);
-    return false;
-  }
-
-  /*
-   * When we voted for last_vote.num, we promised that the oldest gen among gens
-   * with num <= last_vote.num in which we ever can be online (and thus create
-   * xacts) is last_online_in on the moment of voting, and it should stay
-   * forever. To keep that promise, don't enter into gens with <= last_vote.num
-   * numbers.
-   */
-  if (genstate->last_vote.num > gen.num) {
-    LWLockRelease(GenLock);
-    return false;
+    return;
   }
 
   /* voting for generation n <= m is pointless if gen m was already elected */
@@ -300,23 +297,33 @@ bool ConsiderGenSwitch(Generation gen, nodemask_t donors) {
   genstate->current_gen = gen;
   genstate->donors = donors;
 
-  if !IsMemberOfGen(me, gen) {
+  /* We are not member of this generation... */
+  if !IsMemberOfGen(me, gen) ||
+     /*
+      * .. or we can't be online in it due to promise: when we voted for last_vote.num,
+      * we promised that the oldest gen among gens with num <= last_vote.num in
+      * which we ever can be online (and thus create xacts) is last_online_in
+      * on the moment of voting, and it should stay forever. To keep that
+      * promise, prevent getting ONLINE in gens with <= last_vote.num numbers.
+      */
+     genstate->last_vote.num > gen.num {
     /*
-     * We are not member of this generation; nothing much to do. Walreceivers
+     * We can never create xacts in this gen; nothing much to do. Walreceivers
      * and backends will halt.
-
+     *
      * XXX before proposing to vote for generation with us, we would like
      * minimize the recovery lag to decrease downtime of the cluster. For that,
      * we need to determine the donor and recover in exactly this state: when we
-     * are in generation which doesn't include us.
+     * are in 'dead' generation where we can never be online.
      * This is a performance optimization which doesn't influence safety:
      * recovering in single-thread mode applying all origins from anyone is always
      * okay. So it is omitted from this description; here, nothing just happens
      * if we are not member of the current gen.
      */
+    genstate->status = DISABLED;
     fsync genstate
     LWLockRelease(GenLock);
-    return true;
+    return;
   }
 
   /*
@@ -366,47 +373,24 @@ bool ConsiderGenSwitch(Generation gen, nodemask_t donors) {
    * wouldn't be nice to switch gen without p.s. at all -- might lead to
    * infinite recovery.
    */
-  fsync genstate->current_gen, genstate->last_online_in (if updated)
+  fsync genstate->current_gen, genstate->last_online_in, genstate->last_vote (if updated)
 
+  LWLockRelease(GenLock);
 
   /*
    * Tell backends the gen has changed; if they wait for PREPARED votes, they
-   * should abort.
+   * should give up because answer might never come.
    */
   Wake (e.g. setlatch) all live backends.
-
-  LWLockRelease(GenLock);
-  return true;
 }
-
-/*
- * Mark us as recovered in this generation and open the shop. GenLock must be
- * held.
- */
-void EnableMyself() {
-   genstate->last_online_in = genstate->current_gen;
-   /*
-    * This is crucial before allowing xacts because it defines the donor who
-    * contains all previous xacts during recovery. Another way is don't record
-    * last_online_in at all, but recover from *all* gen members
-    * applying all origins, as the right donor will definitely be among them;
-    * however, that seems more complicated.
-    */
-   fsync genstate->last_online_in;
-   /*
-    * Now backends and walreceivers may proceed */
-   genstate->status = ONLINE;
-}
-```
-
 
 
 ### Backend actions:
 
  - During writing PREPARE to wal, lock GenLock in shared mode and
-     - if !IsMemberOfGen(me, genstate->current_gen), bail out with 'not a member of current gen'
+     - if genstate->status == DISABLED, bail out with 'I'm disabled (can't be online in current gen)'
      - if genstate->status == RECOVERY, bail out with 'node is in recovery'
-     - else, stump prepare with genstate->current_gen and collect *all* gen members
+     - else, stamp prepare with genstate->current_gen and collect *all* gen members
        PREPARED acks before committing xact.
 
 gen members might reply WontPrepare<reason, payload>. Abort transaction
@@ -453,9 +437,9 @@ reconnect:
     status = genstate->status;
     donor = first donor from genstate->donors;
     LWLockRelease(GenLock);
-    if !IsMemberOfGen(me, current_gen) {
+    if status == DISABLED {
       /*
-       * sleep a bit and restart; we are not member of the gen at all
+       * sleep a bit and restart; dead generation for us
        */
        sleep; goto reconnect;
     }
@@ -477,6 +461,13 @@ reconnect:
 
     /* record is message or full xact (prepare) for simplicity */
     while (record = new record from stream) {
+      /*
+       * Doing this under GenLock each time is expensive; I think it is better
+       * to have maxnodes len array in shmem with recovery mode for each receiver,
+       * which can be checked out atomically without locks, similar to current recovery_count
+       */
+      check whether our rcv_ctx.mode still apply, goto reconnect if not
+
       if record.type == ParallelSafe {
         if HandleParallelSafe(record)
           /*
@@ -488,13 +479,6 @@ reconnect:
           goto reconnect;
       } else if record.type == PREPARE {
         if rcv_ctx.mode == REPLMODE_NORMAL {
-          /*
-           * XXX if we start up new worker here, better check genstate -- probably
-           * workers die because we are in recovery now. Or we could
-           * collect 'dying because of gen switch' feedback from workers along
-           * with reported applied lsn, such feedback would be required anyway if we
-           * rework syncpoints in non-waiting way.
-           */
           feed record to parallel worker, c.f. parallel_worker_main
         } else {
           /*
@@ -531,12 +515,16 @@ bool HandleParallelSafe(ps) {
    * not to join this one or not a member of it) or we are already online.
    */
   if (genstate->current_gen.num != ps.gen.num ||
-      genstate->current_gen.num < last_vote.num ||
-      !IsMemberOfGen(me, genstate->current_gen) ||
-      genstate->status == ONLINE) {
+      genstate->status != RECOVERY) {
     LWLockRelease(GenLock);
     return false;
   }
+  /* IOW, that condition above was equivalent to */
+   * genstate->current_gen.num != ps.gen.num ||
+   * genstate->current_gen.num < last_vote.num ||
+   * !IsMemberOfGen(me, genstate->current_gen) ||
+   * genstate->last_online_in == genstate->current_gen.num
+   */
 
   /*
    * Catching p.s. in normal mode and tranferring to its gen is not allowed;
@@ -583,7 +571,7 @@ ParallelWorkerMain() {
  */
 bool HandlePrepare(prepare, rcv_ctx) {
   /*
-   * xxx it is better (and quite possible) to avoid taking excl lock inside
+   * xxx it is better (and easy) to avoid taking excl lock inside
    * ConsiderGenSwitch in most cases, but let's keep things simpler here.
    */
   /* Make sure we know about this gen */
@@ -593,8 +581,8 @@ bool HandlePrepare(prepare, rcv_ctx) {
   /*
    * Make sure our current connection mode makes sense
    */
-  if genstate->status == RECOVERY && rcv_ctx.mode == REPLMODE_NORMAL ||
-     genstate->status == ONLINE && rcv_ctx.mode == REPLMODE_RECOVERY {
+  if !(genstate->status == RECOVERY && rcv_ctx.mode == REPLMODE_RECOVERY ||
+       genstate->status == ONLINE && rcv_ctx.mode == REPLMODE_NORMAL) {
        LWLockRelease(GenLock);
        return true;
    }
@@ -605,9 +593,6 @@ bool HandlePrepare(prepare, rcv_ctx) {
     if prepare.gen.num < genstate->current_gen.num {
       /* won't prepare xacts from old gen */
       reply to coordinator WontPrepare<MyGenIsHigher, genstate->current_gen>
-    } else if prepare.gen.num > genstate->current_gen.num {
-      /* though xact's gen is higher, we promised not to join it */
-      reply to coordinator WontPrepare<MyLastVoteIsHigher, genstate->last_vote>
     } else {
       /* ok, xact from our gen */
       Assert(prepare.gen.num == genstate->current_gen.num);
@@ -669,8 +654,8 @@ WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
  - Another switch, now B proposes to vote for gen 8 BC
  - C agrees to 8 BC
  - B gets C's vote and declares 8 BC as chosen.
- - A proposes to vote for gen 10 ABC
- - C agrees to 10 ABC, thus promising never enter gens < 10
+ - A proposes to vote for gen 10 AB
+ - C agrees to 10 AB, thus promising never enter gens < 10
  - A dies
  - Now we have C living in 5 BC and B living in 8 BC, but C can't join 8 due to
    promise -- thus we should propose new gen, though current clique is BC and
@@ -689,8 +674,12 @@ they are in clique, because their lag might be arbitrary big. Thus, as a straw
 man, we could propose
  current_gen->members & clique + me (if not in current_gen), if these nodes form majority;
  if not, we could add other nodes from clique until majority is reached.
+This is not ideal because whenever we have live majority, gen with (n/2 + 1)
+members will be chosen regardless of lagging state (ok if stable situation, bad
+if less lagging node appears later), but with more efforts we can optimize
+this.
 
-Of course, elections themselves doesn't happen instantly, and immediately after
+Of course, elections themselves don't happen instantly, and immediately after
 their beginning we still want to change current_gen, which shouldn't fire
 immediate election restart. We should restart them after either some nodes
 died/connected or proposed gen members have changed or probably after configurable
