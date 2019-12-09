@@ -344,7 +344,9 @@ ConsiderGenSwitch(Generation gen, nodemask_t donors) {
      * and thus can only get it later, creating reordering.
      *
      * This lwlock is not very nice, however; first, it makes Ctrl-c-ing
-     * query during PREPARE writing impossible, second, it doesn't sound efficient.
+     * query during PREPARE writing impossible, second, it doesn't sound efficient,
+     * third, unfairness of lwlocks might make taking it in excl mode impossible
+     * (that can be fought with sleep hack though).
      * An alternative (already present in mtm)  is announcing
      * 'I'm preparing'/'I'm changing enabled mask' in shmem under spinlock and
      * using condvars for waking each other after changing this.
@@ -462,9 +464,13 @@ reconnect:
     /* record is message or full xact (prepare) for simplicity */
     while (record = new record from stream) {
       /*
-       * Doing this under GenLock each time is expensive; I think it is better
+       * This ensures walreceivers eventually converge. Doing this under
+       * GenLock each time is expensive; I think it is better
        * to have maxnodes len array in shmem with recovery mode for each receiver,
-       * which can be checked out atomically without locks, similar to current recovery_count
+       * which can be checked out atomically without locks, similar to current recovery_count.
+       *
+       * Also interlocking must ensure that walreceiver in recovery mode excludes
+       * any other walreceiver to prevent applying record twice.
        */
       check whether our rcv_ctx.mode still apply, goto reconnect if not
 
@@ -539,15 +545,19 @@ bool HandleParallelSafe(ps) {
   /*
    * Ok, so this parallel safe indeed switches us into ONLINE.
    */
+   EnableMyself();
+
+   LWLockRelease(GenLock);
+   return true;
+}
+
+EnableMyself() {
    genstate->last_online_in = genstate->current_gen;
    /*
     * Now backends and walreceivers may proceed in normal mode.
     */
    genstate->status = ONLINE;
    fsync genstate->last_online_in;
-
-   LWLockRelease(GenLock);
-   return true;
 }
 
 ParallelWorkerMain() {
@@ -579,7 +589,12 @@ bool HandlePrepare(prepare, rcv_ctx) {
 
   LWLockAcquire(GenLock, LW_SHARED);
   /*
-   * Make sure our current connection mode makes sense
+   * Make sure our current connection mode makes sense: applying normally when
+   * we are in recovery is unacceptable as we might get xact out of order.
+   * Applying in recovery when we are online is also not ok because we would miss
+   * reply to coordinator; though I don't see how that might be possible.
+   * Again, here we do nothing at all if we are in dead for us gen; in practice,
+   * we would apply in recovery mode to decrease the gap.
    */
   if !(genstate->status == RECOVERY && rcv_ctx.mode == REPLMODE_RECOVERY ||
        genstate->status == ONLINE && rcv_ctx.mode == REPLMODE_NORMAL) {
@@ -587,7 +602,25 @@ bool HandlePrepare(prepare, rcv_ctx) {
        return true;
    }
 
-  if rcv_ctx.mode == RECOVERY {
+  if rcv_ctx.mode == RECOVERY
+    if prepare.gen.num == genstate->current_gen.num {
+      /*
+       * Depending on implementation, under extremely unlikely circumstances due
+       * to slow wareceivers convergence we might get P of gen where we are in
+       * RECOVERY before corresponding ParallelSafe, if we happen to have working
+       * walreceiver in RECOVERY from non-donor gen member. Enable myself then:
+       * we definitely have eaten all previous gens xacts, i.e. recovered.
+       * Actually, the only reason for ParallelSafe existence is convergence to
+       * ONLINE state when no new xacts are happening; otherwise we could leave
+       * only this branch and go through RECOVERY->ONLINE on first xact from new gen.
+       */
+       LWLockRelease(GenLock, LW_SHARED);
+       LWLockAcquire(GenLock, LW_EXCLUSIVE);
+       if prepare.gen.num == genstate->current_gen.num {
+         EnableMyself()
+       }
+      return true;
+    }
     apply prepare, ERROR is unacceptable -- restart recovery if it happens
   } else { /* normal mode */
     if prepare.gen.num < genstate->current_gen.num {
