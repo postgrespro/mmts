@@ -1144,7 +1144,18 @@ MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 	if (!MtmIsLogicalReceiver && !MtmDDLStatement && MtmIsEnabled())
 	{
 		if (!MtmRemoteFunctionsValid)
-			MtmInitializeRemoteFunctionsMap();
+		{
+			PG_TRY();
+			{
+				MtmInitializeRemoteFunctionsMap();
+			}
+			PG_CATCH();
+			{
+				errcontext("DETAIL: During parsing of remote functions string: '%s'", MtmRemoteFunctionsList);
+				PG_RE_THROW();
+			}
+			PG_END_TRY();
+		}
 
 		Assert(queryDesc->planstate);
 
