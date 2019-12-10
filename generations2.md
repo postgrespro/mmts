@@ -1,6 +1,24 @@
 # Generations
 
+This file and TLA+ specs in this directory describe the problem of reordering
+xacts in mtm and propose a way to deal with it. The file contents:
+ - Problem description;
+ - Algorithm based on centralized election live nodes sets, each stamped
+   with logical clock value (generations);
+ - Discussion of alternatives;
 
+The specs/models are:
+ - MtmPrimitiveCurrent.tla is primitive (immediate prepare everywhere) but
+   close model of current (as of this writing) implementation.
+ - MtmPrimitiveCurrentMasks.tla is naive attempt to fix it by stamping prepares
+   with set of enabled nodes and refusing to accept prepare if its enabled mask
+   doesn't match acceptor one.
+ - MtmPrimitiveCurrentMasksFixed.tla is sort of fixed version of previous one:
+   node always recovers from node it asks to enable it in. It works, but seems
+   suboptimal, see "alternatives".
+ - MtmGenerations.tla is model of generations as described below.
+
+All specs have top comment explaining them and *.cfg file with the model.
 
 ## Basics:
 
@@ -664,59 +682,63 @@ considers whether is should change gen. First, clique is calculated.
 Clique must be calculated in unequivocal manner so that in sausages like A-B-C
 majority comes to the same stable clique. Node wants to change the
 generation whenever it is present in the clique and either
- 1) node is not member of genstate->current_gen (but clique includes it)
- 2) node is member of genstate->current_gen, but clique misses some nodes which
-   present in current_gen.
- 3) node is member of genstate->current_gen and in clique, but
-   its genstate->last_vote.num is larger than genstate->current_gen
-
-Point 1) means we have restored, here we need to decrease the lag and then
-propose gen with us. Specifically, it should be clique *without nodes which were
-not present in current_gen (apart from me, of course)*. Because we never want to
-propose adding non-me members even if they are in clique as they might be
-arbitrary lagging; let them decide on their own when to join.
-
-Point 2) means we should exclude someone to proceed. Again, we ought to propose
-gen with current clique minus nodes who are not present in current_gen to avoid
-adding nodes whose state we don't know.
-
-Point 3) is related to promises of not joining gens < n after voting for n.
-WIthout it, we might hang without good gen forever. e.g. with nodes ABC:
- - C is online in gen 5 BC
- - Gen 6 AB appears, B in it.
- - Another switch, now B proposes to vote for gen 8 BC
- - C agrees to 8 BC
- - B gets C's vote and declares 8 BC as chosen.
- - A proposes to vote for gen 10 AB
- - C agrees to 10 AB, thus promising never enter gens < 10
- - A dies
- - Now we have C living in 5 BC and B living in 8 BC, but C can't join 8 due to
-   promise -- thus we should propose new gen, though current clique is BC and
-   both B and C live in BC.
-
+ 1) node can never be online in genstate->current_gen:
+   a) either it is just not a member of it
+   b) or being online there would violate the last_vote promise
+     (genstate->last_vote.num is larger than genstate->current_gen)
+   However, node must believe its lag is short before offering gen with it here.
+ 2) node is online at genstate->current_gen, but clique misses some nodes which
+   present in current_gen. i.e. we should exclude someone to proceed.
 
 How to recover initially, to decrease the lag without forcing nodes to wait for
-us? One idea is to collect with heartbeats also last_online_in of neightbours.
-And whenever current generation doesn't include us, before initiaing voting in
-1 we recover from any node which is online in this generation until lag is
-less than some configured bound (or just to last fsync as currently).
+us? The idea is to collect with heartbeats also last_online_in of neightbours.
+And node always before initiaing voting for adding itself would either make sure
+it most probably (unless many events pass during voting period) won't need
+recovery at all (its last_online_in is the same as clique's max) or it first
+recovers from node with max last_online_in until lag is less than some
+configured bound (or just to last fsync as currently). Obviously, the fresher
+last_online_in of other nodes we consider, the less change we would need long
+recovery while we think we don't.
 
-Whom to propose exactly? Generally, a clique, but here is a kind of issue: we
-shouldn't propose other nodes if they were not present in current gen even if
-they are in clique, because their lag might be arbitrary big. Thus, as a straw
-man, we could propose
- current_gen->members & clique + me (if not in current_gen), if these nodes form majority;
- if not, we could add other nodes from clique until majority is reached.
-This is not ideal because whenever we have live majority, gen with (n/2 + 1)
-members will be chosen regardless of lagging state (ok if stable situation, bad
-if less lagging node appears later), but with more efforts we can optimize
-this.
+Whom to propose exactly? On the first glance, a clique, but here is a kind of
+issue which especially subtle on >=5 nodes. We shouldn't propose other nodes if
+they were not present in current gen even if they are in clique, because their
+lag might be arbitrary big: let them decide on their own when to join. Thus we
+should propose something like current_gen.members & clique + me. However, with
+>=5 nodes such formula might always yield minority, even if majority is alive
+(if this majority consists of one node from latest gen and two laggers) unless
+we allow to elect gens with minority members. To sum up,
+ - Propose for voting current_gen.members & clique + me.
+ - Allow voting for minority gens. Otherwise, e.g. if we have 123 live from
+   12345 with 1 and 2 in deep recovery from 3, how we can separately mark 1 as
+   recovered while 2 is not yet? The answer is elect 13 as new gen.
+   Nobody ever gets ONLINE in such gens, it is just a marker that node is
+   recovered enough.
+ - Reply to vote request accepting just any clique conforming offer is sort of
+   not enough, as simple example shows; with previous example,
+   - 13 is elected, 2 in it
+   - Then 345 unite again and write 10gb of data, 1 again deeply lagging;
+   - Then 123 live again; 2 quickly recovers and proposes 123 while 1 shouldn't
+     be proposed because another gen without it emerged since then.
+   This particular example hardly might lead to electing deeply lagged node,
+   but... generally, to confirm the rule 'only node can enable itself; if older
+   gen where it is excluded appeared, only node must be able to add itself again',
+   we can add simple if 'the only new node relative to curr gen must be vote initiator'
+   to the vote accepting procedure.
 
-Of course, elections themselves don't happen instantly, and immediately after
-their beginning we still want to change current_gen, which shouldn't fire
-immediate election restart. We should restart them after either some nodes
-died/connected or proposed gen members have changed or probably after configurable
-timeout -- elections is just one roundtrip, after all.
+Of course, this still doesn't give us iron guarantees of little recovery lag,
+because during 'node learned lag is low and proposed to vote or it' ->
+'majority agreed' -> 'node broadcasts new gen to at least one old gen member'
+roundtrips theoretically arbitrary lag might appear, but I think this is fine
+(at least because obviously generally unavoidable).
+
+
+Elections themselves don't happen instantly, and immediately after their
+beginning we still want to change current_gen, which shouldn't fire immediate
+election restart. The simplest thing to do here is just have only one process
+who performs campaigns, and it quits campaign iff it got replies from all nodes
+whom it sent requests or there is suspicion of lost reply (DMQ reported
+failure).
 
 
 ## Alternatives
@@ -732,6 +754,25 @@ though. Yet another alternative is just recover from all gen members -- at least
 one of them would be right donor, however it seems even harder and more
 expensive.
 
-There is also a possibility that we might get away without generations at
-all. Probably each node still can determine whom it waits for on its own and we
-still would be fine, this needs to be checked.
+It seems it is possible might get away without generations (as centralized
+elections with logical clocks counter) at all, like
+MtmPrimitiveCurrentMasksFixed.tla. I was going to create a better
+non-primitive model of this, but... in this algorithm, whenever node n
+learned that node m has disabled it, n must abort its own prepares and forbid
+new ones until it recovers (pulling all origins) from m. The explanation is
+roughly the following: once m has disabled n, applying its WAL in non-recovery
+mode is generally unsafe until ParallelSafe where it is enabled again, as there
+might lie xacts which were committed without being first prepared at n.
+Similarly, non-aborting own xacts before recovery is also unsafe, because once
+recovery starts n gets enabled and thus such xacts might be acknowledged
+(and committed), though they lie on n before others which it would get during
+recovery. This leads to inadequately many recovery sessions, and I've failed
+to invent ways to relax this which would be easier than centralized enabled nodes
+switching. There are some more things I like about generations:
+ - They allow not to vote in paxos for xacts for which we don't have prepare.
+   With >= 5 nodes this might lead to recovery deadlock, but in such deadlock one
+   xact will always be aborted, and generations allow easily to say which one: if
+   online node in some gen doesn't have prepare of older gen, this prepare will
+   never be committed.
+ - I suspect centralized enabled nodes might facilitate easier fair node
+   addition/removal procedure, but this needs more thought.
