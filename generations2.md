@@ -705,7 +705,7 @@ issue which especially subtle on >=5 nodes. We shouldn't propose other nodes if
 they were not present in current gen even if they are in clique, because their
 lag might be arbitrary big: let them decide on their own when to join. Thus we
 should propose something like current_gen.members & clique + me. However, with
->=5 nodes such formula might always yield minority, even if majority is alive
+\>=5 nodes such formula might always yield minority, even if majority is alive
 (if this majority consists of one node from latest gen and two laggers) unless
 we allow to elect gens with minority members. To sum up,
  - Propose for voting current_gen.members & clique + me.
