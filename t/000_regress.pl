@@ -1,13 +1,13 @@
 # run sql/multimaster.sql tests
 use Cluster;
-use Test::More tests => 2;
+use Test::More tests => 1;
 
 # determenistic ports for expected files
 $PostgresNode::last_port_assigned = 55431;
 
 my $cluster = new Cluster(3);
 $cluster->init(q{
-	multimaster.volkswagen_mode = off
+	multimaster.volkswagen_mode = on
 	# allow to spoof pg_prepared_xacts view
 	allow_system_table_mods = on
 });
@@ -15,19 +15,6 @@ $cluster->start();
 $cluster->create_mm('regression');
 
 my $port = $cluster->{nodes}->[0]->port;
-
-###############################################################################
-# multimaster regression tests
-###############################################################################
-
-my $ret = TestLib::system_log($ENV{'PG_REGRESS'},
-    '--host=127.0.0.1', "--port=$port",
-    '--use-existing', '--bindir=', 'multimaster');
-if ($ret != 0)
-{
-    print "### Got regression! \n", TestLib::slurp_file('regression.diffs');
-}
-is($ret, 0, "multimaster regress");
 
 ###############################################################################
 # postgres regression tests
@@ -40,9 +27,6 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	ALTER DATABASE "regression" SET lc_numeric TO 'C';
 	ALTER DATABASE "regression" SET lc_time TO 'C';
 	ALTER DATABASE "regression" SET timezone_abbreviations TO 'Default';
-	DROP SCHEMA public CASCADE; -- clean database after previous test
-	CREATE SCHEMA public;
-	GRANT ALL ON SCHEMA public TO public;
 });
 
 # do not show transaction from concurrent backends in pg_prepared_xacts
@@ -59,7 +43,6 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
 	ALTER SYSTEM SET allow_system_table_mods = 'off';
-	ALTER SYSTEM SET multimaster.volkswagen_mode = 'on';
 });
 foreach my $node (@{$cluster->{nodes}}){
 	$node->restart;
@@ -90,6 +73,7 @@ $res_diff =~ s/(\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
 $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 #SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
+mkdir('results');
 unlink('results/regression.diffs');
 TestLib::append_to_file('results/regression.diffs', $res_diff);
 
