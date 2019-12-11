@@ -234,8 +234,8 @@ temp_schema_reset(void)
 	MtmTx.contains_ddl = true;
 	MtmProcessDDLCommand(
 						 psprintf("select mtm.set_temp_schema('%s'); "
-								  "DROP SCHEMA IF EXISTS %s CASCADE; "
-								  "DROP SCHEMA IF EXISTS %s_toast CASCADE",
+								  "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
+								  "DROP SCHEMA IF EXISTS %s CASCADE;",
 								  MtmTempSchema, MtmTempSchema, MtmTempSchema),
 						 true
 		);
