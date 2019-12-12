@@ -352,6 +352,7 @@ MtmTwoPhaseCommit()
 		for (i = 0; i < n_messages; i++)
 		{
 			Assert(messages[i]->status == GTXPrepared || messages[i]->status == GTXAborted);
+			/* ars: this might be false if others start concurrently resolving */
 			Assert(term_cmp(messages[i]->term, (GlobalTxTerm) {1, 0}) == 0);
 
 			if (messages[i]->status == GTXAborted)
@@ -382,6 +383,7 @@ MtmTwoPhaseCommit()
 		gtx->state.accepted = (GlobalTxTerm) {1, 0};
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		/* ars: must check ballots in answers */
 
 		/* we have majority precommits, commit */
 		StartTransactionCommand();

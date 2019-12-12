@@ -15,6 +15,7 @@
 
 typedef struct
 {
+	/* ars: make int64 or at least fix size */
 	int		ballot;
 	int		node_id;
 } GlobalTxTerm;
@@ -45,7 +46,7 @@ typedef struct
 typedef struct 
 {
 	char		gid[GIDSIZE];
-	int			acquired_by;
+	BackendId	acquired_by;
 	GTxState	state;
 	bool		orphaned;	/* Indication for resolver that current tx needs
 							 * to be picked up. Comes from a failed backend or
@@ -70,7 +71,7 @@ void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
 GlobalTx *GlobalTxAcquire(const char *gid, bool create);
 void GlobalTxRelease(GlobalTx *gtx);
-void GlobalTxAtAbort(int code, Datum arg);
+void GlobalTxAtExit(int code, Datum arg);
 void GlobalTxLoadAll(void);
 char *serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop,
 						  GlobalTxTerm term_acc);

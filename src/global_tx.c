@@ -104,7 +104,7 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 }
 
 void
-GlobalTxAtAbort(int code, Datum arg)
+GlobalTxAtExit(int code, Datum arg)
 {
 	if (my_locked_gtx)
 	{
@@ -178,7 +178,7 @@ GlobalTxAcquire(const char *gid, bool create)
 
 	if (!gtx_exit_registered)
 	{
-		before_shmem_exit(GlobalTxAtAbort, 0);
+		before_shmem_exit(GlobalTxAtExit, 0);
 		gtx_exit_registered = true;
 	}
 

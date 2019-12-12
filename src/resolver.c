@@ -253,6 +253,7 @@ handle_responses(MtmConfig *mtm_cfg)
 	StringInfoData msg;
 	bool		wait;
 
+	/* ars: if we got failure here, not WOULDBLOCK, better continue spinning */
 	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		MtmMessage *raw_msg;
@@ -276,6 +277,7 @@ quorum(MtmConfig *mtm_cfg, GTxState * all_states)
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
+		/* ars: move this out of loop? */
 		if (my_state.status == GTXInvalid)
 			continue;
 
@@ -356,6 +358,10 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 					}
 					else
 					{
+						/*
+						 * If choice is not forced, resolver always aborts because
+						 * only coordinator knows when xact can be committed.
+						 */
 						Assert(decision != GTXPreCommitted);
 						decision = GTXPreAborted;
 					}
@@ -529,6 +535,7 @@ ResolverMain(Datum main_arg)
 					   PG_WAIT_TIMEOUT);
 
 		/* re-try to send requests if there are some unresolved transactions */
+		/* ars: better to set it whenever backend wakes us */
 		if (rc & WL_TIMEOUT)
 			send_requests = true;
 
