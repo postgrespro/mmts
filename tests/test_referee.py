@@ -345,6 +345,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         print('#### check that decision is cleaned')
         print('###################################')
+        self.awaitOnline("dbname=regression user=postgres host=127.0.0.1 port=15435")
         con = psycopg2.connect("dbname=regression user=postgres host=127.0.0.1 port=15435")
         con.autocommit = True
         cur = con.cursor()
