@@ -1039,9 +1039,16 @@ process_remote_commit(StringInfo in,
 				/* PREPARE itself */
 				gtx = GlobalTxAcquire(gid, true);
 				res = PrepareTransactionBlock(gid);
+				/* ars: should move it two lines down because that's where
+				 * we actually prepare */
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 				AllowTempIn2PC = true;
 				CommitTransactionCommand();
+				/*
+				 * ars: we must merge here in_table state with logged one.
+				 * Otherwise, we forget about in and might vote for another
+				 * outcome.
+				 */
 				gtx->state.status = GTXPrepared;
 				GlobalTxRelease(gtx);
 

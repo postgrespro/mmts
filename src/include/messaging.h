@@ -67,9 +67,9 @@ typedef enum
 {
 	MTReq_Abort,
 	MTReq_Commit,
-	MTReq_Precommit,
-	MTReq_Preabort,
-	MTReq_Status
+	MTReq_Precommit,  /* 2a with value commit */
+	MTReq_Preabort,   /* 2a with value abort */
+	MTReq_Status	  /* 1a */
 } MtmTxRequestValue;
 
 typedef struct

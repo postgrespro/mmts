@@ -247,6 +247,7 @@ GlobalTxRelease(GlobalTx *gtx)
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
 
+	/* ars: should also remove it if GTXInvalid (e.g. error during PREPARE) */
 	if (gtx->state.status == GTXCommitted || gtx->state.status == GTXAborted)
 		hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
 

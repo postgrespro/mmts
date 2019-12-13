@@ -151,6 +151,10 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
+		/* 
+		 * ars: config could change after last MtmReloadConfig, this might be
+		 * false if node was removed.
+		 */
 		Assert(dest_id >= 0);
 
 		if (BIT_CHECK(cmask, node_id - 1))
@@ -197,6 +201,10 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		scatter(mtm_cfg, connected, "txreq", MtmMesagePack((MtmMessage *) &msg));
 
 		/* .. and get all responses */
+		/* 
+		 * ars: we might collect here responses from previous resolving 
+		 * sessions, which would fill acks with non MtmLastTermResponse messages.
+		 */
 		gather(connected, (MtmMessage **) acks, &n_acks, true);
 
 		for (i = 0; i < n_acks; i++)
@@ -229,6 +237,9 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				gtx->gid
 			};
 
+			/*
+			 * ars: must check proposal num again before changing state
+			 */
 			SetPreparedTransactionState(gtx->gid,
 				serialize_gtx_state(
 					gtx->state.status,
@@ -236,6 +247,12 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 					gtx->state.accepted),
 				false);
 			gtx->state.proposal = new_term;
+
+			/* 
+			 * ars: we should set GTRS_AwaitStatus here, otherwise if one
+			 * attempt to to resolve failed in GTRS_AwaitAcks, we would
+			 * hang forever in it.
+			 */
 
 			connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
@@ -258,6 +275,9 @@ handle_responses(MtmConfig *mtm_cfg)
 	{
 		MtmMessage *raw_msg;
 
+		/* ars: better just create mem ctx and reset it instead of commit.
+		 * It is more clear and cheaper.
+		 */
 		StartTransactionCommand();
 
 		raw_msg = MtmMesageUnpack(&msg);
@@ -277,7 +297,7 @@ quorum(MtmConfig *mtm_cfg, GTxState * all_states)
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
-		/* ars: move this out of loop? */
+		/* ars: a typo? */
 		if (my_state.status == GTXInvalid)
 			continue;
 
@@ -392,6 +412,11 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 	{
 		MtmTxResponse *msg;
 
+		/* 
+		 * ars: we might get T_MtmTxStatusResponse because we switched to 
+		 * GTRS_AwaitAcks immediately after collecting majority, but there 
+		 * can be more nodes willing to send 1b to us.
+		 */
 		Assert(raw_msg->tag == T_MtmTxResponse);
 		msg = (MtmTxResponse *) raw_msg;
 		Assert(msg->gid[0] != '\0');

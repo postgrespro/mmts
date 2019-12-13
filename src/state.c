@@ -1207,6 +1207,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 		LWLockRelease(Mtm->lock);
 		Assert(dest_id >= 0);
 
+		/* GlobalTxSaveInTable needs xact */
 		StartTransactionCommand();
 
 		if (raw_msg->tag == T_MtmTxRequest)
@@ -1296,7 +1297,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 				gtx = GlobalTxAcquire(msg->gid, false);
 				if (!gtx)
-					return;
+					return; /* ars: why not continue? */
 
 				if (msg->type == MTReq_Abort || msg->type == MTReq_Commit)
 				{
@@ -1321,6 +1322,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 						sstate = serialize_gtx_state(new_status,
 													 msg->term,
 													 msg->term);
+						/* ars: how about gtx->in_table? */
 						done = SetPreparedTransactionState(gtx->gid, sstate,
 														   false);
 						Assert(done);
@@ -1362,8 +1364,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 			dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
 		}
 		else
+		{ /* ars: assert has evaporating skills, should wrap it in {} */
 			Assert(false);
-
+		}
 
 		CommitTransactionCommand();
 	}

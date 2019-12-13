@@ -19,6 +19,8 @@ typedef struct
 	int		ballot;
 	int		node_id;
 } GlobalTxTerm;
+/* ars: I would add macro for 'never accepted' */
+#define InvalidGTxTerm ((GlobalTxTerm) {0, 0})
 
 typedef enum
 {

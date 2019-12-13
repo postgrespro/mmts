@@ -254,7 +254,7 @@ MtmTwoPhaseCommit()
 	MtmTxResponse *messages[MTM_MAX_NODES];
 	int			n_messages;
 	int			i;
-	GlobalTx *volatile gtx;
+	GlobalTx *volatile gtx = NULL;
 
 	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
@@ -406,9 +406,12 @@ MtmTwoPhaseCommit()
 			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 		}
 
-		gtx->orphaned = true;
-		ResolverWake();
-		GlobalTxRelease(gtx);
+		if (gtx != NULL) /* ars: have added the check */
+		{
+			gtx->orphaned = true;
+			ResolverWake();
+			GlobalTxRelease(gtx);
+		}
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
