@@ -43,8 +43,6 @@ static bool init_done;
 static bool config_valid;
 static bool inside_mtm_begin;
 
-/*  XXX: change dmq api and avoid that */
-static int	sender_to_node[MTM_MAX_NODES];
 static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
@@ -65,10 +63,7 @@ proc_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	int			sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
-												node_id - 1);
-
-	sender_to_node[sender_id] = node_id;
+	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
 }
 
 static void
@@ -454,24 +449,23 @@ gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_d
 	while (participants != 0)
 	{
 		bool		ret;
-		DmqSenderId sender_id;
+		int8 sender_mask_pos;
 		StringInfoData msg;
 		int			rc;
 		bool		wait;
 
-		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
+		ret = dmq_pop_nb(&sender_mask_pos, &msg, participants, &wait);
 		if (ret)
 		{
 			messages[*msg_count] = MtmMessageUnpack(&msg);
 			// Assert(raw_msg->tag == T_MtmTxResponse);
-			// Assert(messages[*msg_count]->node_id == sender_to_node[sender_id]);
+			// Assert(messages[*msg_count]->node_id == sender_mask_pos + 1);
 
 			(*msg_count)++;
-			BIT_CLEAR(participants, sender_to_node[sender_id] - 1);
+			BIT_CLEAR(participants, sender_mask_pos);
 
 			mtm_log(MtmTxTrace,
-					"gather: got message from node%d",
-					sender_to_node[sender_id]);
+					"gather: got message from node%d", sender_mask_pos + 1);
 		}
 		else
 		{

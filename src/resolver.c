@@ -31,8 +31,6 @@
 #include "global_tx.h"
 #include "messaging.h"
 
-/* sender_id to node_id mapping */
-static int	sender_to_node[MTM_MAX_NODES];
 static bool config_valid;
 static MtmConfig *mtm_cfg = NULL;
 
@@ -150,7 +148,7 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
-		/* 
+		/*
 		 * XXX ars: config could change after last MtmReloadConfig, this might be
 		 * false if node was removed.
 		 */
@@ -202,8 +200,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &msg));
 
 		/* .. and get all responses */
-		/* 
-		 * ars: we might collect here responses from previous resolving 
+		/*
+		 * ars: we might collect here responses from previous resolving
 		 * sessions, which would fill acks with non MtmLastTermResponse messages.
 		 */
 		gather(connected, (MtmMessage **) acks, &n_acks, true);
@@ -271,12 +269,12 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 static void
 handle_responses(MtmConfig *mtm_cfg)
 {
-	DmqSenderId sender_id;
+	int8 sender_mask_pos;
 	StringInfoData msg;
 	bool		wait;
 
 	/* ars: if we got failure here, not WOULDBLOCK, better continue spinning */
-	while (dmq_pop_nb(&sender_id, &msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_mask_pos, &msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		MtmMessage *raw_msg;
 
@@ -424,9 +422,9 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 	{
 		MtmTxResponse *msg;
 
-		/* 
-		 * ars: we might get T_MtmTxStatusResponse because we switched to 
-		 * GTRS_AwaitAcks immediately after collecting majority, but there 
+		/*
+		 * ars: we might get T_MtmTxStatusResponse because we switched to
+		 * GTRS_AwaitAcks immediately after collecting majority, but there
 		 * can be more nodes willing to send 1b to us.
 		 */
 		Assert(raw_msg->tag == T_MtmTxResponse);
@@ -479,10 +477,7 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	int			sender_id = dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id),
-												node_id - 1);
-
-	sender_to_node[sender_id] = node_id;
+	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
 }
 
 static void

@@ -88,7 +88,6 @@ typedef struct
 typedef struct
 {
 	char		stream_name[DMQ_NAME_MAXLEN];
-	int			mask_pos;
 	int			procno;
 } DmqStreamSubscription;
 
@@ -128,7 +127,7 @@ struct
 		dsm_segment *dsm_seg;
 		shm_mq_handle *mqh;
 		char		name[DMQ_NAME_MAXLEN];
-		int			mask_pos;
+		int8		mask_pos;
 	}			inhandles[DMQ_MAX_RECEIVERS];
 }			dmq_local;
 
@@ -1369,34 +1368,46 @@ dmq_reattach_shm_mq(int handle_id)
 	return true;
 }
 
-int
-dmq_attach_receiver(char *sender_name, int mask_pos)
+/*
+ * Declare that our process wishes to receive messages from 'sender_name'
+ * counterparty (i.e. receiver speaking with it).
+ * mask_pos also identifies the sender; dmq_pop_nb accepts bitmask saying
+ * from which receivers caller wants to get message and filters inhandles
+ * through it.
+ */
+void dmq_attach_receiver(char *sender_name, int8 mask_pos)
 {
 	int			i;
-	int			handle_id;
+	int			handle_id = -1;
 
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
 		if (dmq_local.inhandles[i].name[0] == '\0')
 		{
 			handle_id = i;
+			/* assert that we don't add two receivers with the same mask_pos */
+#ifndef USE_ASSERT_CHECKING
 			break;
+#endif
+		}
+		else
+		{
+			Assert(mask_pos != dmq_local.inhandles[i].mask_pos);
 		}
 	}
 
-	if (i == DMQ_MAX_RECEIVERS)
+	if (handle_id == -1)
 		mtm_log(ERROR, "[DMQ] dmq_attach_receiver: max receivers already attached");
 
-	if (handle_id == dmq_local.n_inhandles)
-		dmq_local.n_inhandles++;
+	/* We could remove n_inhandles altogether as well... */
+	if (dmq_local.n_inhandles < handle_id + 1)
+		dmq_local.n_inhandles = handle_id + 1;
 
 	dmq_local.inhandles[handle_id].mqh = NULL;
 	dmq_local.inhandles[handle_id].mask_pos = mask_pos;
 	strncpy(dmq_local.inhandles[handle_id].name, sender_name, DMQ_NAME_MAXLEN);
 
 	dmq_reattach_shm_mq(handle_id);
-
-	return handle_id;
 }
 
 void
@@ -1452,6 +1463,16 @@ dmq_stream_subscribe(char *stream_name)
 	sub->procno = MyProc->pgprocno;
 	LWLockRelease(dmq_state->lock);
 
+	/*
+	 * Try to ensure we have live connections to receivers, if not yet. The
+	 * typical usage is
+	 * - subscribe to reply stream
+	 * - send request
+	 * - get reply (dmq_pop_nb)
+	 * So this is the last convenient spot where we can try to reconnect
+	 * without risk of missing connection failure after request was sent (thus
+	 * possibly exposing client to infinite waiting for answer).
+	 */
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
 		Size		len;
@@ -1483,7 +1504,7 @@ dmq_stream_unsubscribe(char *stream_name)
 }
 
 bool
-dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
+dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask)
 {
 	shm_mq_result res;
 
@@ -1500,7 +1521,8 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 			Size		len;
 			void	   *data;
 
-			if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
+			if (dmq_local.inhandles[i].name[0] == '\0' ||
+				!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 				continue;
 
 			if (dmq_local.inhandles[i].mqh)
@@ -1514,7 +1536,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 				msg->len = len;
 				msg->maxlen = -1;
 				msg->cursor = 0;
-				*sender_id = i;
+				*sender_mask_pos = dmq_local.inhandles[i].mask_pos;
 
 				mtm_log(DmqTraceIncoming,
 						"[DMQ] dmq_pop: got message %s from %s",
@@ -1533,7 +1555,7 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 				}
 				else
 				{
-					*sender_id = i;
+					*sender_mask_pos = dmq_local.inhandles[i].mask_pos;
 					return false;
 				}
 			}
@@ -1555,24 +1577,32 @@ dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask)
 }
 
 /*
+ * mask defines from which senders to attempt to get data, as registered with
+ * mask_pos in dmq_attach_receiver.
+ * sender_mask_pos returns the sender (again mask_pos) which returned message
+ * or failed. -1 means all shm_mqs are SHM_MQ_WOULD_BLOCK.
+ *
  * Returns true if successfully filled msg, false otherwise; in the latter
- * case, *wait is true if it makes sense to retry.
+ * case, *wait is true if failed shmem_mq was successfully reestablished,
+ * i.e. caller might not haste to exclude the failed sender (if any).
+ * XXX I don't believe this flag has any useful applications.
  */
 bool
-dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
+dmq_pop_nb(int8 *sender_mask_pos, StringInfo msg, uint64 mask, bool *wait)
 {
 	shm_mq_result res;
 	int			i;
 
 	*wait = true;
-	*sender_id = -1;
+	*sender_mask_pos = -1;
 
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
 		Size		len;
 		void	   *data;
 
-		if (!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
+		if (dmq_local.inhandles[i].name[0] == '\0' ||
+			!BIT_CHECK(mask, dmq_local.inhandles[i].mask_pos))
 			continue;
 
 		if (dmq_local.inhandles[i].mqh)
@@ -1587,7 +1617,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 			msg->maxlen = -1;
 			msg->cursor = 0;
 
-			*sender_id = i;
+			*sender_mask_pos = dmq_local.inhandles[i].mask_pos;
 			*wait = false;
 
 			mtm_log(DmqTraceIncoming,
@@ -1597,7 +1627,7 @@ dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait)
 		}
 		else if (res == SHM_MQ_DETACHED)
 		{
-			*sender_id = i;
+			*sender_mask_pos = dmq_local.inhandles[i].mask_pos;
 
 			if (dmq_reattach_shm_mq(i))
 				*wait = false;

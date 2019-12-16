@@ -5,7 +5,6 @@
 #include "lib/stringinfo.h"
 
 typedef int8 DmqDestinationId;
-typedef int8 DmqSenderId;
 
 #define DMQ_NAME_MAXLEN 32
 
@@ -15,7 +14,7 @@ extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,
 					char *receiver_name, int ping_period);
 extern void dmq_destination_drop(char *receiver_name);
 
-extern int	dmq_attach_receiver(char *sender_name, int mask_pos);
+extern void dmq_attach_receiver(char *sender_name, int8 mask_pos);
 extern void dmq_detach_receiver(char *sender_name);
 
 extern void dmq_terminate_receiver(char *name);
@@ -23,8 +22,8 @@ extern void dmq_terminate_receiver(char *name);
 extern void dmq_stream_subscribe(char *stream_name);
 extern void dmq_stream_unsubscribe(char *stream_name);
 
-extern bool dmq_pop(DmqSenderId *sender_id, StringInfo msg, uint64 mask);
-extern bool dmq_pop_nb(DmqSenderId *sender_id, StringInfo msg, uint64 mask, bool *wait);
+extern bool dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask);
+extern bool dmq_pop_nb(int8 *sender_mask_pos, StringInfo msg, uint64 mask, bool *wait);
 
 extern void dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg);
 extern void dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *buffer, size_t len);

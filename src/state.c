@@ -1159,8 +1159,6 @@ mtm_status(PG_FUNCTION_ARGS)
 
 void		MtmMonitor(Datum arg);
 
-/*  XXX: change dmq api and evict that */
-static int	sender_to_node[MTM_MAX_NODES];
 static bool config_valid = false;
 
 bool		MtmIsMonitorWorker;
@@ -1191,17 +1189,17 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 static void
 check_status_requests(MtmConfig *mtm_cfg)
 {
-	DmqSenderId sender_id;
+	int8 sender_mask_pos;
 	StringInfoData packed_msg;
 	bool		wait;
 
-	while (dmq_pop_nb(&sender_id, &packed_msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedNodeMask(), &wait))
 	{
 		MtmMessage *raw_msg = MtmMessageUnpack(&packed_msg);
 		int			sender_node_id;
 		int			dest_id;
 
-		sender_node_id = sender_to_node[sender_id];
+		sender_node_id = sender_mask_pos + 1;
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
@@ -1427,7 +1425,6 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
 	LogicalDecodingContext *ctx;
 	DmqDestinationId dest;
-	int			sender_id;
 	char	   *dmq_connstr,
 			   *slot,
 			   *recovery_slot,
@@ -1481,8 +1478,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	LWLockRelease(Mtm->lock);
 
 	/* Attach receiver so we can collect tx requests */
-	sender_id = dmq_attach_receiver(dmq_node_name, node_id - 1);
-	sender_to_node[sender_id] = node_id;
+	dmq_attach_receiver(dmq_node_name, node_id - 1);
 
 	/*
 	 * Finally start receiver. bgw handle should be allocated in TopMcxt.
