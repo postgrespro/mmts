@@ -5,6 +5,7 @@
 #include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
 #include "storage/dsm.h"
+#include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/pg_sema.h"
@@ -20,10 +21,11 @@
 
 #include "bgwpool.h"
 #include "multimaster.h"
+#include "state.h"
 #include "logger.h"
 
 
-#define MSGLEN(sz)	(INTALIGN(sz) + INTALIGN(sizeof(MtmReceiverContext)) + sizeof(int))
+#define MSGLEN(sz)	(INTALIGN(sz) + INTALIGN(sizeof(MtmReceiverWorkerContext)) + sizeof(int))
 
 bool		MtmIsPoolWorker;
 bool		MtmIsLogicalReceiver;
@@ -39,10 +41,13 @@ void		BgwPoolDynamicWorkerMainLoop(Datum arg);
  * Call at the start the multimaster WAL receiver.
  */
 void
-BgwPoolStart(BgwPool *poolDesc, char *poolName, Oid db_id, Oid user_id)
+BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id)
 {
+	BgwPool *poolDesc = &Mtm->pools[sender_node_id - 1];
 	dsm_segment *seg;
 	size_t		size = INTALIGN(MtmTransSpillThreshold * 1024L * 2);
+
+	poolDesc->sender_node_id = sender_node_id;
 
 	/* ToDo: remember a segment creation failure (and NULL) case. */
 	seg = dsm_create(size, 0);
@@ -108,24 +113,35 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 {
 	int			size;
 	void	   *work;
-	int			payload = INTALIGN(sizeof(MtmReceiverContext));
-	MtmReceiverContext ctx;
+	int			payload = INTALIGN(sizeof(MtmReceiverWorkerContext));
+	MtmReceiverWorkerContext rwctx;
 	static PortalData fakePortal;
 	dsm_segment *seg;
 
+	MemSet(&rwctx, '\0', sizeof(MtmReceiverWorkerContext));
+	rwctx.sender_node_id = poolDesc->sender_node_id;
+	rwctx.mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
+
 	/* Connect to the queue */
 	Assert(!dsm_find_mapping(poolDesc->dsmhandler));
+	/*
+	 * Receiver is waiting for workers *after* detaching from dsm, so this
+	 * commonly happens on recovery start: receiver in normal mode gets
+	 * record, spins up worker but immediately exits once it learns we are in
+	 * recovery.
+	 */
 	seg = dsm_attach(poolDesc->dsmhandler);
+	if (seg == NULL)
+		elog(FATAL, "dsm_attach failed, looks like receiver is exiting");
 	dsm_pin_mapping(seg);
 	queue = dsm_segment_address(seg);
 
-	mtm_log(BgwPoolEvent, "[%d] Start background worker.", MyProcPid);
-
 	MtmIsPoolWorker = true;
-
 	/* XXX: get rid of that */
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
+
+	mtm_log(BgwPoolEvent, "[%d] Start background worker.", MyProcPid);
 
 	pqsignal(SIGINT, die);
 	pqsignal(SIGQUIT, die);
@@ -189,13 +205,13 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 
 		if (poolDesc->head + MSGLEN(size) > poolDesc->size)
 		{
-			ctx = *(MtmReceiverContext *) &queue;
+			rwctx = *(MtmReceiverWorkerContext *) &queue;
 			memcpy(work, &queue[payload], size);
 			poolDesc->head = payload + INTALIGN(size);
 		}
 		else
 		{
-			memcpy(&ctx, &queue[poolDesc->head + sizeof(int)], payload);
+			memcpy(&rwctx, &queue[poolDesc->head + sizeof(int)], payload);
 			memcpy(work, &queue[poolDesc->head + sizeof(int) + payload], size);
 			poolDesc->head += MSGLEN(size);
 		}
@@ -222,7 +238,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 
 		LWLockRelease(&poolDesc->lock);
 
-		MtmExecutor(work, size, &ctx);
+		MtmExecutor(work, size, &rwctx);
 		pfree(work);
 
 		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
@@ -278,14 +294,21 @@ BgwStartExtraWorker(BgwPool *poolDesc)
 }
 
 /*
- * Blocking push of message (work + ctx + work size field) into the MTM Executor
- * queue. If message larger than size of queue - execute it immediately.
+ * Blocking push of message (work size field + ctx + work) into the MTM
+ * Executor queue. A circular buffer is used; receiver pushes the whole
+ * message in one go and worker reads is out similarly. We never wrap messages
+ * around the queue end, so max work size if half of the queue len -- larger
+ * jobs must go via file.
+ *
  * After return from routine work and ctx buffers can be reused safely.
+ *
+ * XXX there is no need to pass MtmReceiverWorkerContext, it is historic
+ * legacy. Left just in case we ever need this again...
  */
 void
-BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverContext *ctx)
+BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverWorkerContext *ctx)
 {
-	int			payload = INTALIGN(sizeof(MtmReceiverContext));
+	int			payload = INTALIGN(sizeof(MtmReceiverWorkerContext));
 
 	Assert(poolDesc != NULL);
 	Assert(queue != NULL);

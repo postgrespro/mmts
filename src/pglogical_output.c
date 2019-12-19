@@ -292,6 +292,7 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		}
 		else if ((data->client_protocol_format != NULL
 				  && strcmp(data->client_protocol_format, "native") == 0)
+				 /* yeah, that's what we really use */
 				 || data->client_protocol_format == NULL)
 		{
 			data->api = pglogical_init_api(PGLogicalProtoNative);
@@ -472,28 +473,6 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
-
-	if (hooks_data->recovery_count != MtmGetRecoveryCount())
-	{
-		mtm_log(LOG, "exiting due to disabled status");
-		if (whereToSendOutput == DestRemote)
-			whereToSendOutput = DestNone;
-
-		proc_exit(0);
-		abort();				/* keep the compiler quiet */
-	}
-
-
-	if (hooks_data->counterpart_disable_count != MtmGetNodeDisableCount(MtmReplicationNodeId))
-	{
-		mtm_log(LOG, "exiting due to disabled counterpart");
-		if (whereToSendOutput == DestRemote)
-			whereToSendOutput = DestNone;
-
-		proc_exit(0);
-		abort();				/* keep the compiler quiet */
-	}
-
 	/*
 	 * MtmOutputPluginPrepareWrite send some bytes to downstream, so we must
 	 * avoid calling it in normal (non-recovery) situation.
@@ -503,13 +482,6 @@ pg_decode_caughtup(LogicalDecodingContext *ctx)
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_caughtup(ctx->out, data, ctx->reader->EndRecPtr);
 		MtmOutputPluginWrite(ctx, true, true);
-
-		/*
-		 * This hook can be called mupltiple times when there is concurrent
-		 * load, so exit right after we wrote recovery message first time
-		 * during current recovery session.
-		 */
-		proc_exit(0);
 	}
 }
 
@@ -629,8 +601,6 @@ pg_decode_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 /*
  * Decide if the whole transaction with specific origin should be filtered out.
  */
-extern int	MtmReplicationNodeId;
-
 static bool
 pg_decode_origin_filter(LogicalDecodingContext *ctx,
 						RepOriginId origin_id)

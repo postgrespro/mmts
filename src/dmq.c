@@ -1516,6 +1516,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 
 	initStringInfo(&buf);
 	pq_sendbyte(&buf, dest_id);
+	Assert(strlen(stream_name) + 1 <= DMQ_NAME_MAXLEN);
 	pq_send_ascii_string(&buf, stream_name);
 	pq_sendbytes(&buf, payload, len);
 

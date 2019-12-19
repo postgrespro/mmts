@@ -801,6 +801,23 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			{
 				TransactionStmt *stmt = (TransactionStmt *) parsetree;
 
+				/*
+				 * hack: if we are going to commit/prepare but our transaction
+				 * block is already aborted, we'd better just fast pass this
+				 * over to the core code before checking whether mtm state
+				 * allows to commit (and generally starting complicated commit
+				 * procedure). We expect PrepareTransactionBlock not to fail
+				 * after this. Hackish, as it repurposes
+				 * TransactionBlockStatusCode.
+				 */
+				if ((stmt->kind == TRANS_STMT_COMMIT ||
+					 stmt->kind == TRANS_STMT_PREPARE) &&
+					TransactionBlockStatusCode() == 'E')
+				{
+					skipCommand = true;
+					break;
+				}
+
 				switch (stmt->kind)
 				{
 					case TRANS_STMT_COMMIT:

@@ -59,7 +59,7 @@ CREATE TYPE mtm.node_info AS (
     "sender_pid" int,
     "receiver_pid" int,
     "n_workers" int,
-    "receiver_status" text
+    "receiver_mode" text
 );
 
 CREATE TYPE mtm.node AS (
@@ -71,7 +71,7 @@ CREATE TYPE mtm.node AS (
     "sender_pid" int,
     "receiver_pid" int,
     "n_workers" int,
-    "receiver_status" text
+    "receiver_mode" text
 );
 
 ---
@@ -83,12 +83,19 @@ RETURNS VOID
 AS 'MODULE_PATHNAME','mtm_init_cluster'
 LANGUAGE C;
 
+CREATE OR REPLACE FUNCTION mtm.state_create(n_nodes int)
+RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_state_create'
+LANGUAGE C;
+
 CREATE TYPE mtm.cluster_status AS (
     "my_node_id" int,
     "status" text,
-    "n_nodes" int,
-    "n_connected" int,
-    "n_enabled" int
+    "connected" int[],
+    "gen_num" int8, -- xxx pg doesn't have unsigned int8
+    "gen_members" int[],
+    "gen_members_online" int[],
+    "gen_configured" int[]
 );
 
 CREATE FUNCTION mtm.status()

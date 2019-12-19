@@ -195,7 +195,10 @@ pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPositio
 static void
 pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRequest *copy)
 {
-	if (BIT_CHECK(copy->targetNodes, MtmReplicationNodeId - 1))
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
+
+	if (BIT_CHECK(copy->targetNodes, hooks_data->receiver_node_id - 1))
 	{
 		HeapScanDesc scandesc;
 		HeapTuple	tuple;
@@ -238,7 +241,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 				return;
 			}
 			mtm_log(ProtoTraceMessage, "Sent deadlock message to node %d",
-					MtmReplicationNodeId);
+					hooks_data->receiver_node_id);
 			break;
 
 		case 'D':
@@ -249,12 +252,12 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 			}
 			DDLInProgress = true;
 			mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
-					MtmReplicationNodeId, message);
+					hooks_data->receiver_node_id, message);
 			break;
 
 		case 'C':
 			mtm_log(ProtoTraceMessage, "Sent non-tx DDL message to node %d: %s",
-					MtmReplicationNodeId, message);
+					hooks_data->receiver_node_id, message);
 			break;
 
 		case 'E':
@@ -274,7 +277,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 		case 'N':
 			pglogical_seq_nextval(out, ctx, (MtmSeqPosition *) message);
 			mtm_log(ProtoTraceMessage, "Sent nextval message to node %d",
-					MtmReplicationNodeId);
+					hooks_data->receiver_node_id);
 			return;
 	}
 
@@ -297,7 +300,6 @@ pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
 	Assert(hooks_data->is_recovery);
 	/* sending CAUGHT-UP */
 	pq_sendbyte(out, 'Z');
-	MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_RECOVERY_CAUGHTUP, false);
 }
 
 /*
@@ -715,17 +717,10 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
-	hooks_data->session_id = 0;
-	hooks_data->recovery_done = false;
+	sscanf(MyReplicationSlot->data.name.data, MULTIMASTER_SLOT_PATTERN,
+		   &hooks_data->receiver_node_id);
 	hooks_data->is_recovery = false;
 	hooks_data->cfg = MtmLoadConfig();
-	hooks_data->recovery_count = MtmGetRecoveryCount();
-	hooks_data->counterpart_disable_count = MtmGetNodeDisableCount(MtmReplicationNodeId);
-
-	if (!BIT_CHECK(MtmGetConnectedNodeMask(), MtmReplicationNodeId - 1))
-	{
-		mtm_log(ERROR, "Walsender to node %d exits as dmq connection is not yet fully established", MtmReplicationNodeId);
-	}
 
 	foreach(param, args->in_params)
 	{
@@ -739,7 +734,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 				{
 					hooks_data->is_recovery = true;
 				}
-				else if (strcmp(strVal(elem->arg), "recovered") == 0)
+				else if (strcmp(strVal(elem->arg), "normal") == 0)
 				{
 					hooks_data->is_recovery = false;
 				}
@@ -753,28 +748,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 				mtm_log(ERROR, "Replication mode is not specified");
 			}
 		}
-		else if (strcmp("mtm_session_id", elem->defname) == 0)
-		{
-			if (elem->arg != NULL && strVal(elem->arg) != NULL)
-			{
-				int64		session_id = 0;
-
-				sscanf(strVal(elem->arg), INT64_FORMAT, &session_id);
-
-				if (session_id == 0)
-					mtm_log(ERROR, "Illegal mtm_session_id");
-
-				hooks_data->session_id = session_id;
-			}
-			else
-			{
-				mtm_log(ERROR, "mtm_session_id is not specified");
-			}
-		}
 	}
-
-	if (hooks_data->session_id == 0)
-		mtm_log(ERROR, "mtm_session_id is not specified");
 
 	/*
 	 * Set proper originId mappings.
@@ -785,112 +759,31 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 	 * thoughts.
 	 */
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
-	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = MyProcPid;
+	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = MyProcPid;
+	BIT_SET(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
 	LWLockRelease(Mtm->lock);
 
-	if (hooks_data->is_recovery)
-	{
-		mtm_log(ProtoTraceMode,
-				"Walsender starts in recovery mode to node %d",
-				MtmReplicationNodeId);
-
-		Assert(MyReplicationSlot != NULL);
-		MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY, false);
-	}
-	else
-	{
-		mtm_log(ProtoTraceMode,
-				"Walsender starting in recovered mode to node %d",
-				MtmReplicationNodeId);
-
-		/*
-		 * Indicate receiver that after this point in wal it is safe to send
-		 * transaction to the pool of workers. Before this point in wal (or in
-		 * other words before we processed
-		 * MTM_NEIGHBOR_WAL_SENDER_START_RECOVERY event and enabled this node
-		 * in our disabledNodeMask) our backends are not waiting for prepare
-		 * confirmations from this node, so receiver can get precommit before
-		 * it will finish prepare. This will leave receiver with lots of
-		 * prepared transactions that will never be commited as precommit and
-		 * commit already happend before prepare.
-		 *
-		 * To ensure that all transactions ended after this message had seen
-		 * right disabledNodeMask we took MtmCommitBarrier in exclusive mode
-		 * to await finish of all transactions with potentially old
-		 * disabledNodeMask.
-		 */
-		if (!hooks_data->is_recovery)
-		{
-			XLogRecPtr	msg_xptr;
-			char	   *session_id = psprintf(INT64_FORMAT, hooks_data->session_id);
-
-			SpinLockAcquire(&Mtm->cb_lock);
-			Mtm->n_commit_holders += 1;
-			SpinLockRelease(&Mtm->cb_lock);
-
-			PG_TRY();
-			{
-				for (;;)
-				{
-					bool		done = false;
-
-					SpinLockAcquire(&Mtm->cb_lock);
-					if (Mtm->n_committers == 0)
-						done = true;
-					SpinLockRelease(&Mtm->cb_lock);
-
-					if (done)
-						break;
-
-					ConditionVariableSleep(&Mtm->commit_barrier_cv, PG_WAIT_EXTENSION);
-				}
-				ConditionVariableCancelSleep();
-
-				MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_SENDER_START_RECOVERED, false);
-				msg_xptr = LogLogicalMessage("P", session_id, strlen(session_id) + 1, false);
-			}
-			PG_CATCH();
-			{
-				SpinLockAcquire(&Mtm->cb_lock);
-				Mtm->n_commit_holders -= 1;
-				SpinLockRelease(&Mtm->cb_lock);
-				ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
-				PG_RE_THROW();
-			}
-			PG_END_TRY();
-
-			SpinLockAcquire(&Mtm->cb_lock);
-			Mtm->n_commit_holders -= 1;
-			SpinLockRelease(&Mtm->cb_lock);
-			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
-
-			XLogFlush(msg_xptr);
-		}
-
-		mtm_log(ProtoTraceMode,
-				"Walsender started in recovered mode to node %d",
-				MtmReplicationNodeId);
-	}
-
-
+	mtm_log(ProtoTraceMode,
+			"walsender starts in %s mode to node %d",
+			hooks_data->is_recovery ? "recovery" : "normal",
+			hooks_data->receiver_node_id);
 }
 
 static void
 MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs *args)
 {
-	Assert(MtmReplicationNodeId >= 0);
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) args->private_data;
+
+	Assert(hooks_data->receiver_node_id >= 0);
 
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
-	Mtm->peers[MtmReplicationNodeId - 1].sender_pid = InvalidPid;
+	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = InvalidPid;
+	BIT_CLEAR(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
 	LWLockRelease(Mtm->lock);
 
-	MtmStateProcessNeighborEvent(MtmReplicationNodeId,
-								 MTM_NEIGHBOR_WAL_SENDER_STOP, false);
-
-	MtmReplicationNodeId = -1;
-
 	mtm_log(ProtoTraceMode, "Walsender to node %d exiting",
-			MtmReplicationNodeId);
+			hooks_data->receiver_node_id);
+	hooks_data->receiver_node_id = -1;
 }
 
 /*
@@ -954,7 +847,6 @@ pglogical_init_api(PGLogicalProtoType typ)
 {
 	PGLogicalProtoAPI *res = palloc0(sizeof(PGLogicalProtoAPI));
 
-	sscanf(MyReplicationSlot->data.name.data, MULTIMASTER_SLOT_PATTERN, &MtmReplicationNodeId);
 	res->write_rel = pglogical_write_rel;
 	res->write_begin = pglogical_write_begin;
 	res->write_message = pglogical_write_message;

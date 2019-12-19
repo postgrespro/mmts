@@ -20,6 +20,7 @@
  */
 typedef struct
 {
+	int			sender_node_id;
 	LWLock		lock;
 	ConditionVariable syncpoint_cv;
 	int			n_holders;
@@ -57,8 +58,8 @@ typedef struct
 } BgwPool;
 
 
-extern void BgwPoolStart(BgwPool *pool, char *poolName, Oid db_id, Oid user_id);
-extern void BgwPoolExecute(BgwPool *pool, void *work, int size, MtmReceiverContext *ctx);
+extern void BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id);
+extern void BgwPoolExecute(BgwPool *pool, void *work, int size, MtmReceiverWorkerContext *ctx);
 extern void BgwPoolShutdown(BgwPool *poolDesc);
 extern void BgwPoolCancel(BgwPool *pool);
 

@@ -591,7 +591,7 @@ MtmDetectGlobalDeadLock(PGPROC *proc)
 	 * There is no need to check for deadlocks in recovery: all our
 	 * transactions must be eventually committed/aborted by the resolver.
 	 */
-	if (!MtmIsEnabled() || MtmGetCurrentStatus() != MTM_ONLINE)
+	if (!MtmIsEnabled() || MtmGetCurrentStatus(false, false) != MTM_ONLINE)
 		return false;
 
 	mtm_log(DeadlockCheck, "Detect global deadlock for " XID_FMT " by backend %d", pgxact->xid, MyProcPid);

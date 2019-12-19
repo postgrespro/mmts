@@ -17,7 +17,9 @@
 
 #include "messaging.h"
 
-extern void MtmGenerateGid(char *gid, TransactionId xid, int node_id);
+extern void MtmGenerateGid(char *gid, int node_id, TransactionId xid, uint64 gen_num,
+						   nodemask_t configured);
+extern uint64 MtmGidParseGenNum(const char *gid);
 extern int	MtmGidParseNodeId(const char *gid);
 extern TransactionId MtmGidParseXid(const char *gid);
 
@@ -27,7 +29,5 @@ extern void MtmXactCallback(XactEvent event, void *arg);
 
 extern bool MtmExplicitPrepare(char *gid);
 extern void MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit);
-
-extern void gather(uint64 participants, MtmMessage **messages, int *msg_count, int *sendconn_cnt);
 
 #endif

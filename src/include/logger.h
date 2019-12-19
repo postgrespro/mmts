@@ -71,6 +71,7 @@ typedef enum MtmLogTag
 	/* state */
 	MtmStateSwitch			= LOG,
 	MtmStateMessage			= LOG,
+	MtmStateDebug			= LOG,
 
 	/* syncpoints */
 	SyncpointCreated		= LOG,

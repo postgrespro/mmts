@@ -96,11 +96,15 @@ char const * const MtmTxRequestValueMnem[] = {
 
 char const *const MtmMessageTagMnem[] =
 {
-	"MtmTxResponse",
+	"MtmPrepareResponse",
+	"Mtm2AResponse",
 	"MtmTxRequest",
 	"MtmTxStatusResponse",
 	"MtmLastTermRequest",
-	"MtmLastTermResponse"
+	"MtmLastTermResponse",
+	"MtmHeartbeat",
+	"MtmGenVoteRequest",
+	"MtmGenVoteResponse"
 };
 
 /*  XXX: do we really need all this guys (except ddd)? */
@@ -120,7 +124,6 @@ static TransactionManager MtmTM =
 
 /*  XXX */
 bool		MtmBackgroundWorker;
-int			MtmReplicationNodeId;
 
 /*
  * Maximal size of transaction after which transaction is written to the disk.
@@ -150,6 +153,53 @@ popcount(nodemask_t mask)
 	}
 	return count;
 }
+
+int
+first_set_bit(nodemask_t mask)
+{
+	int i;
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (BIT_CHECK(mask, i))
+			return i;
+	}
+	return -1;
+}
+
+/* is submask \in mask? */
+bool
+is_submask(nodemask_t submask, nodemask_t mask)
+{
+	int i;
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (BIT_CHECK(submask, i) && !BIT_CHECK(mask, i))
+			return false;
+	}
+	return true;
+}
+
+/*  XXXX: allocate in context and clean it */
+char *
+maskToString(nodemask_t mask)
+{
+	char	   *strMask = palloc0(MTM_MAX_NODES + 1);
+	int			i;
+	int			last_setbit = 0; /* truncate all suffix zeros */
+
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		strMask[i] = BIT_CHECK(mask, i) ? '1' : '0';
+		if (BIT_CHECK(mask, i))
+			last_setbit = i;
+	}
+	strMask[last_setbit + 1] = '\0';
+
+	return strMask;
+}
+
 
 
 /*
@@ -287,16 +337,21 @@ MtmSharedShmemStartup()
 		Mtm->lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
 		Mtm->syncpoint_lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
 
-		ConditionVariableInit(&Mtm->commit_barrier_cv);
+		pg_atomic_init_u64(&Mtm->configured_mask, 0);
+
 		ConditionVariableInit(&Mtm->receiver_barrier_cv);
+		ConditionVariableInit(&Mtm->receivers_cv);
 
 		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
-			Mtm->peers[i].receiver_pid = InvalidPid;
-			Mtm->peers[i].sender_pid = InvalidPid;
+			Mtm->peers[i].walreceiver_pid = InvalidPid;
+			Mtm->peers[i].walsender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
 			Mtm->peers[i].trim_lsn = InvalidXLogRecPtr;
 		}
+
+		Mtm->walreceivers_mask = 0;
+		Mtm->walsenders_mask = 0;
 	}
 
 	RegisterXactCallback(MtmXactCallback, NULL);
@@ -486,9 +541,11 @@ _PG_init(void)
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
 
 	dmq_init(MtmHeartbeatSendTimeout);
-	dmq_receiver_start_hook = MtmOnNodeConnect;
-	dmq_receiver_stop_hook = MtmOnNodeDisconnect;
+	dmq_receiver_start_hook = MtmOnDmqReceiverConnect;
+	dmq_receiver_heartbeat_hook = MtmOnDmqReceiverHeartbeat;
+	dmq_receiver_stop_hook = MtmOnDmqReceiverDisconnect;
 	dmq_sender_connect_hook = MtmOnDmqSenderConnect;
+	dmq_sender_heartbeat_hook = MtmOnDmqSenderHeartbeat;
 	dmq_sender_disconnect_hook = MtmOnDmqSenderDisconnect;
 
 	MtmDDLReplicationInit();
@@ -639,6 +696,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	int			i,
 				rc,
 				n_peers;
+	int			n_nodes;
 	PGconn	  **peer_conns;
 	StringInfoData local_query;
 
@@ -648,6 +706,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	deconstruct_array(peers_arr,
 					  TEXTOID, -1, false, 'i',
 					  &peers_datums, &peers_nulls, &n_peers);
+	n_nodes = n_peers + 1;
 
 	if (n_peers + 1 >= MTM_MAX_NODES)
 		mtm_log(ERROR,
@@ -692,6 +751,20 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 					conninfo, msg);
 		}
 
+		/* create persistent state (initial generation) */
+		res = PQexec(peer_conns[i],
+					 psprintf("select mtm.state_create(%d);", n_nodes));
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+
+			PQclear(res);
+			PQfinish(peer_conns[i]);
+			mtm_log(ERROR,
+					"Failed to create persistent state on '%s': %s",
+					conninfo, msg);
+		}
+
 		/* construct table contents for this node */
 		initStringInfo(&query);
 		appendStringInfoString(&query, "insert into " MTM_NODES " values ");
@@ -733,6 +806,11 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
 	PushActiveSnapshot(GetTransactionSnapshot());
+
+	rc = SPI_execute(psprintf("select mtm.state_create(%d);", n_nodes),
+					 false, 0);
+	if (rc != SPI_OK_SELECT)
+		mtm_log(ERROR, "Failed to create mtm state");
 
 	rc = SPI_execute(local_query.data, false, 0);
 	if (rc != SPI_OK_INSERT)
@@ -781,7 +859,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	if (!check_config(node_id))
 		mtm_log(ERROR, "multimaster can't start with current configs");
 
-	mtm_log(NodeMgmt, "Creating node%d", node_id);
+	mtm_log(NodeMgmt, "mtm_after_node_create %d", node_id);
 
 	if (is_self)
 	{
@@ -1149,7 +1227,7 @@ MtmLoadConfig()
 	Assert(SPI_processed <= MTM_MAX_NODES);
 
 	cfg->n_nodes = 0;
-	cfg->my_node_id = 0;
+	cfg->my_node_id = MtmInvalidNodeId;
 
 	for (i = 0; i < SPI_processed; i++)
 	{
@@ -1180,7 +1258,7 @@ MtmLoadConfig()
 		if (is_self)
 		{
 			/* Ensure that there is only one tuple representing our node */
-			Assert(cfg->my_node_id == 0);
+			Assert(cfg->my_node_id == MtmInvalidNodeId);
 			cfg->my_node_id = node_id;
 		}
 		else
@@ -1242,6 +1320,16 @@ MtmLoadConfig()
 	if (!inside_tx)
 		CommitTransactionCommand();
 
+	/* TODO: we'd better have option to ERROR or FATAL here if me is invalid */
+	if (cfg->my_node_id != MtmInvalidNodeId)
+	{
+		/* form configured mask */
+		cfg->mask = 0;
+		BIT_SET(cfg->mask, cfg->my_node_id - 1);
+		for (i = 0; i < cfg->n_nodes; i++)
+			BIT_SET(cfg->mask, cfg->nodes[i].node_id - 1);
+	}
+
 	return cfg;
 }
 
@@ -1258,10 +1346,6 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 				node_id;
 
 	new_cfg = MtmLoadConfig();
-
-	/* Set proper values in Mtm structure */
-	if (new_cfg->my_node_id != 0)
-		MtmStateFill(new_cfg);
 
 	/*
 	 * Construct bitmapsets from old and new mtm_config's and find out whether
@@ -1311,6 +1395,21 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 		pfree(old_cfg);
 
 	return new_cfg;
+}
+
+/*
+ * These primitive functions mainly exist to track all (cornerstone) places
+ * where we count the quorum. e.g. generations are currently broken in the
+ * face of dynamic node add/rm.
+ */
+bool Quorum(int ntotal, int nvotes)
+{
+	return nvotes >= ntotal / 2 + 1;
+}
+bool MtmQuorum(MtmConfig* mtm_cfg, int nvotes)
+{
+	/* n_nodes doesn't include me, so +1 */
+	return Quorum(mtm_cfg->n_nodes + 1, nvotes);
 }
 
 /* Helper to find node with specified id in cfg->nodes */
@@ -1473,6 +1572,100 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/*
+ * For each counterparty in participants, either receive and put to messages a
+ * msg from it (optionally saving node id of sender in senders) or wait until
+ * recv connection to it dies.
+ *
+ * If msg_ok provided, it is consulted for each received message. True means
+ * we got the right message from this counterparty and remove it from
+ * participants; otherwise, continue receiving from it. This is typically
+ * needed to filter out old msgs: failure detector on previous receival
+ * session obviously could have given false positives, i.e. connection was
+ * lost and restored before msg sent, so we'd abandoned waiting and might
+ * unexpectingly receive it now.
+ *
+ * If sendconn_cnt is not NULL, it must contain sender conn counters from
+ * dmq_get_sendconn_cnt. In this case, we stop waiting for counterparty when
+ * sender connection reset was spotted.
+ * sendconn_cnt must be passed whenever you've sent request via dmq and
+ * expect reply to it, otherwise you risk hanging here infinitely if request
+ * was lost.
+ *
+ * If gen_num is not MtmInvalidGenNum, function exits once generation switch
+ * occured without waiting for all participants messages, returning false.
+ * Otherwise, returns true.
+ */
+bool
+gather(nodemask_t participants,
+	   MtmMessage **messages, int *senders, int *msg_count,
+	   gather_hook_t msg_ok, Datum msg_ok_arg,
+	   int *sendconn_cnt, uint64 gen_num)
+{
+	*msg_count = 0;
+	while (participants != 0)
+	{
+		bool		ret;
+		int8 sender_mask_pos;
+		StringInfoData msg;
+		int			rc;
+		bool		wait;
+
+		ret = dmq_pop_nb(&sender_mask_pos, &msg, participants, &wait);
+		if (ret)
+		{
+			MtmMessage *mtm_msg = MtmMessageUnpack(&msg);
+
+			if (msg_ok && !msg_ok(mtm_msg, msg_ok_arg))
+			{
+				pfree(mtm_msg);
+				continue;
+			}
+
+			messages[*msg_count] = mtm_msg;
+			if (senders != NULL)
+				senders[*msg_count] = sender_mask_pos + 1;
+			(*msg_count)++;
+			BIT_CLEAR(participants, sender_mask_pos);
+
+			mtm_log(MtmTxTrace,
+					"gather: got message from node%d", sender_mask_pos + 1);
+		}
+		else if (sender_mask_pos != -1)
+		{
+			/* dead recv conn */
+			BIT_CLEAR(participants, sender_mask_pos);
+		}
+		else /* WOULDBLOCK */
+		{
+			/* XXX cache that */
+			rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 100.0,
+						   PG_WAIT_EXTENSION);
+
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
+
+			/* XXX tell the caller about latch reset */
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+
+			/* waited a bit fruitlessly -- probably sender conn died? */
+			if (rc & WL_TIMEOUT)
+			{
+				if (sendconn_cnt != NULL)
+					participants = dmq_purge_failed_participants(participants,
+																 sendconn_cnt);
+
+				if (gen_num != MtmInvalidGenNum &&
+					gen_num != MtmGetCurrentGenNum())
+					return false;
+			}
+		}
+
+	}
+	return true;
+}
+
 
 /*****************************************************************************
  *
@@ -1491,14 +1684,26 @@ MtmMessagePack(MtmMessage *anymsg)
 
 	switch (messageTag(anymsg))
 	{
-		case T_MtmTxResponse:
+		case T_MtmPrepareResponse:
 		{
-			MtmTxResponse   *msg = (MtmTxResponse *) anymsg;
+			MtmPrepareResponse   *msg = (MtmPrepareResponse *) anymsg;
+
+			pq_sendint32(s, msg->node_id);
+			pq_sendbyte(s, msg->prepared);
+			pq_sendint32(s, msg->errcode);
+			pq_send_ascii_string(s, msg->errmsg);
+			pq_sendint64(s, msg->xid);
+			break;
+		}
+
+		case T_Mtm2AResponse:
+		{
+			Mtm2AResponse   *msg = (Mtm2AResponse *) anymsg;
 
 			pq_sendint32(s, msg->node_id);
 			pq_sendbyte(s, msg->status);
-			pq_sendint32(s, msg->term.ballot);
-			pq_sendint32(s, msg->term.node_id);
+			pq_sendint32(s, msg->accepted_term.ballot);
+			pq_sendint32(s, msg->accepted_term.node_id);
 			pq_sendint32(s, msg->errcode);
 			pq_send_ascii_string(s, msg->errmsg);
 			pq_send_ascii_string(s, msg->gid);
@@ -1543,6 +1748,40 @@ MtmMessagePack(MtmMessage *anymsg)
 			break;
 		}
 
+		case T_MtmHeartbeat:
+		{
+			MtmHeartbeat *msg = (MtmHeartbeat *) anymsg;
+
+			pq_sendint64(s, msg->current_gen.num);
+			pq_sendint64(s, msg->current_gen.members);
+			pq_sendint64(s, msg->current_gen.configured);
+			pq_sendint64(s, msg->donors);
+			pq_sendint64(s, msg->last_online_in);
+			pq_sendint64(s, msg->connected_mask);
+			break;
+		}
+
+		case T_MtmGenVoteRequest:
+		{
+			MtmGenVoteRequest	  *msg = (MtmGenVoteRequest *) anymsg;
+
+			pq_sendint64(s, msg->gen.num);
+			pq_sendint64(s, msg->gen.members);
+			pq_sendint64(s, msg->gen.configured);
+			break;
+		}
+
+		case T_MtmGenVoteResponse:
+		{
+			MtmGenVoteResponse	  *msg = (MtmGenVoteResponse *) anymsg;
+
+			pq_sendint64(s, msg->gen_num);
+			pq_sendbyte(s, msg->vote_ok);
+			pq_sendint64(s, msg->last_online_in);
+			pq_sendint64(s, msg->last_vote_num);
+			break;
+		}
+
 		default:
 			Assert(false);
 	}
@@ -1558,15 +1797,30 @@ MtmMessageUnpack(StringInfo s)
 
 	switch (msg_tag)
 	{
-		case T_MtmTxResponse:
+		case T_MtmPrepareResponse:
 		{
-			MtmTxResponse   *msg = palloc0(sizeof(MtmTxResponse));
+			MtmPrepareResponse   *msg = palloc0(sizeof(MtmPrepareResponse));
+
+			msg->tag = msg_tag;
+			msg->node_id = pq_getmsgint(s, 4);
+			msg->prepared = pq_getmsgbyte(s);
+			msg->errcode = pq_getmsgint(s, 4);
+			msg->errmsg = pq_getmsgrawstring(s);
+			msg->xid = pq_getmsgint64(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_Mtm2AResponse:
+		{
+			Mtm2AResponse   *msg = palloc0(sizeof(Mtm2AResponse));
 
 			msg->tag = msg_tag;
 			msg->node_id = pq_getmsgint(s, 4);
 			msg->status = pq_getmsgbyte(s);
-			msg->term.ballot = pq_getmsgint(s, 4);
-			msg->term.node_id = pq_getmsgint(s, 4);
+			msg->accepted_term.ballot = pq_getmsgint(s, 4);
+			msg->accepted_term.node_id = pq_getmsgint(s, 4);
 			msg->errcode = pq_getmsgint(s, 4);
 			msg->errmsg = pq_getmsgrawstring(s);
 			msg->gid = pq_getmsgrawstring(s);
@@ -1628,6 +1882,49 @@ MtmMessageUnpack(StringInfo s)
 			break;
 		}
 
+		case T_MtmHeartbeat:
+		{
+			MtmHeartbeat *msg = palloc0(sizeof(MtmHeartbeat));
+
+			msg->tag = msg_tag;
+			msg->current_gen.num = pq_getmsgint64(s);
+			msg->current_gen.members = pq_getmsgint64(s);
+			msg->current_gen.configured = pq_getmsgint64(s);
+			msg->donors = pq_getmsgint64(s);
+			msg->last_online_in = pq_getmsgint64(s);
+			msg->connected_mask = pq_getmsgint64(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_MtmGenVoteRequest:
+		{
+			MtmGenVoteRequest	  *msg = palloc0(sizeof(MtmGenVoteRequest));
+
+			msg->tag = msg_tag;
+			msg->gen.num = pq_getmsgint64(s);
+			msg->gen.members = pq_getmsgint64(s);
+			msg->gen.configured = pq_getmsgint64(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
+		case T_MtmGenVoteResponse:
+		{
+			MtmGenVoteResponse	  *msg = palloc0(sizeof(MtmGenVoteResponse));
+
+			msg->tag = msg_tag;
+			msg->gen_num = pq_getmsgint64(s);
+			msg->vote_ok = pq_getmsgbyte(s);
+			msg->last_online_in = pq_getmsgint64(s);
+			msg->last_vote_num = pq_getmsgint64(s);
+
+			anymsg = (MtmMessage *) msg;
+			break;
+		}
+
 		default:
 			Assert(false);
 	}
@@ -1647,13 +1944,28 @@ MtmMesageToString(MtmMessage *anymsg)
 
 	switch (messageTag(anymsg))
 	{
-		case T_MtmTxResponse:
+		case T_MtmPrepareResponse:
 		{
-			MtmTxResponse   *msg = (MtmTxResponse *) anymsg;
+			MtmPrepareResponse   *msg = (MtmPrepareResponse *) anymsg;
+
+			appendStringInfo(&si, ", \"node_id\": %d", msg->node_id);
+			appendStringInfo(&si, ", \"prepared\": %s",
+							 msg->prepared ? "true" : "false");
+			appendStringInfo(&si, ", \"errcode\": %d", msg->errcode);
+			appendStringInfo(&si, ", \"errmsg\": \"%s\"", msg->errmsg);
+			appendStringInfo(&si, ", \"xid\": \"" XID_FMT "\"", msg->xid);
+			break;
+		}
+
+		case T_Mtm2AResponse:
+		{
+			Mtm2AResponse   *msg = (Mtm2AResponse *) anymsg;
 
 			appendStringInfo(&si, ", \"node_id\": %d", msg->node_id);
 			appendStringInfo(&si, ", \"status\": \"%s\"", GlobalTxStatusMnem[msg->status]);
-			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
+			appendStringInfo(&si, ", \"accepted_term\": [%d, %d]",
+							 msg->accepted_term.ballot,
+							 msg->accepted_term.node_id);
 			appendStringInfo(&si, ", \"errcode\": %d", msg->errcode);
 			appendStringInfo(&si, ", \"errmsg\": \"%s\"", msg->errmsg);
 			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
@@ -1691,6 +2003,33 @@ MtmMesageToString(MtmMessage *anymsg)
 			MtmLastTermResponse   *msg = (MtmLastTermResponse *) anymsg;
 
 			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
+			break;
+		}
+
+		case T_MtmGenVoteRequest:
+		{
+			MtmGenVoteRequest	  *msg = (MtmGenVoteRequest *) anymsg;
+
+			appendStringInfo(&si, ", \"num\": " UINT64_FORMAT, msg->gen.num);
+			appendStringInfo(&si, ", \"members\": \"%s\"",
+							 maskToString(msg->gen.members));
+			appendStringInfo(&si, ", \"configured\": \"%s\"",
+							 maskToString(msg->gen.configured));
+			break;
+		}
+
+		case T_MtmGenVoteResponse:
+		{
+			MtmGenVoteResponse	  *msg = (MtmGenVoteResponse *) anymsg;
+
+			appendStringInfo(&si, ", \"gen_num\": " UINT64_FORMAT, msg->gen_num);
+			appendStringInfo(&si, ", \"vote_ok\": %s",
+							 msg->vote_ok ? "true" : "false");
+			appendStringInfo(&si, ", \"last_online_in\": " UINT64_FORMAT,
+							 msg->last_online_in);
+			appendStringInfo(&si, ", \"last_vote_num\": " UINT64_FORMAT,
+							 msg->last_vote_num);
+
 			break;
 		}
 

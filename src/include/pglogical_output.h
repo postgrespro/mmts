@@ -45,11 +45,8 @@ typedef struct HookFuncName
 
 typedef struct MtmDecoderPrivate
 {
+	int			receiver_node_id;
 	bool		is_recovery;
-	bool		recovery_done;
-	int			recovery_count;
-	int			counterpart_disable_count;
-	int64		session_id;
 	MtmConfig  *cfg;
 } MtmDecoderPrivate;
 

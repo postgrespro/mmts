@@ -90,12 +90,13 @@ static bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, 
 static bool build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup);
 static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
 static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
-static bool process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid);
+static bool process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
+								 MtmReceiverWorkerContext *rwctx);
 static bool process_remote_message(StringInfo s,
-								   MtmReceiverContext *receiver_ctx);
+								   MtmReceiverWorkerContext *rwctx);
 static void process_remote_commit(StringInfo s,
 								  volatile GlobalTransactionId *current_gtid,
-								  MtmReceiverContext *receiver_ctx);
+								  MtmReceiverWorkerContext *rwctx);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
@@ -123,7 +124,7 @@ MtmHandleApplyError(void)
 			 * ERRCODE_SYSTEM_ERROR: case ERRCODE_INTERNAL_ERROR: case
 			 * ERRCODE_OUT_OF_MEMORY:
 			 */
-			MtmStateProcessEvent(MTM_NONRECOVERABLE_ERROR, false);
+			((void) 42);
 	}
 	FreeErrorData(edata);
 }
@@ -468,17 +469,17 @@ create_rel_estate(Relation rel)
 }
 
 static bool
-process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid)
+process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
+					 MtmReceiverWorkerContext *rwctx)
 {
+	/* there is no need to send this, but since we do, check its sanity */
 	gtid->node = pq_getmsgint(s, 4);
+	Assert(rwctx->sender_node_id == gtid->node);
 	gtid->xid = pq_getmsgint64(s);
 
 	InterruptPending = false;
 	QueryCancelPending = false;
 	query_cancel_allowed = true;
-
-	/* XXX: get rid of MtmReplicationNodeId */
-	MtmReplicationNodeId = gtid->node;
 
 	pq_getmsgint64(s);
 //XXX:snapshot
@@ -500,7 +501,7 @@ process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid)
 }
 
 static void
-process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received_end_lsn)
+process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr received_end_lsn)
 {
 	int			rc;
 	int			origin_node;
@@ -522,29 +523,29 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 * transactions to proceed. This way we will not delay application of
 	 * transaction bodies, just prepare record itself.
 	 */
-	LWLockAcquire(&Mtm->pools[rctx->node_id - 1].lock, LW_EXCLUSIVE);
+	LWLockAcquire(&Mtm->pools[rwctx->sender_node_id - 1].lock, LW_EXCLUSIVE);
 	for (;;)
 	{
 		int			ntasks;
 
-		if (Mtm->pools[rctx->node_id - 1].nWorkers <= 0)
+		if (Mtm->pools[rwctx->sender_node_id - 1].nWorkers <= 0)
 		{
-			LWLockRelease(&Mtm->pools[rctx->node_id - 1].lock);
+			LWLockRelease(&Mtm->pools[rwctx->sender_node_id - 1].lock);
 			break;
 		}
 
-		ntasks = Mtm->pools[rctx->node_id - 1].active +
-			Mtm->pools[rctx->node_id - 1].pending;
-		ConditionVariablePrepareToSleep(&Mtm->pools[rctx->node_id - 1].syncpoint_cv);
-		LWLockRelease(&Mtm->pools[rctx->node_id - 1].lock);
+		ntasks = Mtm->pools[rwctx->sender_node_id - 1].active +
+			Mtm->pools[rwctx->sender_node_id - 1].pending;
+		ConditionVariablePrepareToSleep(&Mtm->pools[rwctx->sender_node_id - 1].syncpoint_cv);
+		LWLockRelease(&Mtm->pools[rwctx->sender_node_id - 1].lock);
 
 		Assert(ntasks >= 0);
 		if (ntasks == 0)
 			break;
 
-		ConditionVariableSleep(&Mtm->pools[rctx->node_id - 1].syncpoint_cv,
+		ConditionVariableSleep(&Mtm->pools[rwctx->sender_node_id - 1].syncpoint_cv,
 							   PG_WAIT_EXTENSION);
-		LWLockAcquire(&Mtm->pools[rctx->node_id - 1].lock, LW_EXCLUSIVE);
+		LWLockAcquire(&Mtm->pools[rwctx->sender_node_id - 1].lock, LW_EXCLUSIVE);
 	}
 	ConditionVariableCancelSleep();
 
@@ -557,7 +558,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 	 */
 	if (msg[0] == 'F')
 	{
-		Assert(rctx->is_recovery == true);
+		Assert(rwctx->mode == REPLMODE_RECOVERY);
 
 		/* forwarded, parse and save as is */
 		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
@@ -576,7 +577,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 
 		/* direct, save with it lsn and 'F' prefix */
 		origin_lsn = received_end_lsn;
-		origin_node = rctx->node_id;
+		origin_node = rwctx->sender_node_id;
 		rc = sscanf(msg, UINT64_FORMAT, &trim_lsn);
 		Assert(rc == 1);
 		Assert(origin_node != Mtm->my_node_id);
@@ -605,17 +606,35 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 		pfree(new_msg);
 	}
 
-	Assert(rctx->is_recovery || rctx->node_id == origin_node);
+	Assert(rwctx->mode == REPLMODE_RECOVERY || rwctx->sender_node_id == origin_node);
 
 	SyncpointRegister(origin_node, origin_lsn, local_lsn, restart_lsn, trim_lsn);
 
 	MtmUpdateLsnMapping(origin_node, origin_lsn);
 }
 
+/* TODO: make messaging layer for logical messages like existing dmq one */
+static void
+UnpackGenAndDonors(char const *msg, int len, MtmGeneration *gen, nodemask_t *donors)
+{
+	StringInfoData s;
+
+	gen->num = MtmInvalidGenNum;
+	s.data = (char *) msg;
+	s.len = len;
+	s.cursor = 0;
+
+	gen->num = pq_getmsgint64(&s);
+	gen->members = pq_getmsgint64(&s);
+	gen->configured = pq_getmsgint64(&s);
+	*donors = pq_getmsgint64(&s);
+	Assert(gen->num != MtmInvalidGenNum);
+}
+
 /*  XXX: process messages that should run in receiver itself in separate */
 /*  function in receiver */
 static bool
-process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
+process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 {
 	char		action = pq_getmsgbyte(s);
 	XLogRecPtr	record_lsn = pq_getmsgint64(s);
@@ -624,7 +643,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 	bool		standalone = false;
 
 	/* XXX: during recovery this is wrong, as we receive forwarded txes */
-	MtmBeginSession(receiver_ctx->node_id);
+	MtmBeginSession(rwctx->sender_node_id);
 
 	switch (action)
 	{
@@ -664,36 +683,30 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 				 * move DDD
 				 */
 				/* messages to dmq. */
-				// mtm_log(MtmApplyMessage, "Executing deadlock message from %d", MtmReplicationNodeId);
+				// mtm_log(MtmApplyMessage, "Executing deadlock message from %d",
+				//		rwctx->sender_node_id);
 				// MtmUpdateLockGraph(MtmReplicationNodeId, messageBody, messageSize);
 				standalone = true;
 				break;
 			}
 		case 'P':
 			{
-				int64		session_id = 0;
+				MtmGeneration ps_gen;
+				nodemask_t ps_donors;
+				bool reconnect;
 
-				mtm_log(MtmApplyMessage, "Processing parallel-safe message from %d: %s",
-						receiver_ctx->node_id, messageBody);
-
-				sscanf(messageBody, INT64_FORMAT, &session_id);
-
-				Assert(session_id > 0);
-				Assert(MtmIsReceiver && !MtmIsPoolWorker);
-
-				if (receiver_ctx->session_id == session_id)
+				UnpackGenAndDonors(messageBody, messageSize, &ps_gen, &ps_donors);
+				mtm_log(MtmApplyMessage, "Processing parallel-safe message from %d: gen.num=" UINT64_FORMAT,
+						rwctx->sender_node_id, ps_gen.num);
+				reconnect = MtmHandleParallelSafe(ps_gen, ps_donors,
+												  rwctx->mode == REPLMODE_RECOVERY,
+												  record_lsn);
+				if (reconnect)
 				{
-					Assert(!receiver_ctx->is_recovery);
-					Assert(!receiver_ctx->parallel_allowed);
-					Assert(receiver_ctx->node_id > 0);
-					Assert(receiver_ctx->node_id == MtmReplicationNodeId);
-
-					mtm_log(MtmApplyMessage, "Executing parallel-safe message from %d: %s",
-							receiver_ctx->node_id, messageBody);
-
-					receiver_ctx->parallel_allowed = true;
-					MtmStateProcessNeighborEvent(MtmReplicationNodeId, MTM_NEIGHBOR_WAL_RECEIVER_START, false);
+					rwctx->graceful_exit = true;
+					proc_exit(0);
 				}
+
 				standalone = true;
 				break;
 			}
@@ -701,13 +714,13 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 		case 'S':
 			{
 				mtm_log(MtmApplyMessage, "Executing syncpoint message from %d: %s",
-						receiver_ctx->node_id, messageBody);
+						rwctx->sender_node_id, messageBody);
 
 				/*
 				 * XXX: during recovery end_lsn is wrong, as we receive
 				 * forwarded txes
 				 */
-				process_syncpoint(receiver_ctx, messageBody, record_lsn);
+				process_syncpoint(rwctx, messageBody, record_lsn);
 
 				/* XXX: clear filter_map */
 				standalone = true;
@@ -717,7 +730,7 @@ process_remote_message(StringInfo s, MtmReceiverContext *receiver_ctx)
 			Assert(false);
 	}
 
-	MtmEndSession(MtmReplicationNodeId, false);
+	MtmEndSession(42, false);
 
 	return standalone;
 }
@@ -855,33 +868,30 @@ read_rel(StringInfo s, LOCKMODE mode)
 /*
  * Send response to coordinator after PREPARE or ABORT.
  *
- * TransactionId is used instead of GID bacause we may switch to a chunked
- * transaction decoding and GID will not be known in advance.
+ * Stream name is xid not GID based because we may switch to a chunked
+ * transaction decoding and GID will not be known in advance. Besides, gids
+ * might be longer than reasonable dmq stream name.
  */
 static void
-mtm_send_xid_reply(TransactionId xid, int node_id,
-				   GlobalTxStatus status, ErrorData *edata)
+mtm_send_prepare_reply(TransactionId xid, int dst_node_id,
+					   bool prepared, ErrorData *edata)
 {
 	DmqDestinationId dest_id;
 	StringInfo	packed_msg;
-	MtmTxResponse msg;
-	int32		sqlerrcode = ERRCODE_SUCCESSFUL_COMPLETION;
-
-	if (status != GTXPrepared)
-		sqlerrcode = edata ? edata->sqlerrcode : ERRCODE_T_R_SERIALIZATION_FAILURE;
+	MtmPrepareResponse msg;
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
-	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
+	dest_id = Mtm->peers[dst_node_id - 1].dmq_dest_id;
 	LWLockRelease(Mtm->lock);
 
 	Assert(dest_id >= 0);
 
-	msg.tag = T_MtmTxResponse;
+	msg.tag = T_MtmPrepareResponse;
 	msg.node_id = Mtm->my_node_id;
-	msg.status = status;
-	msg.term = (GlobalTxTerm) {1,0};
-	msg.errcode = sqlerrcode;
+	msg.prepared = prepared;
+	msg.errcode = edata ? edata->sqlerrcode : ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = edata ? edata->message : "";
+	msg.xid = xid;
 	packed_msg = MtmMessagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
@@ -889,41 +899,47 @@ mtm_send_xid_reply(TransactionId xid, int node_id,
 
 	mtm_log(MtmApplyTrace,
 			"MtmFollowerSendReply: " XID_FMT " to node%d (dest %d)",
-			xid, node_id, dest_id);
+			xid, dst_node_id, dest_id);
 
 	pfree(packed_msg->data);
 	pfree(packed_msg);
 }
 
 /*
- * Send response to coordinator after PRECOMMIT or COMMIT_PREPARED.
+ * Send response to coordinator after paxos 2a msg.
+ * The same stream name as in mtm_send_prepare_reply is used to make
+ * coordinators life eaiser.
+ * Xact finish can also be sent from here once we get it back.
  */
 static void
-mtm_send_gid_reply(char *gid, GlobalTxStatus status, GlobalTxTerm term, int node_id)
+mtm_send_2a_reply(char *gid, GlobalTxStatus status,
+				  GlobalTxTerm accepted_term, int dst_node_id)
 {
 	DmqDestinationId dest_id;
 	StringInfo	packed_msg;
-	MtmTxResponse msg;
+	Mtm2AResponse msg;
+	TransactionId xid = MtmGidParseXid(gid);
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
-	dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
+	dest_id = Mtm->peers[dst_node_id - 1].dmq_dest_id;
 	LWLockRelease(Mtm->lock);
 
 	Assert(dest_id >= 0);
 
-	msg.tag = T_MtmTxResponse;
+	msg.tag = T_Mtm2AResponse;
 	msg.node_id = Mtm->my_node_id;
 	msg.status = status;
-	msg.term = term;
+	msg.accepted_term = accepted_term;
 	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = "";
-	msg.gid = ""; /* we reply to coordinator in gid-named channel */
+	msg.gid = gid;
 	packed_msg = MtmMessagePack((MtmMessage *) &msg);
 
-	dmq_push_buffer(dest_id, gid, packed_msg->data, packed_msg->len);
+	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
+					packed_msg->data, packed_msg->len);
 	mtm_log(MtmApplyTrace,
 			"MtmFollowerSendReply: %s to node%d (dest %d)",
-			gid, node_id, dest_id);
+			gid, dst_node_id, dest_id);
 
 	pfree(packed_msg->data);
 	pfree(packed_msg);
@@ -932,7 +948,7 @@ mtm_send_gid_reply(char *gid, GlobalTxStatus status, GlobalTxTerm term, int node
 static void
 process_remote_commit(StringInfo in,
 					  volatile  GlobalTransactionId *current_gtid,
-					  MtmReceiverContext *receiver_ctx)
+					  MtmReceiverWorkerContext *rwctx)
 {
 	uint8		event;
 	XLogRecPtr	end_lsn;
@@ -944,7 +960,8 @@ process_remote_commit(StringInfo in,
 
 	/* read event */
 	event = pq_getmsgbyte(in);
-	MtmReplicationNodeId = pq_getmsgbyte(in);
+	/* this must be equal to rwctx->sender_node_id */
+	pq_getmsgbyte(in);
 
 	/* read fields */
 	pq_getmsgint64(in);			/* commit_lsn */
@@ -954,7 +971,8 @@ process_remote_commit(StringInfo in,
 	origin_node = pq_getmsgbyte(in);
 	origin_lsn = pq_getmsgint64(in);
 
-	replorigin_session_origin_lsn = origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn;
+	replorigin_session_origin_lsn =
+		origin_node == rwctx->sender_node_id ? end_lsn : origin_lsn;
 	Assert(replorigin_session_origin == InvalidRepOriginId);
 
 	suppress_internal_consistency_checks = false;
@@ -984,8 +1002,8 @@ process_remote_commit(StringInfo in,
 					 * Xact was already finished. Still reply to coordinator
 					 * so he doesn't wait for us.
 					 */
-					if (receiver_ctx->parallel_allowed)
-						mtm_send_gid_reply(gid, GTXInvalid, InvalidGTxTerm, origin_node);
+					if (rwctx->mode == REPLMODE_NORMAL)
+						mtm_send_2a_reply(gid, GTXInvalid, InvalidGTxTerm, origin_node);
 					break;
 				}
 
@@ -1012,8 +1030,8 @@ process_remote_commit(StringInfo in,
 					MtmEndSession(origin_node, true);
 				}
 
-				if (receiver_ctx->parallel_allowed)
-					mtm_send_gid_reply(gid, gtx->state.status,
+				if (rwctx->mode == REPLMODE_NORMAL)
+					mtm_send_2a_reply(gid, gtx->state.status,
 									   gtx->state.accepted, origin_node);
 
 				GlobalTxRelease(gtx);
@@ -1026,19 +1044,95 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_PREPARE:
 			{
-				bool		res;
 				ListCell   *cur_item,
 						   *prev_item;
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				GlobalTx   *gtx;
-				GlobalTxStatus status;
+				uint64 prepare_gen_num;
+				bool latch_set = false;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == current_gtid->my_xid);
 
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
+				prepare_gen_num = MtmGidParseGenNum(gid); /* xxx user 2pc */
+
+				/*
+				 * Before applying, make sure our node had switched to gen of
+				 * PREPARE or higher one. Normally this would be no-op or
+				 * imperceptible amount of time (until the next heartbeat).
+				 *
+				 * We could remove the waiting altogether if we carried the
+				 * full gen info in xact itself (members, donors), but that
+				 * seems like gid size bloating for no reason.
+				 */
+				while(unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
+				{
+					int			rc;
+
+					CHECK_FOR_INTERRUPTS();
+					rc = WaitLatch(MyLatch,
+								   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								   100.0,
+								   PG_WAIT_EXTENSION);
+					if (rc & WL_LATCH_SET)
+					{
+						latch_set = true;
+						ResetLatch(&MyProc->procLatch);
+					}
+					if (rc & WL_POSTMASTER_DEATH)
+						proc_exit(1);
+				}
+				/* restore the latch cock if we've swallowed it above */
+				if (latch_set)
+					SetLatch(&MyProc->procLatch);
 
 				MtmBeginSession(origin_node);
+
+				/* Exclude concurrent gen switchers, c.f. AcquirePBByHolder call site */
+				AcquirePBByPreparer(); /* xxx release it on shmem exit in workers */
+
+				/*
+				 * With lock acquired, check again that our apply mode makes
+				 * sense: applying normally when we are in recovery is
+				 * unacceptable as we might get xact out of order. Applying in
+				 * recovery when we are online is also not ok because we would
+				 * miss reply to coordinator; though we hardly would ever end
+				 * up doing this.
+				 *
+				 * As for the second check, under extremely unlikely
+                 * circumstances due to slow wareceivers convergence we might
+                 * get P of gen where we are in RECOVERY before corresponding
+                 * ParallelSafe, if we happen to have working walreceiver in
+                 * REPLMODE_RECOVERY from non-donor gen member. We could
+                 * safely enable us right away in this case, but for that we
+                 * need to re-acquire exclusive gen lock, recheck that gen
+                 * hadn't changed... seems simpler to just restart as we will
+                 * learn the real donor with ParallelSafe eventually.
+				 */
+				if (unlikely((rwctx->mode != MtmGetReceiverMode(rwctx->sender_node_id)) ||
+							 (MtmGetCurrentStatusInGen() == MTM_GEN_RECOVERY &&
+							  prepare_gen_num == MtmGetCurrentGenNum())))
+				{
+					ReleasePB();
+					rwctx->graceful_exit = true;
+					proc_exit(0);
+				}
+
+				/*
+				 * refuse to prepare xacts from older gens in normal mode
+				 * (but continue applying, there is no need to restart receiver)
+				 */
+				if (rwctx->mode == REPLMODE_NORMAL &&
+					prepare_gen_num < MtmGetCurrentGenNum())
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INTERNAL_ERROR),
+							 MTM_ERRMSG("refusing transaction %s due to generation switch: prepare_gen_num=" UINT64_FORMAT ", current_gen_num=" UINT64_FORMAT,
+										gid, prepare_gen_num, MtmGetCurrentGenNum())));
+				}
+
+				/* fine, apply the prepare */
 
 				/*
 				 * prepare TBLOCK_INPROGRESS state for
@@ -1051,12 +1145,27 @@ process_remote_commit(StringInfo in,
 				/* PREPARE itself */
 				gtx = GlobalTxAcquire(gid, true);
 
-				res = PrepareTransactionBlock(gid);
+				/*
+				 * TODO: we could check 'proposal' (aka nextBal in The
+				 * Part-Time Parliament) term: if it is not {1, 0}, we already
+				 * started concurrent resolving to abort xact, and it might be
+				 * better to tell coordinator to abort immediately while he
+				 * can rather than risk exiting later with 'unclear xact
+				 * status'.
+				 */
+
+				PrepareTransactionBlock(gid);
 				AllowTempIn2PC = true;
 				CommitTransactionCommand();
+				ReleasePB();
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 
-				/* be careful not to lose vote we could have already given */
+				/*
+				 * Be careful not to lose vote we could have already given.
+				 * XXX we must do that in PrepareTransaction to have single
+				 * WAL write or we still risk losing vote in crash between
+				 * writes.
+				 */
 				if (gtx->state.status == GTXInvalid)
 				{
 					gtx->state.status = GTXPrepared;
@@ -1078,7 +1187,6 @@ process_remote_commit(StringInfo in,
 					done = SetPreparedTransactionState(gid, sstate, false);
 					Assert(done);
 				}
-				status = gtx->state.status;
 
 				GlobalTxRelease(gtx);
 
@@ -1088,10 +1196,11 @@ process_remote_commit(StringInfo in,
 				QueryCancelPending = false;
 				query_cancel_allowed = false;
 
-				if (receiver_ctx->parallel_allowed)
+				if (rwctx->mode == REPLMODE_NORMAL)
 				{
-					mtm_send_xid_reply(current_gtid->xid, origin_node,
-									   status, NULL);
+					mtm_send_prepare_reply(current_gtid->xid,
+										   rwctx->sender_node_id,
+										   true, NULL);
 				}
 
 				/*
@@ -1132,7 +1241,7 @@ process_remote_commit(StringInfo in,
 
 				mtm_log(MtmApplyTrace,
 						"Prepare transaction %s event=%d origin=(%d, " LSN_FMT ")", gid, event,
-						origin_node, origin_node == MtmReplicationNodeId ? end_lsn : origin_lsn);
+						origin_node, origin_node == rwctx->sender_node_id ? end_lsn : origin_lsn);
 
 				break;
 			}
@@ -1195,7 +1304,7 @@ process_remote_commit(StringInfo in,
 			Assert(false);
 	}
 
-	if (!receiver_ctx->is_recovery)
+	if (rwctx->mode == REPLMODE_NORMAL)
 	{
 		Assert(replorigin_session_origin == InvalidRepOriginId);
 		MaybeLogSyncpoint();
@@ -1551,7 +1660,7 @@ process_remote_delete(StringInfo s, Relation rel)
 }
 
 void
-MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
+MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 {
 	StringInfoData s;
 	Relation	rel = NULL;
@@ -1593,7 +1702,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 				pfree(receiver_mtm_cfg);
 			receiver_mtm_cfg = MtmLoadConfig();
 			if (receiver_mtm_cfg->my_node_id == 0 ||
-				MtmNodeById(receiver_mtm_cfg, receiver_ctx->node_id) == NULL)
+				MtmNodeById(receiver_mtm_cfg, rwctx->sender_node_id) == NULL)
 				//XXX
 					proc_exit(0);
 
@@ -1611,12 +1720,13 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 			{
 					/* BEGIN */
 				case 'B':
-					inside_transaction = process_remote_begin(&s, &current_gtid);
+					inside_transaction = process_remote_begin(&s, &current_gtid,
+															  rwctx);
 					break;
 					/* COMMIT */
 				case 'C':
 					close_rel(rel);
-					process_remote_commit(&s, &current_gtid, receiver_ctx);
+					process_remote_commit(&s, &current_gtid, rwctx);
 					inside_transaction = false;
 					break;
 					/* INSERT */
@@ -1685,13 +1795,12 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 				case 'M':
 					close_rel(rel);
 					rel = NULL;
-					inside_transaction = !process_remote_message(&s, receiver_ctx);
+					inside_transaction = !process_remote_message(&s, rwctx);
 					break;
 				case 'Z':
 					{
 						int			rc;
 
-						MtmStateProcessEvent(MTM_RECOVERY_FINISH2, false);
 						Assert(!IsTransactionState());
 
 						if (receiver_mtm_cfg->backup_node_id > 0)
@@ -1714,6 +1823,9 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 
 							receiver_mtm_cfg_valid = false;
 						}
+
+						/* tell campaigner we are caught up */
+						MtmReportReceiverCaughtup(rwctx->sender_node_id);
 
 						inside_transaction = false;
 						break;
@@ -1738,7 +1850,8 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 		MemoryContextSwitchTo(old_context);
 		EmitErrorReport();
 		FlushErrorState();
-		MtmEndSession(MtmReplicationNodeId, false);
+		ReleasePB();
+		MtmEndSession(42, false);
 
 		MtmDDLResetApplyState();
 
@@ -1754,19 +1867,23 @@ MtmExecutor(void *work, size_t size, MtmReceiverContext *receiver_ctx)
 		 * makes our xact violating constraint or out of disk space error, but
 		 * in testing this most probably means a bug, so put an assert.
 		 */
-		if (receiver_ctx->is_recovery)
+		if (rwctx->mode == REPLMODE_RECOVERY)
 		{
 			Assert(false);
 			PG_RE_THROW();
 		}
 
-		/* handle only prepare errors here */
+		/*
+		 * handle only prepare errors here
+		 * XXX reply to 2a also, though its failure is unlikely
+		 */
 		if (TransactionIdIsValid(current_gtid.my_xid))
 		{
 			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
-			if (receiver_ctx->parallel_allowed)
-				mtm_send_xid_reply(current_gtid.xid, current_gtid.node,
-								   GTXAborted, edata);
+			if (rwctx->mode == REPLMODE_NORMAL)
+				mtm_send_prepare_reply(current_gtid.xid,
+								   rwctx->sender_node_id,
+								   false, edata);
 		}
 
 		FreeErrorData(edata);

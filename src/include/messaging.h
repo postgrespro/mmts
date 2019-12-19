@@ -8,6 +8,7 @@
 #define MESSAGING_H
 
 #include "global_tx.h"
+#include "state.h"
 
 /*
  * All messages are stamped with MtmMessageTag that should came before the rest
@@ -15,47 +16,50 @@
  */
 typedef enum
 {
-	T_MtmTxResponse = 0,
+	T_MtmPrepareResponse = 0,
+	T_Mtm2AResponse,
 	T_MtmTxRequest,
 	T_MtmTxStatusResponse,
 	T_MtmLastTermRequest,
-	T_MtmLastTermResponse
+	T_MtmLastTermResponse,
+	T_MtmHeartbeat,
+	T_MtmGenVoteRequest,
+	T_MtmGenVoteResponse
 } MtmMessageTag;
 
-typedef struct
+typedef struct MtmMessage
 {
 	MtmMessageTag		tag;
 } MtmMessage;
 
-// char const *const MtmMessageTagMnem[] =
-// {
-// 	"MtmTxResponse",
-// 	"MtmTxRequest",
-// 	"MtmTxStatusResponse",
-// 	"MtmLastTermRequest",
-// 	"MtmLastTermResponse"
-// };
-
-extern char const *const MtmMessageTagMnem[];
-
 #define messageTag(msgptr)		(((const MtmMessage *)(msgptr))->tag)
 
+/* Response to PREPARE by apply worker */
+typedef struct
+{
+	MtmMessageTag		tag;
+	int					node_id;
+	/* for PREPARE we care only about, well, prepare success */
+	bool				prepared;
+	int32				errcode;
+	const char		   *errmsg;
+	TransactionId	   	xid; /* identifies the message */
+} MtmPrepareResponse;
+
 /*
- * Responses upon transaction action execution at receiver side.
- * Can be sent from apply worker to originating backend in a failure-free case
- * or from mtm-status worker to mtm-resolver during transaction resolution
- * process.
+ * Response to 2A msg by apply worker or by monitor (during resolving).
  */
 typedef struct
 {
 	MtmMessageTag		tag;
 	int					node_id;
+	/* our LastVote in terms of the Part-time Parliament paper. */
 	GlobalTxStatus		status;
-	GlobalTxTerm		term;
+	GlobalTxTerm		accepted_term;
 	int32				errcode;
 	const char		   *errmsg;
-	const char		   *gid;
-} MtmTxResponse;
+	const char		   *gid; /* identifies the message */
+} Mtm2AResponse;
 
 /*
  * Response on MtmLastTermRequest request, holds last proposal value.
@@ -112,6 +116,45 @@ typedef struct
 	GTxState			state;
 	const char		   *gid;
 } MtmTxStatusResponse;
+
+/*
+ * Data sent in dmq heartbeats.
+ */
+typedef struct
+{
+	MtmMessageTag		tag;
+	MtmGeneration		current_gen;
+	uint64				donors; /* xxx nodemask_t */
+	uint64				last_online_in;
+	uint64				connected_mask; /* xxx nodemask_t */
+} MtmHeartbeat;
+
+/*
+ * Request to vote for new generation.
+ */
+typedef struct
+{
+	MtmMessageTag		tag;
+	MtmGeneration		gen;
+} MtmGenVoteRequest;
+
+/*
+ * Reply to new generation vote request.
+ */
+typedef struct
+{
+	MtmMessageTag		tag;
+	uint64				gen_num; /* identifies the message */
+	uint8				vote_ok;
+	/* last_online_in of replier on the moment of voting, determines donors */
+	uint64				last_online_in;
+	/*
+	 * if vote_ok is false this might be a valid gen number showing that
+	 * replier couldn't vote because its last_vote is higher.
+	 */
+	uint64				last_vote_num;
+} MtmGenVoteResponse;
+
 
 StringInfo MtmMessagePack(MtmMessage *anymsg);
 MtmMessage *MtmMessageUnpack(StringInfo s);

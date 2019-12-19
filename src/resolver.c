@@ -159,6 +159,12 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 	}
 }
 
+static bool
+last_term_gather_hook(MtmMessage *msg, Datum arg)
+{
+	return msg->tag == T_MtmLastTermResponse;
+}
+
 static void
 scatter_status_requests(MtmConfig *mtm_cfg)
 {
@@ -195,16 +201,14 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		new_term = GlobalTxGetMaxProposal();
 
 		/* ask peers about their last term */
-		connected = MtmGetConnectedNodeMask() &
-						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+		connected = MtmGetConnectedMask(false);
 		scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &msg));
 
 		/* .. and get all responses */
-		/*
-		 * ars: we might collect here responses from previous resolving
-		 * sessions, which would fill acks with non MtmLastTermResponse messages.
-		 */
-		gather(connected, (MtmMessage **) acks, &n_acks, NULL);
+		gather(connected,
+			   (MtmMessage **) acks, NULL, &n_acks,
+			   last_term_gather_hook, 0,
+			   NULL, MtmInvalidGenNum);
 
 		for (i = 0; i < n_acks; i++)
 		{
@@ -256,8 +260,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 			 */
 			gtx->resolver_stage = GTRS_AwaitStatus;
 
-			connected = MtmGetConnectedNodeMask() &
-						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &status_msg));
 		}
 	}
@@ -274,7 +277,7 @@ handle_responses(MtmConfig *mtm_cfg)
 	bool		wait;
 
 	/* ars: if we got failure here, not WOULDBLOCK, better continue spinning */
-	while (dmq_pop_nb(&sender_mask_pos, &msg, MtmGetConnectedNodeMask(), &wait))
+	while (dmq_pop_nb(&sender_mask_pos, &msg, MtmGetConnectedMask(false), &wait))
 	{
 		MtmMessage *raw_msg;
 
@@ -284,9 +287,11 @@ handle_responses(MtmConfig *mtm_cfg)
 		StartTransactionCommand();
 
 		raw_msg = MtmMessageUnpack(&msg);
-		Assert(raw_msg->tag == T_MtmTxStatusResponse ||
-			   raw_msg->tag == T_MtmTxResponse);
-		handle_response(mtm_cfg, raw_msg);
+		if (raw_msg->tag == T_MtmTxStatusResponse ||
+			raw_msg->tag == T_Mtm2AResponse)
+		{
+			handle_response(mtm_cfg, raw_msg);
+		}
 
 		CommitTransactionCommand();
 	}
@@ -307,7 +312,7 @@ quorum(MtmConfig *mtm_cfg, GTxState * all_states)
 			n_states++;
 	}
 
-	return n_states >= mtm_cfg->n_nodes/2 + 1;
+	return MtmQuorum(mtm_cfg, n_states);
 }
 
 static void
@@ -318,8 +323,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 	if (raw_msg->tag == T_MtmTxStatusResponse)
 		gid = ((MtmTxStatusResponse *) raw_msg)->gid;
-	else if (raw_msg->tag == T_MtmTxResponse)
-		gid = ((MtmTxResponse *) raw_msg)->gid;
+	else if (raw_msg->tag == T_Mtm2AResponse)
+		gid = ((Mtm2AResponse *) raw_msg)->gid;
 	else
 		Assert(false);
 
@@ -421,31 +426,30 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				gtx->state.accepted,
 				gtx->gid
 			};
-			connected = MtmGetConnectedNodeMask() &
-						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
 		}
 
 	}
 	else if (gtx->resolver_stage == GTRS_AwaitAcks)
 	{
-		MtmTxResponse *msg;
+		Mtm2AResponse *msg;
 
 		/*
 		 * ars: we might get T_MtmTxStatusResponse because we switched to
 		 * GTRS_AwaitAcks immediately after collecting majority, but there
 		 * can be more nodes willing to send 1b to us.
 		 */
-		Assert(raw_msg->tag == T_MtmTxResponse);
-		msg = (MtmTxResponse *) raw_msg;
+		Assert(raw_msg->tag == T_Mtm2AResponse);
+		msg = (Mtm2AResponse *) raw_msg;
 		Assert(msg->gid[0] != '\0');
 		Assert(msg->status == GTXPreAborted || msg->status == GTXPreCommitted);
 
 		gtx->phase2_acks[mtm_cfg->my_node_id-1] = gtx->state;
 		gtx->phase2_acks[msg->node_id-1] = (GTxState) {
 			msg->status,
-			msg->term,
-			msg->term
+			msg->accepted_term,
+			msg->accepted_term
 		};
 
 		if (quorum(mtm_cfg, gtx->phase2_acks))
@@ -466,8 +470,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				(GlobalTxTerm) {0,0},
 				gtx->gid
 			};
-			connected = MtmGetConnectedNodeMask() &
-						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
+			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
 		}
 	}
