@@ -214,7 +214,7 @@ struct GenState {
    * Last generation I was online in. Must be persisted to disk before
    * setting ONLINE in the generation; used for determining donors.
    */
-  Generation last_online_in;
+  int64 last_online_in;
 
   /*
    * Oldest gen for which we have voted. Persisted on update.
@@ -234,14 +234,14 @@ In addition to structures above, when conducting voting,
 ```c
 struct Vote {
   NodeId voter;
-  Generation last_online_in;
+  int64 last_online_in;
 }
 struct Campaign {
   Generation proposed_gen;
   Vote []collected_votes; /* register received votes here */
 } my_campaign;
 ```
-is also kept in shmem.
+is also kept in mem.
 
 Initially we set first generation <1, all nodes>, in which everyone is recovered
 (last_online_in = 1).
@@ -277,12 +277,12 @@ Initially we set first generation <1, all nodes>, in which everyone is recovered
      {
        Generation latest_gen = { .num = 0 }
        foreach v in my_campaign->collected_votes {
-         if v.last_online_in.num > latest_gen {
+         if v.last_online_in > latest_gen {
            latest_gen = v.last_online_in
-		   donors = [ v.voter ]
-		 } else if v.last_online_in.num == latest_gen.num {
-		   donors += v.voter
-		 }
+           donors = [ v.voter ]
+        } else if v.last_online_in == latest_gen {
+          donors += v.voter
+        }
        }
      }
      ```
@@ -382,7 +382,7 @@ ConsiderGenSwitch(Generation gen, nodemask_t donors) {
       * right donor will definitely be among them; however, that seems more
       * complicated.
       */
-     genstate->last_online_in = gen;
+     genstate->last_online_in = gen.num;
   } else {
     /* we need to recover */
     genstate->status = RECOVERY;
@@ -483,9 +483,9 @@ reconnect:
     while (record = new record from stream) {
       /*
        * This ensures walreceivers eventually converge. Doing this under
-       * GenLock each time is expensive; I think it is better
-       * to have maxnodes len array in shmem with recovery mode for each receiver,
-       * which can be checked out atomically without locks, similar to current recovery_count.
+       * GenLock each time is expensive; I think it is better to have
+       * atomic in shmem with values DISABLED, NORMAL, or n with node id from
+       * whom we recover.
        *
        * Also interlocking must ensure that walreceiver in recovery mode excludes
        * any other walreceiver to prevent applying record twice.
@@ -570,7 +570,7 @@ bool HandleParallelSafe(ps) {
 }
 
 EnableMyself() {
-   genstate->last_online_in = genstate->current_gen;
+   genstate->last_online_in = genstate->current_gen.num;
    /*
     * Now backends and walreceivers may proceed in normal mode.
     */
