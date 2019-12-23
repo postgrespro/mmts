@@ -178,10 +178,12 @@ static volatile sig_atomic_t got_SIGHUP = false;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
-dmq_hook_type dmq_receiver_start_hook;
+void *(*dmq_receiver_start_hook)(char *sender_name);
 dmq_hook_type dmq_receiver_stop_hook;
 dmq_hook_type dmq_sender_connect_hook;
 dmq_hook_type dmq_sender_disconnect_hook;
+void (*dmq_sender_heartbeat_hook)(char *receiver_name, StringInfo buf) = NULL;
+void (*dmq_receiver_heartbeat_hook)(char *sender_name, StringInfo msg, void *extra) = NULL;
 
 void		dmq_sender_main(Datum main_arg);
 
@@ -399,6 +401,7 @@ dmq_sender_main(Datum main_arg)
 	WaitEventSet *set;
 	DmqDestination conns[DMQ_MAX_DESTINATIONS];
 	int			heartbeat_send_timeout = DatumGetInt32(main_arg);
+	StringInfoData heartbeat_buf; /* heartbeat data is accumulated here */
 	/*
 	 * Seconds dmq_state->sconn_cnt to save the counter value when
 	 * conn is dead.
@@ -408,6 +411,7 @@ dmq_sender_main(Datum main_arg)
 	double		prev_timer_at = dmq_now();
 
 	on_shmem_exit(dmq_sender_at_exit, (Datum) 0);
+	initStringInfo(&heartbeat_buf);
 
 	/* init this worker */
 	pqsignal(SIGHUP, dmq_sighup_handler);
@@ -612,7 +616,15 @@ dmq_sender_main(Datum main_arg)
 				/* Heartbeat */
 				else if (conns[conn_id].state == Active)
 				{
-					dmq_send(conns, conn_id, "H", 2);
+					resetStringInfo(&heartbeat_buf);
+					/* stream name is cstring by convention */
+					appendStringInfoChar(&heartbeat_buf, 'H');
+					appendStringInfoChar(&heartbeat_buf, '\0');
+					/* Allow user to stuff some payload into the heartbeat */
+					if (dmq_sender_heartbeat_hook != NULL)
+						dmq_sender_heartbeat_hook(conns[conn_id].receiver_name,
+												  &heartbeat_buf);
+					dmq_send(conns, conn_id, heartbeat_buf.data, heartbeat_buf.len);
 				}
 			}
 		}
@@ -786,7 +798,8 @@ dmq_sender_main(Datum main_arg)
  *****************************************************************************/
 
 static void
-dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
+dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg,
+				   char *sender_name, void *extra)
 {
 	const char *stream_name;
 	const char *body;
@@ -796,7 +809,7 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	shm_mq_result res;
 
 	/*
-	 * Consume stream_name packed as a string and interpret rest of the data
+	 * Consume stream_name packed as a cstring and interpret rest of the data
 	 * as message body with unknown format that we are going to send down to
 	 * the subscribed backend.
 	 */
@@ -806,12 +819,24 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg)
 	pq_getmsgend(msg);
 
 	/*
-	 * Stream name "H" is reserved for simple heartbeats without body. So no
-	 * need to send somewhere.
+	 * Stream name "H" is reserved for heartbeats.
 	 */
 	if (strcmp(stream_name, "H") == 0)
 	{
-		Assert(body_len == 0);
+		/*
+		 * Allow user to read a payload potentially written by
+		 * dmq_sender_heartbeat_hook
+		 */
+		if (dmq_receiver_heartbeat_hook != NULL)
+		{
+			StringInfoData body_s; /* skip stream name */
+
+			body_s.data = (char *) body;
+			body_s.len = body_len;
+			body_s.maxlen = -1;
+			body_s.cursor = 0;
+			dmq_receiver_heartbeat_hook(sender_name, &body_s, extra);
+		}
 		return;
 	}
 
@@ -1025,6 +1050,10 @@ dmq_receiver_at_exit(int status, Datum receiver)
 	int			receiver_id = DatumGetInt32(receiver);
 	char		sender_name[DMQ_NAME_MAXLEN];
 
+	/*
+	 * We want the slot to be freed even if hook errors out, so order is
+	 * important.
+	 */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	strncpy(sender_name, dmq_state->receivers[receiver_id].name,
 			DMQ_NAME_MAXLEN);
@@ -1054,6 +1083,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	int			receiver_id = -1;
 	int			recv_timeout;
 	double		last_message_at = dmq_now();
+	void		*extra = NULL;
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	recv_timeout = PG_GETARG_INT32(1);
@@ -1124,7 +1154,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	ModifyWaitEvent(MyProcPort->pqcomm_waitset, 0, WL_SOCKET_READABLE, NULL);
 
 	if (dmq_receiver_start_hook)
-		dmq_receiver_start_hook(sender_name);
+		extra = dmq_receiver_start_hook(sender_name);
 
 	/* do not hold globalxmin. XXX: try to carefully release snaps */
 	MyPgXact->xmin = InvalidTransactionId;
@@ -1164,7 +1194,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 			if (rc > 0)
 			{
-				dmq_handle_message(&s, mq_handles, seg);
+				dmq_handle_message(&s, mq_handles, seg, sender_name, extra);
 				last_message_at = dmq_now();
 				reader_state = NeedByte;
 			}

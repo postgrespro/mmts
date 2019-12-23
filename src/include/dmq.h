@@ -33,9 +33,11 @@ extern void dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg);
 extern void dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *buffer, size_t len);
 
 typedef void (*dmq_hook_type) (char *);
-extern dmq_hook_type dmq_receiver_start_hook;
+extern void *(*dmq_receiver_start_hook)(char *sender_name);
 extern dmq_hook_type dmq_receiver_stop_hook;
+extern void (*dmq_receiver_heartbeat_hook)(char *sender_name, StringInfo msg, void *extra);
 extern dmq_hook_type dmq_sender_connect_hook;
+extern void (*dmq_sender_heartbeat_hook)(char *receiver_name, StringInfo buf);
 extern dmq_hook_type dmq_sender_disconnect_hook;
 
 #endif
