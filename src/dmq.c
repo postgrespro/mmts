@@ -1319,10 +1319,9 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 
 	/* XXX: use sendv instead */
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
+	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
-
-	resetStringInfo(&buf);
 }
 
 
@@ -1344,6 +1343,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 
 	/* XXX: use sendv instead */
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
+	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(WARNING, "[DMQ] dmq_push: can't send to queue");
 }
