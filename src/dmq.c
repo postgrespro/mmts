@@ -348,6 +348,31 @@ fe_send(PGconn *conn, char *msg, size_t len)
 }
 
 static void
+dmq_send(DmqDestination *conns, int conn_id, char *data, size_t len)
+{
+	int			ret = fe_send(conns[conn_id].pgconn, data, len);
+
+	if (ret < 0)
+	{
+		conns[conn_id].state = Idle;
+		dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
+
+		mtm_log(DmqStateFinal,
+				"[DMQ] failed to send message to %s: %s",
+				conns[conn_id].receiver_name,
+				PQerrorMessage(conns[conn_id].pgconn));
+
+		dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
+	}
+	else if (data[0] != 'H') /* skip logging heartbeats */
+	{
+		mtm_log(DmqTraceOutgoing,
+				"[DMQ] sent message (l=%zu, m=%s) to %s",
+				len, (char *) data, conns[conn_id].receiver_name);
+	}
+}
+
+static void
 dmq_sender_at_exit(int status, Datum arg)
 {
 	int			i;
@@ -487,26 +512,7 @@ dmq_sender_main(Datum main_arg)
 
 				if (conns[conn_id].state == Active)
 				{
-					int			ret = fe_send(conns[conn_id].pgconn, data, len);
-
-					if (ret < 0)
-					{
-						conns[conn_id].state = Idle;
-						dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
-
-						mtm_log(DmqStateFinal,
-								"[DMQ] failed to send message to %s: %s",
-								conns[conn_id].receiver_name,
-								PQerrorMessage(conns[conn_id].pgconn));
-
-						dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
-					}
-					else
-					{
-						mtm_log(DmqTraceOutgoing,
-								"[DMQ] sent message (l=%zu, m=%s) to %s",
-								len, (char *) data, conns[conn_id].receiver_name);
-					}
+					dmq_send(conns, conn_id, data, len);
 				}
 				else
 				{
@@ -603,23 +609,10 @@ dmq_sender_main(Datum main_arg)
 								conns[conn_id].connstr);
 					}
 				}
-				/* Heatbeat */
+				/* Heartbeat */
 				else if (conns[conn_id].state == Active)
 				{
-					int			ret = fe_send(conns[conn_id].pgconn, "H", 2);
-
-					if (ret < 0)
-					{
-						conns[conn_id].state = Idle;
-						dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
-
-						mtm_log(DmqStateFinal,
-								"[DMQ] failed to send heartbeat to %s: %s",
-								conns[conn_id].receiver_name,
-								PQerrorMessage(conns[conn_id].pgconn));
-
-						dmq_sender_disconnect_hook(conns[conn_id].receiver_name);
-					}
+					dmq_send(conns, conn_id, "H", 2);
 				}
 			}
 		}
