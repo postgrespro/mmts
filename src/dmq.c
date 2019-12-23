@@ -51,7 +51,8 @@
 #define DMQ_MQ_MAGIC 0x646d71
 
 /*  XXX: move to common */
-#define BIT_CHECK(mask, bit) (((mask) & ((int64)1 << (bit))) != 0)
+#define BIT_CLEAR(mask, bit) ((mask) &= ~((uint64)1 << (bit)))
+#define BIT_CHECK(mask, bit) (((mask) & ((uint64)1 << (bit))) != 0)
 
 /*
  * Shared data structures to hold current connections topology.
@@ -83,6 +84,7 @@ typedef struct
 	PGconn	   *pgconn;
 	DmqConnState state;
 	int			pos;
+	int8		mask_pos;
 } DmqDestination;
 
 typedef struct
@@ -101,6 +103,43 @@ struct DmqSharedState
 	pid_t		sender_pid;
 	dsm_handle	out_dsm;
 	DmqDestination destinations[DMQ_MAX_DESTINATIONS];
+	/*
+	 * Stores counters incremented on each reconnect to destination, indexed
+	 * by receiver mask_pos. This allows to detect conn failures to avoid
+	 * infinite waiting for response when request could have been dropped,
+	 * c.f. dmq_fill_sconn_cnt and dmq_purge_failed_participants.
+	 *
+	 * XXX This mechanism is unreliable and ugly.
+	 * Unreliable, because though it saves from infinite waiting for reply, it
+	 * doesn't save from potential deadlocks. Deadlocks may arise whenever a
+	 * loop of nodes makes request-response sequences because request A->B and
+	 * A's response to B's request go via the same TCP channel; thus, if all
+	 * queues of loop in one direction are filled with requests, nobody will
+	 * be able to answer.
+	 *
+	 * We could control the situation by ensuring 1) all possible requests
+	 * node sends at time could fit in the output buffers 2) node never
+	 * repeats the request until the previous one is delivered or dropped.
+	 * However, to honor the 2), we must terminate send connection whenever
+	 * receive conn failed (and thus we gonna to retry the requests) to flush
+	 * previous possible undelivered requests, which we don't do currently.
+	 *
+	 * Ultimate non-deadlockable solution without such hacks would be to
+	 * divide the job between different channels: A sends its requests to B
+	 * and recevies responses from it via one TCP channel, and B sends its
+	 * requests to A and receives responses via another one. Probably this is
+	 * not worthwhile though as it would make dmq more complicated and
+	 * increase number of shm_mqs.
+	 *
+	 * Besides, the counters are ugly because they require the external code
+	 * to remember sender counters before request and check them while
+	 * waiting for reply; moreover, this checking must be based on timouts
+	 * as nobody would wake the clients on send conn failures.
+	 *
+	 * No locks are used because we don't care much about correct/up-to-date
+	 * reads, though well aligned ints are atomic anyway.
+	 */
+	volatile int sconn_cnt[DMQ_MAX_DESTINATIONS];
 
 	/* receivers stuff */
 	int			n_receivers;
@@ -114,6 +153,9 @@ struct DmqSharedState
 	}			receivers[DMQ_MAX_RECEIVERS];
 
 }		   *dmq_state;
+
+/* special value for sconn_cnt[] meaning the connection is dead */
+#define DMQSCONN_DEAD 0
 
 static HTAB *dmq_subscriptions;
 
@@ -332,6 +374,11 @@ dmq_sender_main(Datum main_arg)
 	WaitEventSet *set;
 	DmqDestination conns[DMQ_MAX_DESTINATIONS];
 	int			heartbeat_send_timeout = DatumGetInt32(main_arg);
+	/*
+	 * Seconds dmq_state->sconn_cnt to save the counter value when
+	 * conn is dead.
+	 */
+	int			sconn_cnt[DMQ_MAX_DESTINATIONS];
 
 	double		prev_timer_at = dmq_now();
 
@@ -403,6 +450,8 @@ dmq_sender_main(Datum main_arg)
 					conns[i] = *dest;
 					Assert(conns[i].pgconn == NULL);
 					conns[i].state = Idle;
+					sconn_cnt[dest->mask_pos] = 0;
+					dmq_state->sconn_cnt[dest->mask_pos] = DMQSCONN_DEAD;
 					prev_timer_at = 0;	/* do not wait for timer event */
 				}
 				/* close connection to deleted destination */
@@ -443,6 +492,7 @@ dmq_sender_main(Datum main_arg)
 					if (ret < 0)
 					{
 						conns[conn_id].state = Idle;
+						dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] failed to send message to %s: %s",
@@ -561,6 +611,7 @@ dmq_sender_main(Datum main_arg)
 					if (ret < 0)
 					{
 						conns[conn_id].state = Idle;
+						dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] failed to send heartbeat to %s: %s",
@@ -684,9 +735,13 @@ dmq_sender_main(Datum main_arg)
 					}
 					if (!PQisBusy(conns[conn_id].pgconn))
 					{
+						int8 mask_pos = conns[conn_id].mask_pos;
+
 						conns[conn_id].state = Active;
 						DeleteWaitEvent(set, event.pos);
 						PQsetnonblocking(conns[conn_id].pgconn, 1);
+						sconn_cnt[mask_pos]++;
+						dmq_state->sconn_cnt[mask_pos] = sconn_cnt[mask_pos];
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] Connected to %s",
@@ -702,6 +757,7 @@ dmq_sender_main(Datum main_arg)
 					if (!PQconsumeInput(conns[conn_id].pgconn))
 					{
 						conns[conn_id].state = Idle;
+						dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
 
 						mtm_log(DmqStateFinal,
 								"[DMQ] connection error with %s: %s",
@@ -1444,6 +1500,9 @@ dmq_detach_receiver(char *sender_name)
 	dmq_local.inhandles[handle_id].name[0] = '\0';
 }
 
+/*
+ * Subscribes caller to msgs from stream_name.
+ */
 void
 dmq_stream_subscribe(char *stream_name)
 {
@@ -1501,6 +1560,24 @@ dmq_stream_unsubscribe(char *stream_name)
 	LWLockRelease(dmq_state->lock);
 
 	Assert(found);
+}
+
+/*
+ * Fills (preallocated) sconn_cnt with current values of sender
+ * connection counters to guys in participants mask (as registered in
+ * dmq_destination_add), which allows to reveal connection failures, possibly
+ * resulted in losing request -- and thus stop hopeless waiting for response.
+ */
+void
+dmq_get_sendconn_cnt(uint64 participants, int *sconn_cnt)
+{
+	int i;
+
+	for (i = 0; i < DMQ_N_MASK_POS; i++)
+	{
+		if (BIT_CHECK(participants, i))
+			sconn_cnt[i] = dmq_state->sconn_cnt[i];
+	}
 }
 
 bool
@@ -1639,9 +1716,36 @@ dmq_pop_nb(int8 *sender_mask_pos, StringInfo msg, uint64 mask, bool *wait)
 	return false;
 }
 
+/*
+ * Accepts bitmask of participants and sconn_cnt counters with send
+ * connections counters as passed to (and the latter filled by)
+ * dmq_fill_sconn_cnt, returns this mask after unsetting bits for those
+ * counterparties with whom we've lost the send connection since.
+ */
+uint64
+dmq_purge_failed_participants(uint64 participants, int *sconn_cnt)
+{
+	int i;
+	uint64 res = participants;
+
+	for (i = 0; i < DMQ_N_MASK_POS; i++)
+	{
+		if (BIT_CHECK(participants, i) &&
+			(sconn_cnt[i] == DMQSCONN_DEAD ||
+			 sconn_cnt[i] != dmq_state->sconn_cnt[i]))
+			BIT_CLEAR(res, i);
+	}
+	return res;
+}
+
+/*
+ * recv_mask_pos is short (< DMQ_N_MASK_POS) variant of
+ * receiver_name, used to track connection failures -- it must match mask_pos
+ * in dmq_attach_receiver to work!
+ */
 DmqDestinationId
 dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
-					int recv_timeout)
+					int8 recv_mask_pos, int recv_timeout)
 {
 	DmqDestinationId dest_id;
 	pid_t		sender_pid;
@@ -1658,6 +1762,7 @@ dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
 			strncpy(dest->connstr, connstr, DMQ_CONNSTR_MAX_LEN);
 			dest->recv_timeout = recv_timeout;
 			dest->active = true;
+			dest->mask_pos = recv_mask_pos;
 			break;
 		}
 	}

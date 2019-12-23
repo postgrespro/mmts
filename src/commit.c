@@ -334,7 +334,7 @@ MtmTwoPhaseCommit()
 		AllowTempIn2PC = true;
 		CommitTransactionCommand();
 		gtx->state.status = GTXPrepared;
-		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		gather(participants, (MtmMessage **) messages, &n_messages, NULL);
 		dmq_stream_unsubscribe(stream);
 
 		/* check prepare responses */
@@ -381,7 +381,7 @@ MtmTwoPhaseCommit()
 		gtx->state.status = GTXPreCommitted;
 		gtx->state.accepted = (GlobalTxTerm) {1, 0};
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		gather(participants, (MtmMessage **) messages, &n_messages, NULL);
 
 		/* check ballots in answers */
 		for (i = 0; i < n_messages; i++)
@@ -442,8 +442,17 @@ MtmTwoPhaseCommit()
 	return true;
 }
 
+/*
+ * For each counterparty in participants, either receives and pushes to
+ * messages a msg from it or waits until recv connection to it dies.
+ * If sendconn_cnt is not NULL, it must contain sender conn counters from
+ * dmq_get_sendconn_cnt. In this case, we stop waiting for counterparty when
+ * notice sender connection reset.
+ * sendconn_cnt must be passed whenever you've sent request via dmq and
+ * expect reply to it, otherwise you risk hanging here infinitely.
+ */
 void
-gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_disabled)
+gather(uint64 participants, MtmMessage **messages, int *msg_count, int *sendconn_cnt)
 {
 	*msg_count = 0;
 	while (participants != 0)
@@ -467,29 +476,12 @@ gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_d
 			mtm_log(MtmTxTrace,
 					"gather: got message from node%d", sender_mask_pos + 1);
 		}
-		else
+		else if (sender_mask_pos != -1)
 		{
-			/*
-			 * If queue is detached then the neignbour node is probably
-			 * disconnected. Let's wait when it became disabled as we can
-			 * became offline by this time.
-			 */
-			int			i;
-			nodemask_t	enabled = MtmGetEnabledNodeMask(ignore_disabled);
-
-			for (i = 0; i < MTM_MAX_NODES; i++)
-			{
-				if (BIT_CHECK(participants, i) && !BIT_CHECK(enabled, i))
-				{
-					BIT_CLEAR(participants, i);
-					mtm_log(MtmTxTrace,
-							"GatherPrecommit: dropping node%d from tx participants",
-							i + 1);
-				}
-			}
+			/* dead recv conn */
+			BIT_CLEAR(participants, sender_mask_pos);
 		}
-
-		if (wait)
+		else /* WOULDBLOCK */
 		{
 			/* XXX cache that */
 			rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 100.0,
@@ -498,9 +490,18 @@ gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_d
 			if (rc & WL_POSTMASTER_DEATH)
 				proc_exit(1);
 
+			/* XXX tell the caller about latch reset */
 			if (rc & WL_LATCH_SET)
 				ResetLatch(MyLatch);
+
+			/* waited a bit fruitlessly -- probably sender conn died? */
+			if (rc & WL_TIMEOUT)
+			{
+				participants = dmq_purge_failed_participants(participants,
+															 sendconn_cnt);
+			}
 		}
+
 	}
 }
 
@@ -542,7 +543,7 @@ MtmExplicitPrepare(char *gid)
 
 	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
 
-	gather(participants, (MtmMessage **) messages, &n_messages, false);
+	gather(participants, (MtmMessage **) messages, &n_messages, NULL);
 	dmq_stream_unsubscribe(stream);
 
 	for (i = 0; i < n_messages; i++)
@@ -593,13 +594,13 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 
 		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		gather(participants, (MtmMessage **) messages, &n_messages, NULL);
 
 		FinishPreparedTransaction(gid, true, false);
 
 		/* XXX: make this conditional */
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-		gather(participants, (MtmMessage **) messages, &n_messages, false);
+		gather(participants, (MtmMessage **) messages, &n_messages, NULL);
 
 		dmq_stream_unsubscribe(gid);
 	}

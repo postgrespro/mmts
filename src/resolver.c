@@ -204,7 +204,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		 * ars: we might collect here responses from previous resolving
 		 * sessions, which would fill acks with non MtmLastTermResponse messages.
 		 */
-		gather(connected, (MtmMessage **) acks, &n_acks, true);
+		gather(connected, (MtmMessage **) acks, &n_acks, NULL);
 
 		for (i = 0; i < n_acks; i++)
 		{

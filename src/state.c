@@ -1471,7 +1471,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 
 	/* Add dmq destination */
 	dest = dmq_destination_add(dmq_connstr, dmq_my_name, dmq_node_name,
-							   MtmHeartbeatRecvTimeout);
+							   node_id - 1, MtmHeartbeatRecvTimeout);
 
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->peers[node_id - 1].dmq_dest_id = dest;

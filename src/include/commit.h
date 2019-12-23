@@ -28,6 +28,6 @@ extern void MtmXactCallback(XactEvent event, void *arg);
 extern bool MtmExplicitPrepare(char *gid);
 extern void MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit);
 
-extern void gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_mtm_disabled);
+extern void gather(uint64 participants, MtmMessage **messages, int *msg_count, int *sendconn_cnt);
 
 #endif
