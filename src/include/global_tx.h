@@ -15,11 +15,10 @@
 
 typedef struct
 {
-	/* ars: make int64 or at least fix size */
 	int		ballot;
 	int		node_id;
 } GlobalTxTerm;
-/* ars: I would add macro for 'never accepted' */
+
 #define InvalidGTxTerm ((GlobalTxTerm) {0, 0})
 
 typedef enum

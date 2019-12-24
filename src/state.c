@@ -1297,7 +1297,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 				gtx = GlobalTxAcquire(msg->gid, false);
 				if (!gtx)
-					return; /* ars: why not continue? */
+					continue;
 
 				if (msg->type == MTReq_Abort || msg->type == MTReq_Commit)
 				{
@@ -1364,7 +1364,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 			dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
 		}
 		else
-		{ /* ars: assert has evaporating skills, should wrap it in {} */
+		{
 			Assert(false);
 		}
 

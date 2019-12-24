@@ -30,9 +30,8 @@ typedef enum MtmLogTag
 	DmqPqTiming				= DEBUG2,
 
 	/* resolver */
-	ResolverTasks			= LOG,
-	ResolverTraceTxMsg		= LOG,
-	ResolverTxFinish		= LOG,
+	ResolverState			= LOG,
+	ResolverTx				= LOG,
 
 	/* status worker */
 	StatusRequest			= LOG,

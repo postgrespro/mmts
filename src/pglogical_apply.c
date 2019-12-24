@@ -1038,18 +1038,34 @@ process_remote_commit(StringInfo in,
 
 				/* PREPARE itself */
 				gtx = GlobalTxAcquire(gid, true);
+
 				res = PrepareTransactionBlock(gid);
-				/* ars: should move it two lines down because that's where
-				 * we actually prepare */
-				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 				AllowTempIn2PC = true;
 				CommitTransactionCommand();
-				/*
-				 * ars: we must merge here in_table state with logged one.
-				 * Otherwise, we forget about in and might vote for another
-				 * outcome.
-				 */
-				gtx->state.status = GTXPrepared;
+				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
+
+				if (gtx->state.status == GTXInvalid)
+				{
+					gtx->state.status = GTXPrepared;
+				}
+				else
+				{
+					char   *sstate;
+					bool	done;
+
+					/*
+					 * Save in_table proposal as 3pc state in WAL. If we crash
+					 * without doing that Prepare record will outweight in_table
+					 * state during recovery and we may lose proposal term.
+					 */
+					Assert(gtx->in_table);
+					sstate = serialize_gtx_state(gtx->state.status,
+												 gtx->state.proposal,
+												 gtx->state.accepted);
+					done = SetPreparedTransactionState(gid, sstate, false);
+					Assert(done);
+				}
+
 				GlobalTxRelease(gtx);
 
 				MemoryContextSwitchTo(MtmApplyContext);

@@ -87,20 +87,30 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 {
 	int			n_parsed = 0;
 
-	Assert(state[0] != '\0');
-	*status = GTXInvalid;
-	if (strncmp(state, "pc-", 3) == 0)
-		*status = GTXPreCommitted;
-	else if (strncmp(state, "pa-", 3) == 0)
-		*status = GTXPreAborted;
-	else if (strncmp(state, "pp-", 3) == 0)
+	Assert(state);
+
+	if (state[0] == '\0')
+	{
 		*status = GTXPrepared;
+		*term_prop = (GlobalTxTerm) {1,0};
+		*term_acc = (GlobalTxTerm) {0,0};
+	}
+	else
+	{
+		*status = GTXInvalid;
+		if (strncmp(state, "pc-", 3) == 0)
+			*status = GTXPreCommitted;
+		else if (strncmp(state, "pa-", 3) == 0)
+			*status = GTXPreAborted;
+		else if (strncmp(state, "pp-", 3) == 0)
+			*status = GTXPrepared;
 
-	n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
-					  &term_prop->ballot, &term_prop->node_id,
-					  &term_acc->ballot, &term_acc->node_id);
+		n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
+						&term_prop->ballot, &term_prop->node_id,
+						&term_acc->ballot, &term_acc->node_id);
 
-	Assert(*status != GTXInvalid && n_parsed == 4);
+		Assert(*status != GTXInvalid && n_parsed == 4);
+	}
 }
 
 void
@@ -231,7 +241,7 @@ GlobalTxAcquire(const char *gid, bool create)
 
 /*
  * Release our lock on this transaction and remove it from hash if it is in the
- * decided state. Also 
+ * decided state.
  */
 void
 GlobalTxRelease(GlobalTx *gtx)
@@ -247,11 +257,16 @@ GlobalTxRelease(GlobalTx *gtx)
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
 
-	/* ars: should also remove it if GTXInvalid (e.g. error during PREPARE) */
-	if (gtx->state.status == GTXCommitted || gtx->state.status == GTXAborted)
+	/* status GTXInvalid can be caused by an error during PREPARE */
+	if (gtx->state.status == GTXCommitted ||
+		gtx->state.status == GTXInvalid ||
+		gtx->state.status == GTXAborted)
 		hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
 
 	LWLockRelease(gtx_shared->lock);
+
+	if (gtx->orphaned)
+		mtm_log(ResolverTasks, "Transaction %s is orphaned", gtx->gid);
 
 	my_locked_gtx = NULL;
 }

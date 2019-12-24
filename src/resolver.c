@@ -109,14 +109,14 @@ ResolveForRefereeWinner(int n_all_nodes)
 			if (state == GTXPrepared)
 			{
 				FinishPreparedTransaction(gtx->gid, false, true);
-				mtm_log(ResolverTxFinish, "TXFINISH: %s aborted", gtx->gid);
+				mtm_log(ResolverTx, "TXFINISH: %s aborted", gtx->gid);
 				hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
 				Assert(found);
 			}
 			else if (state == GTXPreCommitted)
 			{
 				FinishPreparedTransaction(gtx->gid, true, true);
-				mtm_log(ResolverTxFinish, "TXFINISH: %s committed", gtx->gid);
+				mtm_log(ResolverTx, "TXFINISH: %s committed", gtx->gid);
 				hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
 				Assert(found);
 			}
@@ -152,7 +152,7 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 		dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
 		/* 
-		 * ars: config could change after last MtmReloadConfig, this might be
+		 * XXX ars: config could change after last MtmReloadConfig, this might be
 		 * false if node was removed.
 		 */
 		Assert(dest_id >= 0);
@@ -184,6 +184,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	if (!have_orphaned)
 		return;
 
+	mtm_log(ResolverState, "Orphaned transactions detected");
+
 	/* Generate next term */
 	{
 		MtmMessage	msg = {T_MtmLastTermRequest};
@@ -209,6 +211,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 		for (i = 0; i < n_acks; i++)
 		{
+			Assert(acks[i]->tag == T_MtmLastTermResponse);
 			if (term_cmp(new_term, acks[i]->term) < 0)
 				new_term = acks[i]->term;
 		}
@@ -217,6 +220,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		new_term.ballot += 1;
 		new_term.node_id = mtm_cfg->my_node_id;
 	}
+
+	mtm_log(ResolverState, "New term is (%d,%d)", new_term.ballot, new_term.node_id);
 
 	/*
 	 * Stamp all orphaned transactions with a new proposal and send status
@@ -247,12 +252,12 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 					gtx->state.accepted),
 				false);
 			gtx->state.proposal = new_term;
-
-			/* 
-			 * ars: we should set GTRS_AwaitStatus here, otherwise if one
+			/*
+			 * We should set GTRS_AwaitStatus here, otherwise if one
 			 * attempt to to resolve failed in GTRS_AwaitAcks, we would
 			 * hang forever in it.
 			 */
+			gtx->resolver_stage = GTRS_AwaitStatus;
 
 			connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
@@ -261,6 +266,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	}
 	LWLockRelease(gtx_shared->lock);
 
+	mtm_log(ResolverState, "Term (%d,%d) is stamped", new_term.ballot, new_term.node_id);
 }
 
 static void
@@ -297,8 +303,7 @@ quorum(MtmConfig *mtm_cfg, GTxState * all_states)
 
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
-		/* ars: a typo? */
-		if (my_state.status == GTXInvalid)
+		if (all_states[i].status == GTXInvalid)
 			continue;
 
 		if (term_cmp(my_state.proposal, all_states[i].proposal) == 0)
@@ -560,7 +565,7 @@ ResolverMain(Datum main_arg)
 					   PG_WAIT_TIMEOUT);
 
 		/* re-try to send requests if there are some unresolved transactions */
-		/* ars: better to set it whenever backend wakes us */
+		/* XXX ars: better to set it whenever backend wakes us */
 		if (rc & WL_TIMEOUT)
 			send_requests = true;
 

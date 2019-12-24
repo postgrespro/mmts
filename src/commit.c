@@ -351,10 +351,6 @@ MtmTwoPhaseCommit()
 		}
 		for (i = 0; i < n_messages; i++)
 		{
-			Assert(messages[i]->status == GTXPrepared || messages[i]->status == GTXAborted);
-			/* ars: this might be false if others start concurrently resolving */
-			Assert(term_cmp(messages[i]->term, (GlobalTxTerm) {1, 0}) == 0);
-
 			if (messages[i]->status == GTXAborted)
 			{
 				FinishPreparedTransaction(gid, false, false);
@@ -372,6 +368,14 @@ MtmTwoPhaseCommit()
 							 errdetail("sqlstate %s (%s)",
 									   unpack_sql_state(messages[i]->errcode), messages[i]->errmsg)));
 			}
+			/* this may be false if others start concurrently resolving */
+			else if (term_cmp(messages[i]->term, (GlobalTxTerm) {1, 0}) != 0 ||
+					 messages[i]->status != GTXPrepared)
+			{
+				ereport(ERROR,
+						(errcode(messages[i]->errcode),
+							errmsg("[multimaster] commit sequence interrupted")));
+			}
 		}
 
 		/* ok, we have all prepare responses, precommit */
@@ -383,7 +387,18 @@ MtmTwoPhaseCommit()
 		gtx->state.accepted = (GlobalTxTerm) {1, 0};
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 		gather(participants, (MtmMessage **) messages, &n_messages, false);
-		/* ars: must check ballots in answers */
+
+		/* check ballots in answers */
+		for (i = 0; i < n_messages; i++)
+		{
+			if (term_cmp(messages[i]->term, (GlobalTxTerm) {1, 0}) != 0 ||
+					 messages[i]->status != GTXPreCommitted)
+			{
+				ereport(ERROR,
+						(errcode(messages[i]->errcode),
+							errmsg("[multimaster] commit sequence interrupted")));
+			}
+		}
 
 		/* we have majority precommits, commit */
 		StartTransactionCommand();
@@ -406,7 +421,7 @@ MtmTwoPhaseCommit()
 			ConditionVariableBroadcast(&Mtm->commit_barrier_cv);
 		}
 
-		if (gtx != NULL) /* ars: have added the check */
+		if (gtx != NULL)
 		{
 			gtx->orphaned = true;
 			ResolverWake();
