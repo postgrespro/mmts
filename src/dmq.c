@@ -142,7 +142,6 @@ struct DmqSharedState
 	volatile int sconn_cnt[DMQ_MAX_DESTINATIONS];
 
 	/* receivers stuff */
-	int			n_receivers;
 	struct
 	{
 		char		name[DMQ_NAME_MAXLEN];
@@ -254,7 +253,6 @@ dmq_shmem_startup_hook(void)
 		memset(dmq_state->destinations, '\0', sizeof(DmqDestination) * DMQ_MAX_DESTINATIONS);
 
 		dmq_state->sender_pid = 0;
-		dmq_state->n_receivers = 0;
 		for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 		{
 			dmq_state->receivers[i].name[0] = '\0';
@@ -380,7 +378,7 @@ dmq_sender_at_exit(int status, Datum arg)
 	int			i;
 
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
-	for (i = 0; i < dmq_state->n_receivers; i++)
+	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
 		if (dmq_state->receivers[i].active &&
 			dmq_state->receivers[i].pid > 0)
@@ -1113,26 +1111,18 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	/* is this sender already connected? */
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
+		if (!dmq_state->receivers[i].active) /* free slot */
 		{
-			if (!dmq_state->receivers[i].active)
-			{
-				receiver_id = i;
-			}
-			else
-				mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
+			receiver_id = i;
+		} else if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
+		{
+			mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
 		}
 	}
 
 	if (receiver_id < 0)
-	{
-		if (dmq_state->n_receivers >= DMQ_MAX_RECEIVERS)
-			mtm_log(ERROR, "[DMQ] maximum number of dmq-receivers reached");
-
-		receiver_id = dmq_state->n_receivers;
-		dmq_state->n_receivers++;
-		strncpy(dmq_state->receivers[receiver_id].name, sender_name, DMQ_NAME_MAXLEN);
-	}
+		mtm_log(ERROR, "[DMQ] maximum number of dmq-receivers reached");
+	strncpy(dmq_state->receivers[receiver_id].name, sender_name, DMQ_NAME_MAXLEN);
 
 	dmq_state->receivers[receiver_id].dsm_h = dsm_segment_handle(seg);
 	dmq_state->receivers[receiver_id].procno = MyProc->pgprocno;
