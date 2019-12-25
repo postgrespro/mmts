@@ -3233,6 +3233,22 @@ MtmMonitor(Datum arg)
 			}
 		}
 
+		/* set_temp_schema */
+		rc = SPI_execute("select proname from pg_proc where proname='set_temp_schema';",
+						 true, 0);
+		if (rc < 0 || rc != SPI_OK_SELECT)
+			mtm_log(ERROR, "Failed to query pg_proc");
+		if (SPI_processed == 0)
+		{
+			rc = SPI_execute("CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void "
+							 "AS '$libdir/multimaster','mtm_set_temp_schema' "
+							 "LANGUAGE C; ", false, 0);
+			if (rc < 0 || rc != SPI_OK_UTILITY)
+				mtm_log(ERROR, "Failed to alter syncpoints relation");
+
+			mtm_log(LOG, "Creating mtm.set_temp_schema()");
+		}
+
 		SPI_finish();
 		PopActiveSnapshot();
 		CommitTransactionCommand();
