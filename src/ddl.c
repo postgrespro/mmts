@@ -136,6 +136,7 @@ static void MtmMakeRelationLocal(Oid relid, bool locked);
 static List *AdjustCreateSequence(List *options);
 
 static void MtmProcessDDLCommand(char const *queryString, bool transactional);
+static void MtmFinishDDLCommand(void);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
 
@@ -229,13 +230,16 @@ static void
 temp_schema_reset(void)
 {
 	Assert(TempDropRegistered);
+
+	MtmTx.contains_ddl = true;
 	MtmProcessDDLCommand(
 						 psprintf("select mtm.set_temp_schema('%s'); "
 								  "DROP SCHEMA IF EXISTS %s CASCADE; "
 								  "DROP SCHEMA IF EXISTS %s_toast CASCADE",
 								  MtmTempSchema, MtmTempSchema, MtmTempSchema),
-						 false
+						 true
 		);
+	MtmFinishDDLCommand();
 }
 
 /* Exit callback to call temp_schema_reset() */
