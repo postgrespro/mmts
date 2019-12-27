@@ -44,6 +44,7 @@ typedef uint64 nodemask_t;
 
 #define LSN_FMT "%" INT64_MODIFIER "x"
 
+#define MAX_NODES 64
 #define BIT_CHECK(mask, bit) (((mask) & ((nodemask_t)1 << (bit))) != 0)
 #define BIT_CLEAR(mask, bit) (mask &= ~((nodemask_t)1 << (bit)))
 #define BIT_SET(mask, bit)   (mask |= ((nodemask_t)1 << (bit)))

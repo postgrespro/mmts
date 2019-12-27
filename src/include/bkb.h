@@ -6,7 +6,7 @@
 
 #include "postgres.h"
 
-#define MAX_NODES sizeof(uint64)
+#include "multimaster.h" /* xxx move nodemask to separate file */
 
 extern uint64 MtmFindMaxClique(uint64 *matrix, int n_modes, int *clique_size);
 
