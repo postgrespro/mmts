@@ -361,10 +361,10 @@ ConsiderGenSwitch(Generation gen, nodemask_t donors) {
      * one must be forbidden because old gen members might not have this new PREPARE
      * and thus can only get it later, creating reordering.
      *
-     * This lwlock is not very nice, however; first, it makes Ctrl-c-ing
-     * query during PREPARE writing impossible, second, it doesn't sound efficient,
-     * third, unfairness of lwlocks might make taking it in excl mode impossible
-     * (that can be fought with sleep hack though).
+     * This lwlock is not very nice, however; first, messing with lwlocks with
+     * across CommitTransactionCommand is dubious, second, unfairness of lwlocks
+     * might make taking it in excl mode impossible (that can be fought with
+     * sleep hack though).
      * An alternative (already present in mtm)  is announcing
      * 'I'm preparing'/'I'm changing enabled mask' in shmem under spinlock and
      * using condvars for waking each other after changing this.
