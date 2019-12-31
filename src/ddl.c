@@ -18,6 +18,7 @@
 #include "executor/executor.h"
 #include "catalog/pg_proc.h"
 #include "commands/partition.h"
+#include "commands/tablecmds.h"
 #include "parser/parse_type.h"
 #include "parser/parse_func.h"
 #include "commands/sequence.h"
@@ -1311,7 +1312,24 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 				break;
 
 			case T_DropStmt:
-				RemoveObjects((DropStmt *) MtmCapturedDDL);
+			{
+				DropStmt *stmt = (DropStmt *) MtmCapturedDDL;
+
+				switch (stmt->removeType)
+				{
+					case OBJECT_INDEX:
+					case OBJECT_TABLE:
+					case OBJECT_SEQUENCE:
+					case OBJECT_VIEW:
+					case OBJECT_MATVIEW:
+					case OBJECT_FOREIGN_TABLE:
+						RemoveRelations(stmt);
+						break;
+					default:
+						RemoveObjects(stmt);
+						break;
+				}
+			}
 				break;
 
 			case T_CreateTableSpaceStmt:
