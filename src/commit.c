@@ -462,7 +462,7 @@ gather(uint64 participants, MtmMessage **messages, int *msg_count, bool ignore_d
 		ret = dmq_pop_nb(&sender_id, &msg, participants, &wait);
 		if (ret)
 		{
-			messages[*msg_count] = MtmMesageUnpack(&msg);
+			messages[*msg_count] = MtmMessageUnpack(&msg);
 			// Assert(raw_msg->tag == T_MtmTxResponse);
 			// Assert(messages[*msg_count]->node_id == sender_to_node[sender_id]);
 

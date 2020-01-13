@@ -86,6 +86,23 @@ MtmShared  *Mtm;
 
 MemoryContext MtmApplyContext;
 
+char const * const MtmTxRequestValueMnem[] = {
+	"MTReq_Abort",
+	"MTReq_Commit",
+	"MTReq_Precommit",
+	"MTReq_Preabort",
+	"MTReq_Status"
+};
+
+char const *const MtmMessageTagMnem[] =
+{
+	"MtmTxResponse",
+	"MtmTxRequest",
+	"MtmTxStatusResponse",
+	"MtmLastTermRequest",
+	"MtmLastTermResponse"
+};
+
 /*  XXX: do we really need all this guys (except ddd)? */
 static TransactionManager MtmTM =
 {
@@ -1466,7 +1483,7 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
 // XXX: add also startmessage/endmessage
 
 StringInfo
-MtmMesagePack(MtmMessage *anymsg)
+MtmMessagePack(MtmMessage *anymsg)
 {
 	StringInfo	s = makeStringInfo();
 
@@ -1534,7 +1551,7 @@ MtmMesagePack(MtmMessage *anymsg)
 }
 
 MtmMessage *
-MtmMesageUnpack(StringInfo s)
+MtmMessageUnpack(StringInfo s)
 {
 	MtmMessageTag msg_tag = pq_getmsgbyte(s);
 	MtmMessage *anymsg;
@@ -1616,4 +1633,72 @@ MtmMesageUnpack(StringInfo s)
 	}
 
 	return anymsg;
+}
+
+char *
+MtmMesageToString(MtmMessage *anymsg)
+{
+	StringInfoData	si;
+
+	initStringInfo(&si);
+
+	appendStringInfoString(&si, "{");
+	appendStringInfo(&si, "\"tag\": \"%s\"", MtmMessageTagMnem[anymsg->tag]);
+
+	switch (messageTag(anymsg))
+	{
+		case T_MtmTxResponse:
+		{
+			MtmTxResponse   *msg = (MtmTxResponse *) anymsg;
+
+			appendStringInfo(&si, ", \"node_id\": %d", msg->node_id);
+			appendStringInfo(&si, ", \"status\": \"%s\"", GlobalTxStatusMnem[msg->status]);
+			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
+			appendStringInfo(&si, ", \"errcode\": %d", msg->errcode);
+			appendStringInfo(&si, ", \"errmsg\": \"%s\"", msg->errmsg);
+			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
+			break;
+		}
+
+		case T_MtmTxRequest:
+		{
+			MtmTxRequest   *msg = (MtmTxRequest *) anymsg;
+
+			appendStringInfo(&si, ", \"type\": \"%s\"", MtmTxRequestValueMnem[msg->type]);
+			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
+			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
+			break;
+		}
+
+		case T_MtmTxStatusResponse:
+		{
+			MtmTxStatusResponse   *msg = (MtmTxStatusResponse *) anymsg;
+
+			appendStringInfo(&si, ", \"node_id\": %d", msg->node_id);
+			appendStringInfo(&si, ", \"status\": \"%s\"", GlobalTxStatusMnem[msg->state.status]);
+			appendStringInfo(&si, ", \"proposal_ballot\": [%d, %d]", msg->state.proposal.ballot, msg->state.proposal.node_id);
+			appendStringInfo(&si, ", \"accepted_ballot\": [%d, %d]", msg->state.accepted.ballot, msg->state.accepted.node_id);
+			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
+			break;
+		}
+
+		case T_MtmLastTermRequest:
+			/* tag-only message */
+			break;
+
+		case T_MtmLastTermResponse:
+		{
+			MtmLastTermResponse   *msg = (MtmLastTermResponse *) anymsg;
+
+			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
+			break;
+		}
+
+		default:
+			Assert(false);
+	}
+
+	appendStringInfoString(&si, "}");
+
+	return si.data;
 }

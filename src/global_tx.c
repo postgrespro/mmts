@@ -36,6 +36,16 @@ gtx_shared_data *gtx_shared;
 static GlobalTx *my_locked_gtx;
 static bool gtx_exit_registered;
 
+char const *const GlobalTxStatusMnem[] =
+{
+	"GTXInvalid",
+	"GTXPrepared",
+	"GTXPreCommitted",
+	"GTXPreAborted",
+	"GTXCommitted",
+	"GTXAborted"
+};
+
 static void delete_table_proposal(const char *gid);
 
 int
@@ -469,7 +479,72 @@ GlobalTxMarkOrphaned(int node_id)
 	{
 		int			tx_node_id = MtmGidParseNodeId(gtx->gid);
 		if (tx_node_id == node_id)
+		{
 			gtx->orphaned = true;
+			mtm_log(MtmTxTrace, "%s is orphaned", gtx->gid);
+		}
 	}
 	LWLockRelease(gtx_shared->lock);
+}
+
+static char *
+GlobalTxStateToString(GTxState *gtx_state)
+{
+	StringInfoData	si;
+
+	initStringInfo(&si);
+	appendStringInfoString(&si, "{");
+	appendStringInfo(&si, "\"status\": \"%s\"", GlobalTxStatusMnem[gtx_state->status]);
+	appendStringInfo(&si, ", \"proposal\": [%d, %d]", gtx_state->proposal.ballot, gtx_state->proposal.node_id);
+	appendStringInfo(&si, ", \"accepted\": [%d, %d]", gtx_state->accepted.ballot, gtx_state->accepted.node_id);
+	appendStringInfoString(&si, "}");
+
+	return si.data;
+}
+
+char *
+GlobalTxToString(GlobalTx *gtx)
+{
+	StringInfoData si;
+	int			i;
+	bool		empty = true;
+
+	initStringInfo(&si);
+	appendStringInfoString(&si, "{");
+	appendStringInfo(&si, "\"gid\": \"%s\"", gtx->gid);
+	appendStringInfo(&si, ", \"state.status\": \"%s\"", GlobalTxStatusMnem[gtx->state.status]);
+	appendStringInfo(&si, ", \"state.proposal\": [%d, %d]", gtx->state.proposal.ballot, gtx->state.proposal.node_id);
+	appendStringInfo(&si, ", \"state.accepted\": [%d, %d]", gtx->state.accepted.ballot, gtx->state.accepted.node_id);
+	appendStringInfo(&si, ", \"orphaned\": %s", gtx->orphaned ? "true" : "false");
+	appendStringInfo(&si, ", \"in_table\": %s", gtx->in_table ? "true" : "false");
+	appendStringInfo(&si, ", \"resolver_stage\": %d", gtx->resolver_stage);
+
+	appendStringInfoString(&si, ", \"phase1_acks\": [");
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (gtx->phase1_acks[i].status == GTXInvalid)
+			continue;
+
+		if (!empty)
+			appendStringInfoString(&si, ", ");
+		appendStringInfoString(&si, GlobalTxStateToString(&gtx->phase1_acks[i]));
+		empty = false;
+	}
+	appendStringInfoString(&si, "], ");
+
+	empty = true;
+	appendStringInfoString(&si, ", \"phase2_acks\": [");
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (gtx->phase2_acks[i].status == GTXInvalid)
+			continue;
+
+		if (!empty)
+			appendStringInfoString(&si, ", ");
+		appendStringInfoString(&si, GlobalTxStateToString(&gtx->phase2_acks[i]));
+		empty = false;
+	}
+	appendStringInfoString(&si, "]}");
+
+	return si.data;
 }

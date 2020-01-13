@@ -881,7 +881,7 @@ mtm_send_xid_reply(TransactionId xid, int node_id,
 	msg.term = (GlobalTxTerm) {1,0};
 	msg.errcode = sqlerrcode;
 	msg.errmsg = edata ? edata->message : "";
-	packed_msg = MtmMesagePack((MtmMessage *) &msg);
+	packed_msg = MtmMessagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, psprintf("xid" XID_FMT, xid),
 					packed_msg->data, packed_msg->len);
@@ -917,7 +917,7 @@ mtm_send_gid_reply(GlobalTx *gtx, int node_id)
 	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = "";
 	msg.gid = ""; /* we reply to coordinator in gid-named channel */
-	packed_msg = MtmMesagePack((MtmMessage *) &msg);
+	packed_msg = MtmMessagePack((MtmMessage *) &msg);
 
 	dmq_push_buffer(dest_id, gtx->gid, packed_msg->data, packed_msg->len);
 	mtm_log(MtmApplyTrace,

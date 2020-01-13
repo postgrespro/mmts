@@ -18,8 +18,8 @@
 typedef enum MtmLogTag
 {
 	/* general */
-	MtmTxTrace				= DEBUG1,
-	MtmTxFinish				= DEBUG1,
+	MtmTxTrace				= LOG,
+	MtmTxFinish				= LOG,
 
 	/* dmq */
 	DmqStateIntermediate	= DEBUG2,
@@ -32,6 +32,7 @@ typedef enum MtmLogTag
 	/* resolver */
 	ResolverState			= LOG,
 	ResolverTx				= LOG,
+	ResolverTasks			= LOG,
 
 	/* status worker */
 	StatusRequest			= LOG,

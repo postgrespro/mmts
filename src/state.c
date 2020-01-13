@@ -1197,7 +1197,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 	while (dmq_pop_nb(&sender_id, &packed_msg, MtmGetConnectedNodeMask(), &wait))
 	{
-		MtmMessage *raw_msg = MtmMesageUnpack(&packed_msg);
+		MtmMessage *raw_msg = MtmMessageUnpack(&packed_msg);
 		int			sender_node_id;
 		int			dest_id;
 
@@ -1285,7 +1285,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 						gtx->gid
 					};
 
-					packed_msg = MtmMesagePack((MtmMessage *) &resp);
+					packed_msg = MtmMessagePack((MtmMessage *) &resp);
 					dmq_push_buffer(dest_id, "txresp", packed_msg->data,
 									packed_msg->len);
 				}
@@ -1340,7 +1340,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 							"",
 							gtx->gid
 						};
-						packed_msg = MtmMesagePack((MtmMessage *) &resp);
+						packed_msg = MtmMessagePack((MtmMessage *) &resp);
 						dmq_push_buffer(dest_id, "txresp", packed_msg->data,
 										packed_msg->len);
 					}
@@ -1360,7 +1360,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 				max_proposal
 			};
 
-			packed_msg = MtmMesagePack((MtmMessage *) &resp);
+			packed_msg = MtmMessagePack((MtmMessage *) &resp);
 			dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
 		}
 		else

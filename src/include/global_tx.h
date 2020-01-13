@@ -31,6 +31,8 @@ typedef enum
 	GTXAborted
 } GlobalTxStatus;
 
+extern char const *const GlobalTxStatusMnem[];
+
 typedef enum
 {
 	GTRS_AwaitStatus,
@@ -83,5 +85,7 @@ GlobalTxTerm GlobalTxGetMaxProposal(void);
 void GlobalTxSaveInTable(const char *gid, GlobalTxStatus status,
 						 GlobalTxTerm term_prop, GlobalTxTerm term_acc);
 void GlobalTxMarkOrphaned(int node_id);
+
+char *GlobalTxToString(GlobalTx *gtx);
 
 #endif							/* GLOBAL_TX_H */

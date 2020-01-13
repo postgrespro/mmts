@@ -4,8 +4,7 @@
  *	  Recovery procedures to resolve transactions that were left uncommited
  *	  because of detected failure.
  *
- * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
- * Portions Copyright (c) 1994, Regents of the University of California
+ * Copyright (c) 2015-2019, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */
@@ -200,7 +199,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		/* ask peers about their last term */
 		connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-		scatter(mtm_cfg, connected, "txreq", MtmMesagePack((MtmMessage *) &msg));
+		scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &msg));
 
 		/* .. and get all responses */
 		/* 
@@ -261,7 +260,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 			connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-			scatter(mtm_cfg, connected, "txreq", MtmMesagePack((MtmMessage *) &status_msg));
+			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &status_msg));
 		}
 	}
 	LWLockRelease(gtx_shared->lock);
@@ -286,7 +285,7 @@ handle_responses(MtmConfig *mtm_cfg)
 		 */
 		StartTransactionCommand();
 
-		raw_msg = MtmMesageUnpack(&msg);
+		raw_msg = MtmMessageUnpack(&msg);
 		Assert(raw_msg->tag == T_MtmTxStatusResponse ||
 			   raw_msg->tag == T_MtmTxResponse);
 		handle_response(mtm_cfg, raw_msg);
@@ -326,9 +325,13 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 	else
 		Assert(false);
 
+	mtm_log(ResolverTx, "handle_response: got '%s'", MtmMesageToString(raw_msg));
+
 	gtx = GlobalTxAcquire(gid, false);
 	if (!gtx)
 		return;
+
+	mtm_log(ResolverTx, "handle_response: processing gtx %s", GlobalTxToString(gtx));
 
 	if (gtx->resolver_stage == GTRS_AwaitStatus)
 	{
@@ -344,11 +347,13 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		{
 			gtx->state.status = GTXCommitted;
 			FinishPreparedTransaction(gtx->gid, true, false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gtx->gid);
 		}
 		else if (msg->state.status == GTXAborted)
 		{
 			gtx->state.status = GTXAborted;
 			FinishPreparedTransaction(gtx->gid, false, false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gtx->gid);
 		}
 		else if (quorum(mtm_cfg, gtx->phase1_acks))
 		{
@@ -401,6 +406,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			gtx->state.accepted = gtx->state.proposal;
 			gtx->resolver_stage = GTRS_AwaitAcks;
 
+			mtm_log(MtmTxTrace, "TXTRACE: set state %s", GlobalTxToString(gtx));
+
 			request_msg = (MtmTxRequest) {
 				T_MtmTxRequest,
 				decision == GTXPreCommitted ? MTReq_Precommit : MTReq_Preabort,
@@ -409,7 +416,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			};
 			connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-			scatter(mtm_cfg, connected, "txreq", MtmMesagePack((MtmMessage *) &request_msg));
+			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
 		}
 
 	}
@@ -442,6 +449,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			Assert(gtx->state.status == msg->status);
 			FinishPreparedTransaction(msg->gid, msg->status == GTXPreCommitted,
 									  false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s %s", msg->gid,
+					msg->status == GTXPreCommitted ? "committed" : "aborted");
 			gtx->state.status = msg->status;
 
 			request_msg = (MtmTxRequest) {
@@ -452,7 +461,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			};
 			connected = MtmGetConnectedNodeMask() &
 						~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-			scatter(mtm_cfg, connected, "txreq", MtmMesagePack((MtmMessage *) &request_msg));
+			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
 		}
 	}
 	else
@@ -524,7 +533,8 @@ ResolverMain(Datum main_arg)
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 	Mtm->resolver_pid = MyProcPid;
 	LWLockRelease(Mtm->lock);
-	mtm_log(ResolverTraceTxMsg, "Resolver started");
+
+	mtm_log(ResolverState, "Resolver started");
 
 	for (;;)
 	{

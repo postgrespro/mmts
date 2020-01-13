@@ -15,7 +15,7 @@
  */
 typedef enum
 {
-	T_MtmTxResponse,
+	T_MtmTxResponse = 0,
 	T_MtmTxRequest,
 	T_MtmTxStatusResponse,
 	T_MtmLastTermRequest,
@@ -26,6 +26,17 @@ typedef struct
 {
 	MtmMessageTag		tag;
 } MtmMessage;
+
+// char const *const MtmMessageTagMnem[] =
+// {
+// 	"MtmTxResponse",
+// 	"MtmTxRequest",
+// 	"MtmTxStatusResponse",
+// 	"MtmLastTermRequest",
+// 	"MtmLastTermResponse"
+// };
+
+extern char const *const MtmMessageTagMnem[];
 
 #define messageTag(msgptr)		(((const MtmMessage *)(msgptr))->tag)
 
@@ -65,7 +76,7 @@ typedef struct
  */
 typedef enum
 {
-	MTReq_Abort,
+	MTReq_Abort = 0,
 	MTReq_Commit,
 	MTReq_Precommit,  /* 2a with value commit */
 	MTReq_Preabort,   /* 2a with value abort */
@@ -80,6 +91,16 @@ typedef struct
 	const char		   *gid;
 } MtmTxRequest;
 
+// char const * const MtmTxRequestValueMnem[] = {
+// 	"MTReq_Abort",
+// 	"MTReq_Commit",
+// 	"MTReq_Precommit",
+// 	"MTReq_Preabort",
+// 	"MTReq_Status"
+// };
+
+extern char const * const MtmTxRequestValueMnem[];
+
 /*
  * Status response, phase 1b of paxos on a given transaction result.
  * Sent from mtm-status to mtm-resolver worker.
@@ -92,7 +113,8 @@ typedef struct
 	const char		   *gid;
 } MtmTxStatusResponse;
 
-StringInfo MtmMesagePack(MtmMessage *anymsg);
-MtmMessage *MtmMesageUnpack(StringInfo s);
+StringInfo MtmMessagePack(MtmMessage *anymsg);
+MtmMessage *MtmMessageUnpack(StringInfo s);
+char *MtmMesageToString(MtmMessage *anymsg);
 
 #endif							/* MESSAGING_H */
