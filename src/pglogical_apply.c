@@ -899,7 +899,7 @@ mtm_send_xid_reply(TransactionId xid, int node_id,
  * Send response to coordinator after PRECOMMIT or COMMIT_PREPARED.
  */
 static void
-mtm_send_gid_reply(GlobalTx *gtx, int node_id)
+mtm_send_gid_reply(char *gid, GlobalTxStatus status, GlobalTxTerm term, int node_id)
 {
 	DmqDestinationId dest_id;
 	StringInfo	packed_msg;
@@ -913,17 +913,17 @@ mtm_send_gid_reply(GlobalTx *gtx, int node_id)
 
 	msg.tag = T_MtmTxResponse;
 	msg.node_id = Mtm->my_node_id;
-	msg.status = gtx->state.status;
-	msg.term = gtx->state.accepted;
+	msg.status = status;
+	msg.term = term;
 	msg.errcode = ERRCODE_SUCCESSFUL_COMPLETION;
 	msg.errmsg = "";
 	msg.gid = ""; /* we reply to coordinator in gid-named channel */
 	packed_msg = MtmMessagePack((MtmMessage *) &msg);
 
-	dmq_push_buffer(dest_id, gtx->gid, packed_msg->data, packed_msg->len);
+	dmq_push_buffer(dest_id, gid, packed_msg->data, packed_msg->len);
 	mtm_log(MtmApplyTrace,
 			"MtmFollowerSendReply: %s to node%d (dest %d)",
-			gtx->gid, node_id, dest_id);
+			gid, node_id, dest_id);
 
 	pfree(packed_msg->data);
 	pfree(packed_msg);
@@ -979,7 +979,15 @@ process_remote_commit(StringInfo in,
 
 				gtx = GlobalTxAcquire(gid, false);
 				if (!gtx)
+				{
+					/*
+					 * Xact was already finished. Still reply to coordinator
+					 * so he doesn't wait for us.
+					 */
+					if (receiver_ctx->parallel_allowed)
+						mtm_send_gid_reply(gid, GTXInvalid, InvalidGTxTerm, origin_node);
 					break;
+				}
 
 				if (term_cmp(msg_term, gtx->state.proposal) >= 0)
 				{
@@ -994,17 +1002,19 @@ process_remote_commit(StringInfo in,
 					Assert(done);
 
 					CommitTransactionCommand();
+					MemoryContextSwitchTo(MtmApplyContext);
 					gtx->state.proposal = msg_term;
 					gtx->state.accepted = msg_term;
 					gtx->state.status = msg_status;
-					MemoryContextSwitchTo(MtmApplyContext);
 
 					mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-					if (receiver_ctx->parallel_allowed)
-						mtm_send_gid_reply(gtx, origin_node);
 
 					MtmEndSession(origin_node, true);
 				}
+
+				if (receiver_ctx->parallel_allowed)
+					mtm_send_gid_reply(gid, gtx->state.status,
+									   gtx->state.accepted, origin_node);
 
 				GlobalTxRelease(gtx);
 				break;
@@ -1021,6 +1031,7 @@ process_remote_commit(StringInfo in,
 						   *prev_item;
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				GlobalTx   *gtx;
+				GlobalTxStatus status;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == current_gtid->my_xid);
@@ -1045,6 +1056,7 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 
+				/* be careful not to lose vote we could have already given */
 				if (gtx->state.status == GTXInvalid)
 				{
 					gtx->state.status = GTXPrepared;
@@ -1066,6 +1078,7 @@ process_remote_commit(StringInfo in,
 					done = SetPreparedTransactionState(gid, sstate, false);
 					Assert(done);
 				}
+				status = gtx->state.status;
 
 				GlobalTxRelease(gtx);
 
@@ -1078,7 +1091,7 @@ process_remote_commit(StringInfo in,
 				if (receiver_ctx->parallel_allowed)
 				{
 					mtm_send_xid_reply(current_gtid->xid, origin_node,
-									   res ? GTXPrepared : GTXAborted, NULL);
+									   status, NULL);
 				}
 
 				/*

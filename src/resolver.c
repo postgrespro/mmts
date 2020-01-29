@@ -400,6 +400,15 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			sstate = serialize_gtx_state(decision, gtx->state.proposal,
 										 gtx->state.proposal);
 			done = SetPreparedTransactionState(gtx->gid, sstate, false);
+			/*
+			 * If acquired gtx exists, it must not be finished yet, so state
+			 * change ought to succeed.
+			 *
+			 * this if seems enough to make compilers believe var is used
+			 * without asserts
+			 */
+			if (!done)
+				Assert(false);
 			gtx->state.status = decision;
 			gtx->state.accepted = gtx->state.proposal;
 			gtx->resolver_stage = GTRS_AwaitAcks;
