@@ -298,7 +298,7 @@ MtmSuspendTransaction(void)
 	MtmCurrentTrans *ctx = malloc(sizeof(MtmCurrentTrans));
 
 	*ctx = MtmTx;
-	MtmBeginTransaction();
+	CallXactCallbacks(XACT_EVENT_START);
 	return ctx;
 }
 
