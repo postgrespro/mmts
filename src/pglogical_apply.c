@@ -356,19 +356,28 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 	{
 		case 'C':
 			{
+				char *activity = psprintf("non-tx ddl %s", messageBody);
+				pgstat_report_activity(STATE_RUNNING, activity);
+				pfree(activity);
+
 				mtm_log(MtmApplyMessage, "Executing non-tx DDL message %s", messageBody);
 				SetCurrentStatementStartTimestamp();
 				StartTransactionCommand();
 				MtmApplyDDLMessage(messageBody, false);
 				CommitTransactionCommand();
-				//XXX
-					standalone = true;
+
+				pgstat_report_activity(STATE_RUNNING, NULL);
+				standalone = true;
 				break;
 			}
 		case 'D':
 			{
+				char *activity = psprintf("tx ddl %s", messageBody);
+				pgstat_report_activity(STATE_RUNNING, activity);
+				pfree(activity);
 				mtm_log(MtmApplyMessage, "Executing tx DDL message %s", messageBody);
 				MtmApplyDDLMessage(messageBody, true);
+				pgstat_report_activity(STATE_RUNNING, NULL);
 				break;
 			}
 		case 'L':
@@ -1587,14 +1596,15 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 
 		/* log error immediately, before the cleanup */
 		MemoryContextSwitchTo(MtmApplyContext);
+
 		edata = CopyErrorData();
 		EmitErrorReport();
 		FlushErrorState();
 
+		pgstat_report_activity(STATE_RUNNING, NULL);
 		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
 				   rwctx->txlist_pos);
 		rwctx->txlist_pos = -1;
-
 		query_cancel_allowed = false;
 
 		/*
