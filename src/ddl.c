@@ -646,6 +646,30 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  char *completionTag)
 {
+
+	/*
+	 * Quick exit if multimaster is not enabled.
+	 * XXX it's better to do MtmIsEnabled here, but this needs cache access
+	 * which requires live transaction, and suprisingly in ROLLBACK to x in
+	 * enum.sql test we got here in TRANS_ABORT.
+	 */
+	if (Mtm->my_node_id == 0)
+	{
+		if (PreviousProcessUtilityHook != NULL)
+		{
+			PreviousProcessUtilityHook(pstmt, queryString,
+									   context, params, queryEnv,
+									   dest, completionTag);
+		}
+		else
+		{
+			standard_ProcessUtility(pstmt, queryString,
+									context, params, queryEnv,
+									dest, completionTag);
+		}
+		return;
+	}
+
 	if (MtmIsLogicalReceiver)
 	{
 		MtmProcessUtilityReceiver(pstmt, queryString, context, params,
