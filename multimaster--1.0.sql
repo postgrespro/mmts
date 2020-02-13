@@ -204,6 +204,22 @@ CREATE FUNCTION mtm.pg_lsn_to_bigint(lsn pg_lsn) RETURNS bigint AS $$
 $$
 LANGUAGE sql;
 
+/*
+ * Don't perform 3pc on syncpoint tables updates.
+ * Note that pg_filter_decode_txn currently prevents plain COMMITs replay, so
+ * this automatically means changes are not streamed.
+ */
+CREATE FUNCTION mtm.syncpoint_dml() RETURNS TRIGGER AS $$
+BEGIN
+  SET LOCAL multimaster.no_3pc TO TRUE;
+  RETURN NULL; -- result is ignored since this is an AFTER trigger
+END
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER on_syncpoint_dml
+    AFTER INSERT OR DELETE OR UPDATE ON mtm.syncpoints
+    FOR EACH ROW EXECUTE FUNCTION mtm.syncpoint_dml();
+
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$
 DECLARE

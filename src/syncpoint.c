@@ -64,7 +64,11 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
 			return mtm_cfg->nodes[i].node_id;
 	}
 
-	Assert(false);
+	/*
+	 * Could happen if node was dropped. Might lead to skipping dropped node
+	 * xacts on some lagged node, but who ever said we support membership
+	 * changes under load?
+	 */
 	return -1;
 }
 

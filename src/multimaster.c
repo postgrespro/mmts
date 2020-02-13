@@ -135,6 +135,7 @@ int			MtmHeartbeatRecvTimeout;
 char	   *MtmRefereeConnStr;
 bool		MtmBreakConnection;
 bool		MtmWaitPeerCommits;
+bool		MtmNo3PC;
 
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
@@ -544,6 +545,17 @@ _PG_init(void)
 							 NULL,
 							 &MtmWaitPeerCommits,
 							 true,
+PGC_USERSET,
+0,
+NULL,
+NULL,
+NULL);
+
+	DefineCustomBoolVariable("multimaster.no_3pc",
+							 "Don't perform 3pc for current xact. For internal usage only.",
+							 NULL,
+							 &MtmNo3PC,
+							 false,
 							 PGC_USERSET,
 							 0,
 							 NULL,
@@ -551,8 +563,7 @@ _PG_init(void)
 							 NULL
 		);
 
-
-	// MtmDeadlockDetectorInit(MTM_MAX_NODES);
+	/* MtmDeadlockDetectorInit(MTM_MAX_NODES); */
 
 	/*
 	 * Request additional shared resources.	 (These are no-ops if we're not in

@@ -220,6 +220,7 @@ extern char *MtmRefereeConnStr;
 extern int	MtmMaxWorkers;
 extern bool MtmBreakConnection;
 extern bool MtmWaitPeerCommits;
+extern bool MtmNo3PC;
 
 extern void MtmSleep(int64 interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
