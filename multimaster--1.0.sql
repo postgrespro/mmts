@@ -48,6 +48,27 @@ CREATE TRIGGER on_node_drop
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_drop();
 
+/* remove syncpoints of node on its drop */
+CREATE FUNCTION mtm.after_node_drop_plpgsql() RETURNS TRIGGER AS $$
+BEGIN
+  DELETE FROM mtm.syncpoints WHERE node_id = OLD.id;
+  /*
+   * Trigger on sp table modification will set no_3pc, but in case of node drop
+   * we still want to go through distributed commit. mtm.local_tables ensures
+   * sp table changes won't be streamed though as they are not consistent
+   * among the nodes.
+   */
+  SET multimaster.no_3pc TO FALSE;
+  RETURN NULL; -- result is ignored since this is an AFTER trigger
+END
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER on_node_drop_plpgsql
+    AFTER DELETE ON mtm.cluster_nodes
+    FOR EACH ROW
+    EXECUTE FUNCTION mtm.after_node_drop_plpgsql();
+
+
 CREATE FUNCTION mtm.node_info(id int)
 RETURNS mtm.node_info
 AS 'MODULE_PATHNAME','mtm_node_info'
@@ -206,8 +227,6 @@ LANGUAGE sql;
 
 /*
  * Don't perform 3pc on syncpoint tables updates.
- * Note that pg_filter_decode_txn currently prevents plain COMMITs replay, so
- * this automatically means changes are not streamed.
  */
 CREATE FUNCTION mtm.syncpoint_dml() RETURNS TRIGGER AS $$
 BEGIN
@@ -219,6 +238,14 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER on_syncpoint_dml
     AFTER INSERT OR DELETE OR UPDATE ON mtm.syncpoints
     FOR EACH ROW EXECUTE FUNCTION mtm.syncpoint_dml();
+
+/*
+ * Note that pg_filter_decode_txn currently prevents plain COMMITs replay, so
+ * this automatically ensures manual modifications won't be streamed. However, we
+ * cleanup node syncpoints on its removal, and drop_node surely ought to go
+ * through 3pc -- and there we do need to filter out these changes.
+ */
+INSERT INTO mtm.local_tables VALUES ('mtm', 'syncpoints');
 
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$
