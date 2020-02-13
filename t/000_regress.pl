@@ -57,6 +57,10 @@ $schedule =~ s/largeobject//;
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
+END {
+	unlink "../../src/test/regress/regression.diffs";
+}
+
 TestLib::system_log($ENV{'PG_REGRESS'},
 	'--host=127.0.0.1', "--port=$port",
 	'--use-existing', '--bindir=',
