@@ -157,11 +157,7 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 {
 	char	   *sql;
 	int			rc;
-	int			i;
-	XLogRecPtr	restart_lsn,
-				min_trim_lsn = InvalidXLogRecPtr;
-	MtmConfig  *cfg = MtmLoadConfig();
-
+	XLogRecPtr	restart_lsn;
 	Assert(trim_lsn != InvalidXLogRecPtr);
 
 	/* Load latest checkpoint for given node */
@@ -197,29 +193,12 @@ AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
 	 * Need to delete old syncpoints.
 	 */
 
-	/* Update trim_lsn for current node and calculate min_trim_lsn */
-	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
-	min_trim_lsn = restart_lsn;
-	Mtm->peers[node_id - 1].trim_lsn = restart_lsn;
-	for (i = 0; i < cfg->n_nodes; i++)
-	{
-		int			node_id = cfg->nodes[i].node_id;
-
-		if (node_id == cfg->my_node_id)
-			continue;
-
-		if (Mtm->peers[node_id - 1].trim_lsn < min_trim_lsn)
-			min_trim_lsn = Mtm->peers[node_id - 1].trim_lsn;
-	}
-	LWLockRelease(Mtm->lock);
-
 	/* Advance recovery slot if possibble */
-	if (min_trim_lsn != InvalidXLogRecPtr)
-		PhysicalConfirmReceivedLocation(min_trim_lsn);
+	PhysicalConfirmReceivedLocation(restart_lsn);
 
 	mtm_log(SyncpointApply,
-			"Syncpoint processed: trim recovery slot to %" INT64_MODIFIER "x (restart_lsn=%" INT64_MODIFIER "x)",
-			min_trim_lsn, restart_lsn);
+			"Syncpoint processed: trim recovery slot to %" INT64_MODIFIER "x",
+			restart_lsn);
 }
 
 
