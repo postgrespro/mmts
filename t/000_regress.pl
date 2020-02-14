@@ -59,6 +59,8 @@ TestLib::append_to_file('parallel_schedule', $schedule);
 
 END {
 	unlink "../../src/test/regress/regression.diffs";
+	my @outfiles = <../../src/test/regress/results/*.out>;
+	unlink @outfiles;
 }
 
 TestLib::system_log($ENV{'PG_REGRESS'},
