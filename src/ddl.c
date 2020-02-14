@@ -966,9 +966,21 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 				if (indexStmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 				{
-					MtmProcessDDLCommand(stmt_string, false);
-					skipCommand = true;
-					pg_usleep(USECS_PER_SEC);	/* XXX */
+					/*
+					 * Our brand new straightforward deadlock detector (bail
+					 * out whenever receiver is waiting for anyone,
+					 * essentially) is not aware of non-transactional DDL yet,
+					 * which creates false deadlocks in regression tests.
+					 * Technically this is true for any other non-tx DDL, but
+					 * other forms haven't created problems for now.
+					 */
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("multimaster doesn't support CREATE INDEX CONCURRENTLY")));
+					/*
+					 * MtmProcessDDLCommand(stmt_string, false);
+					 * skipCommand = true;
+					 */
 				}
 				break;
 			}
@@ -989,13 +1001,13 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			{
 				DropStmt   *stmt = (DropStmt *) parsetree;
 
-				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent)
+				if (stmt->removeType == OBJECT_INDEX && stmt->concurrent &&
+					context == PROCESS_UTILITY_TOPLEVEL)
 				{
-					if (context == PROCESS_UTILITY_TOPLEVEL)
-					{
-						MtmProcessDDLCommand(stmt_string, false);
-						skipCommand = true;
-					}
+					/* c.f. CREATE INDEX CONCURRENTLY */
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("multimaster doesn't support DROP INDEX CONCURRENTLY")));
 				}
 				break;
 			}

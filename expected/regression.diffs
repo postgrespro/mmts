@@ -63,6 +63,274 @@
 
 ======================================================================
 
+*** contrib/mmts/../../src/test/regress/expected/create_index.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/create_index.out	CENSORED
+***************
+*** 2655,2685 ****
+  CREATE TABLE concur_heap (f1 text, f2 text);
+  -- empty table
+  CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS concur_index1 ON concur_heap(f2,f1);
+! NOTICE:  relation "concur_index1" already exists, skipping
+  INSERT INTO concur_heap VALUES  ('a','b');
+  INSERT INTO concur_heap VALUES  ('b','b');
+  -- unique index
+  CREATE UNIQUE INDEX CONCURRENTLY concur_index2 ON concur_heap(f1);
+  CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS concur_index2 ON concur_heap(f1);
+! NOTICE:  relation "concur_index2" already exists, skipping
+  -- check if constraint is set up properly to be enforced
+  INSERT INTO concur_heap VALUES ('b','x');
+- ERROR:  duplicate key value violates unique constraint "concur_index2"
+- DETAIL:  Key (f1)=(b) already exists.
+  -- check if constraint is enforced properly at build time
+  CREATE UNIQUE INDEX CONCURRENTLY concur_index3 ON concur_heap(f2);
+! ERROR:  could not create unique index "concur_index3"
+! DETAIL:  Key (f2)=(b) is duplicated.
+  -- test that expression indexes and partial indexes work concurrently
+  CREATE INDEX CONCURRENTLY concur_index4 on concur_heap(f2) WHERE f1='a';
+  CREATE INDEX CONCURRENTLY concur_index5 on concur_heap(f2) WHERE f1='x';
+  -- here we also check that you can default the index name
+  CREATE INDEX CONCURRENTLY on concur_heap((f2||f1));
+  -- You can't do a concurrent index build in a transaction
+  BEGIN;
+  CREATE INDEX CONCURRENTLY concur_index7 ON concur_heap(f1);
+! ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+  COMMIT;
+  -- But you can do a regular index build in a transaction
+  BEGIN;
+--- 2655,2687 ----
+  CREATE TABLE concur_heap (f1 text, f2 text);
+  -- empty table
+  CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS concur_index1 ON concur_heap(f2,f1);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  INSERT INTO concur_heap VALUES  ('a','b');
+  INSERT INTO concur_heap VALUES  ('b','b');
+  -- unique index
+  CREATE UNIQUE INDEX CONCURRENTLY concur_index2 ON concur_heap(f1);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS concur_index2 ON concur_heap(f1);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  -- check if constraint is set up properly to be enforced
+  INSERT INTO concur_heap VALUES ('b','x');
+  -- check if constraint is enforced properly at build time
+  CREATE UNIQUE INDEX CONCURRENTLY concur_index3 ON concur_heap(f2);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  -- test that expression indexes and partial indexes work concurrently
+  CREATE INDEX CONCURRENTLY concur_index4 on concur_heap(f2) WHERE f1='a';
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  CREATE INDEX CONCURRENTLY concur_index5 on concur_heap(f2) WHERE f1='x';
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  -- here we also check that you can default the index name
+  CREATE INDEX CONCURRENTLY on concur_heap((f2||f1));
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  -- You can't do a concurrent index build in a transaction
+  BEGIN;
+  CREATE INDEX CONCURRENTLY concur_index7 ON concur_heap(f1);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  COMMIT;
+  -- But you can do a regular index build in a transaction
+  BEGIN;
+***************
+*** 2688,2695 ****
+  -- Failed builds are left invalid by VACUUM FULL, fixed by REINDEX
+  VACUUM FULL concur_heap;
+  REINDEX TABLE concur_heap;
+- ERROR:  could not create unique index "concur_index3"
+- DETAIL:  Key (f2)=(b) is duplicated.
+  DELETE FROM concur_heap WHERE f1 = 'b';
+  VACUUM FULL concur_heap;
+  \d concur_heap
+--- 2690,2695 ----
+***************
+*** 2699,2710 ****
+   f1     | text |           |          | 
+   f2     | text |           |          | 
+  Indexes:
+-     "concur_index2" UNIQUE, btree (f1)
+-     "concur_index3" UNIQUE, btree (f2) INVALID
+-     "concur_heap_expr_idx" btree ((f2 || f1))
+-     "concur_index1" btree (f2, f1)
+-     "concur_index4" btree (f2) WHERE f1 = 'a'::text
+-     "concur_index5" btree (f2) WHERE f1 = 'x'::text
+      "std_index" btree (f2)
+  
+  REINDEX TABLE concur_heap;
+--- 2699,2704 ----
+***************
+*** 2715,2726 ****
+   f1     | text |           |          | 
+   f2     | text |           |          | 
+  Indexes:
+-     "concur_index2" UNIQUE, btree (f1)
+-     "concur_index3" UNIQUE, btree (f2)
+-     "concur_heap_expr_idx" btree ((f2 || f1))
+-     "concur_index1" btree (f2, f1)
+-     "concur_index4" btree (f2) WHERE f1 = 'a'::text
+-     "concur_index5" btree (f2) WHERE f1 = 'x'::text
+      "std_index" btree (f2)
+  
+  -- Temporary tables with concurrent builds and on-commit actions
+--- 2709,2714 ----
+***************
+*** 2730,2736 ****
+--- 2718,2726 ----
+    ON COMMIT PRESERVE ROWS;
+  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
+  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY concur_temp_ind;
++ ERROR:  index "concur_temp_ind" does not exist
+  DROP TABLE concur_temp;
+  -- ON COMMIT DROP
+  BEGIN;
+***************
+*** 2739,2757 ****
+  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
+  -- Fails when running in a transaction.
+  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
+! ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+  COMMIT;
+  -- ON COMMIT DELETE ROWS
+  CREATE TEMP TABLE concur_temp (f1 int, f2 text)
+    ON COMMIT DELETE ROWS;
+  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
+  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
+  DROP INDEX CONCURRENTLY concur_temp_ind;
+  DROP TABLE concur_temp;
+  --
+  -- Try some concurrent index drops
+  --
+  DROP INDEX CONCURRENTLY "concur_index2";				-- works
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
+  NOTICE:  index "concur_index2" does not exist, skipping
+  -- failures
+--- 2729,2750 ----
+  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
+  -- Fails when running in a transaction.
+  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  COMMIT;
+  -- ON COMMIT DELETE ROWS
+  CREATE TEMP TABLE concur_temp (f1 int, f2 text)
+    ON COMMIT DELETE ROWS;
+  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
+  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY concur_temp_ind;
++ ERROR:  index "concur_temp_ind" does not exist
+  DROP TABLE concur_temp;
+  --
+  -- Try some concurrent index drops
+  --
+  DROP INDEX CONCURRENTLY "concur_index2";				-- works
++ ERROR:  index "concur_index2" does not exist
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
+  NOTICE:  index "concur_index2" does not exist, skipping
+  -- failures
+***************
+*** 2763,2772 ****
+--- 2756,2770 ----
+  ROLLBACK;
+  -- successes
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index3";
++ NOTICE:  index "concur_index3" does not exist, skipping
+  DROP INDEX CONCURRENTLY "concur_index4";
++ ERROR:  index "concur_index4" does not exist
+  DROP INDEX CONCURRENTLY "concur_index5";
++ ERROR:  index "concur_index5" does not exist
+  DROP INDEX CONCURRENTLY "concur_index1";
++ ERROR:  index "concur_index1" does not exist
+  DROP INDEX CONCURRENTLY "concur_heap_expr_idx";
++ ERROR:  index "concur_heap_expr_idx" does not exist
+  \d concur_heap
+             Table "public.concur_heap"
+   Column | Type | Collation | Nullable | Default 
+
+======================================================================
+
+*** contrib/mmts/../../src/test/regress/expected/index_including.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/index_including.out	CENSORED
+***************
+*** 291,302 ****
+  CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box, UNIQUE(c1, c2) INCLUDE(c3,c4));
+  INSERT INTO tbl SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,1000) AS x;
+  CREATE UNIQUE INDEX CONCURRENTLY on tbl (c1, c2) INCLUDE (c3, c4);
+  SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl' ORDER BY indexname;
+                                            indexdef                                           
+  ---------------------------------------------------------------------------------------------
+-  CREATE UNIQUE INDEX tbl_c1_c2_c3_c4_idx ON public.tbl USING btree (c1, c2) INCLUDE (c3, c4)
+   CREATE UNIQUE INDEX tbl_c1_c2_c3_c4_key ON public.tbl USING btree (c1, c2) INCLUDE (c3, c4)
+! (2 rows)
+  
+  DROP TABLE tbl;
+  /*
+--- 291,302 ----
+  CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box, UNIQUE(c1, c2) INCLUDE(c3,c4));
+  INSERT INTO tbl SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,1000) AS x;
+  CREATE UNIQUE INDEX CONCURRENTLY on tbl (c1, c2) INCLUDE (c3, c4);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl' ORDER BY indexname;
+                                            indexdef                                           
+  ---------------------------------------------------------------------------------------------
+   CREATE UNIQUE INDEX tbl_c1_c2_c3_c4_key ON public.tbl USING btree (c1, c2) INCLUDE (c3, c4)
+! (1 row)
+  
+  DROP TABLE tbl;
+  /*
+
+======================================================================
+
+*** contrib/mmts/../../src/test/regress/expected/constraints.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/constraints.out	CENSORED
+***************
+*** 740,758 ****
+  ERROR:  duplicate key value violates unique constraint "must_be_different"
+  DETAIL:  Key (a)=(2) already exists.
+  CREATE UNIQUE INDEX CONCURRENTLY must_be_different_new ON constraint_alter_index USING BTREE(a);
+  ALTER TABLE constraint_alter_index ALTER CONSTRAINT must_be_different USING INDEX must_be_different_new;
+! NOTICE:  ALTER TABLE / ALTER CONSTRAINT USING INDEX will rename constraint "must_be_different" to "must_be_different_new"
+  DROP INDEX must_be_different;
+  DROP INDEX must_be_different_new; -- failure here
+! ERROR:  cannot drop index must_be_different_new because constraint must_be_different_new on table constraint_alter_index requires it
+! HINT:  You can drop constraint must_be_different_new on table constraint_alter_index instead.
+  INSERT INTO  constraint_alter_index VALUES(2, 3); -- failure here
+! ERROR:  duplicate key value violates unique constraint "must_be_different_new"
+  DETAIL:  Key (a)=(2) already exists.
+  INSERT INTO  constraint_alter_index VALUES(3, 3);
+  CREATE INDEX CONCURRENTLY must_be_different_new2 ON constraint_alter_index USING BTREE(a);
+  ALTER TABLE constraint_alter_index ALTER CONSTRAINT must_be_different_new USING INDEX must_be_different_new2;
+! ERROR:  index in constraint must_be_different_new cannot be replaced by must_be_different_new2
+  DROP TABLE constraint_alter_index;
+  DROP ROLE regress_constraint_comments;
+  DROP ROLE regress_constraint_comments_noaccess;
+--- 740,761 ----
+  ERROR:  duplicate key value violates unique constraint "must_be_different"
+  DETAIL:  Key (a)=(2) already exists.
+  CREATE UNIQUE INDEX CONCURRENTLY must_be_different_new ON constraint_alter_index USING BTREE(a);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  ALTER TABLE constraint_alter_index ALTER CONSTRAINT must_be_different USING INDEX must_be_different_new;
+! ERROR:  cannot find index "must_be_different_new"
+  DROP INDEX must_be_different;
++ ERROR:  cannot drop index must_be_different because constraint must_be_different on table constraint_alter_index requires it
++ HINT:  You can drop constraint must_be_different on table constraint_alter_index instead.
+  DROP INDEX must_be_different_new; -- failure here
+! ERROR:  index "must_be_different_new" does not exist
+  INSERT INTO  constraint_alter_index VALUES(2, 3); -- failure here
+! ERROR:  duplicate key value violates unique constraint "must_be_different"
+  DETAIL:  Key (a)=(2) already exists.
+  INSERT INTO  constraint_alter_index VALUES(3, 3);
+  CREATE INDEX CONCURRENTLY must_be_different_new2 ON constraint_alter_index USING BTREE(a);
++ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  ALTER TABLE constraint_alter_index ALTER CONSTRAINT must_be_different_new USING INDEX must_be_different_new2;
+! ERROR:  constraint "must_be_different_new" of relation "constraint_alter_index" does not exist
+  DROP TABLE constraint_alter_index;
+  DROP ROLE regress_constraint_comments;
+  DROP ROLE regress_constraint_comments_noaccess;
+
+======================================================================
+
 *** contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
 ***************
@@ -569,6 +837,28 @@
 + ERROR:  table "execute_with" does not exist
   DROP TABLE execute_without;
 + ERROR:  table "execute_without" does not exist
+
+======================================================================
+
+*** contrib/mmts/../../src/test/regress/expected/indexing.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/indexing.out	CENSORED
+***************
+*** 27,33 ****
+  create table idxpart (a int, b int, c text) partition by range (a);
+  create table idxpart1 partition of idxpart for values from (0) to (10);
+  create index concurrently on idxpart (a);
+! ERROR:  cannot create index on partitioned table "idxpart" concurrently
+  drop table idxpart;
+  -- Verify bugfix with query on indexed partitioned table with no partitions
+  -- https://postgr.es/m/20180124162006.pmapfiznhgngwtjf@alvherre.pgsql
+--- 27,33 ----
+  create table idxpart (a int, b int, c text) partition by range (a);
+  create table idxpart1 partition of idxpart for values from (0) to (10);
+  create index concurrently on idxpart (a);
+! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+  drop table idxpart;
+  -- Verify bugfix with query on indexed partitioned table with no partitions
+  -- https://postgr.es/m/20180124162006.pmapfiznhgngwtjf@alvherre.pgsql
 
 ======================================================================
 
