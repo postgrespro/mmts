@@ -346,6 +346,14 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	origin_node = pq_getmsgbyte(&s);
 	origin_lsn = pq_getmsgint64(&s);
 
+	/*
+	 * Skip all transaction from unknown nodes, i.e. dropped ones. This might
+	 * lead to skipping dropped node xacts on some lagged node, but who ever
+	 * said we support membership changes under load?
+	 */
+	if (origin_node == -1)
+		return true;
+
 	/* Skip all transactions from our node */
 	if (origin_node == Mtm->my_node_id)
 		return true;

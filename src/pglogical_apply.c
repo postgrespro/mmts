@@ -952,6 +952,7 @@ process_remote_commit(StringInfo in,
 	replorigin_session_origin_timestamp = pq_getmsgint64(in);	/* commit_time */
 
 	origin_node = pq_getmsgbyte(in);
+	Assert(origin_node >= 1);
 	origin_lsn = pq_getmsgint64(in);
 
 	replorigin_session_origin_lsn =

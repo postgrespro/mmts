@@ -416,8 +416,14 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 				return;
 			}
 		}
+		/*
+		 * Could happen if node was dropped. Might lead to skipping dropped
+		 * node xacts on some lagged node, but who ever said we support
+		 * membership changes under load? Such records will be dropped by
+		 * filter on receiver side.
+		 */
 		mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
-		Assert(false);
+		pq_sendbyte(out, -1);
 	}
 	else
 	{
