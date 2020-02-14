@@ -526,6 +526,28 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 					rwctx->txlist_pos);
 
 	/*
+	 * Load restart_lsn before taking local_lsn. Basically we need LSN which
+	 * is enough to decode commits since current insertion point, i.e.
+	 * restart_lsn of random consistent logical slot.
+	 * XXX: this just shouts that we can't use physical slots as logical and
+	 * must rework syncpoints.
+	 */
+	{
+		int			i;
+
+		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+		for (i = 0; i < max_replication_slots; i++)
+		{
+			ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+
+			if (s->in_use && SlotIsLogical(s) &&
+				s->data.confirmed_flush != InvalidXLogRecPtr)
+				restart_lsn = s->data.restart_lsn;
+		}
+		LWLockRelease(ReplicationSlotControlLock);
+	}
+
+	/*
 	 * Postgres decoding API doesn't disclose origin info about logical
 	 * messages, so we have to work around it. Any receiver of original
 	 * message writes it in slighly different format (prefixed with 'F' and
@@ -565,24 +587,6 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 			mtm_log(PANIC, "unexpected syncpoint messaged format");
 		}
 		Assert(origin_node != Mtm->my_node_id);
-
-		/* load restart_lsn before taking local_lsn */
-		{
-			char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN, origin_node);
-			int			i;
-
-			LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
-			for (i = 0; i < max_replication_slots; i++)
-			{
-				ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
-
-				if (s->in_use && strcmp(slot_name, NameStr(s->data.name)) == 0)
-					restart_lsn = s->data.restart_lsn;
-			}
-			LWLockRelease(ReplicationSlotControlLock);
-
-			pfree(slot_name);
-		}
 
 		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
 						   origin_node, origin_lsn, trim_lsn);
