@@ -387,10 +387,12 @@ MtmTwoPhaseCommit(void)
 	nodemask_t	pc_success_cohort;
 	MtmGeneration xact_gen;
 
-	/* don't run 3pc on syncpoint table update */
 	if (MtmNo3PC)
 	{
-		/* SET LOCAL semantics ensures GUC value is reset to false on xact commit */
+		/*
+		 * SET LOCAL which ensures GUC value is reset on xact commit is
+		 * strongly recommended for this (internal) variable manipulations.
+		 */
 		return false;
 	}
 

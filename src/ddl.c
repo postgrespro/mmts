@@ -1236,7 +1236,10 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 			{
 				Relation	rel = estate->es_result_relations[i].ri_RelationDesc;
 
-				if (RelationNeedsWAL(rel))
+				/*
+				 * Don't run 3pc unless we modified at least one non-local table.
+				 */
+				if (RelationNeedsWAL(rel) && !MtmIsRelationLocal(rel))
 				{
 					if (MtmIgnoreTablesWithoutPk)
 					{

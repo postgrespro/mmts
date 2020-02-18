@@ -551,12 +551,13 @@ NULL,
 NULL);
 
 	DefineCustomBoolVariable("multimaster.no_3pc",
-							 "Don't perform 3pc for current xact. For internal usage only.",
+							 "Don't perform 3pc for current xact. Mostly for internal usage, you should really know what you are doing.",
 							 NULL,
 							 &MtmNo3PC,
 							 false,
 							 PGC_USERSET,
-							 0,
+							 /* construct a few obstacles preventing broad usage */
+							 GUC_NO_SHOW_ALL | GUC_DISALLOW_IN_FILE,
 							 NULL,
 							 NULL,
 							 NULL
