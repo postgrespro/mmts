@@ -38,6 +38,7 @@
 #include "logger.h"
 #include "commit.h"
 #include "messaging.h"
+#include "syncpoint.h"
 
 #include "compat.h"
 
@@ -582,6 +583,21 @@ NULL);
 							 NULL,
 							 NULL,
 							 NULL
+		);
+
+	DefineCustomIntVariable(
+							"multimaster.syncpoint_interval",
+							"Size of generated WAL between syncpoints",
+							NULL,
+							&MtmSyncpointInterval,
+							10*1024, /* 10 MB */
+							0,
+							INT_MAX,
+							PGC_SIGHUP,
+							GUC_UNIT_KB,
+							NULL,
+							NULL,
+							NULL
 		);
 
 	/* MtmDeadlockDetectorInit(MTM_MAX_NODES); */

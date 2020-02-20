@@ -36,7 +36,6 @@
 #define MULTIMASTER_ADMIN                "mtm_admin"
 #define MULTIMASTER_PRECOMMITTED         "precommitted"
 #define MULTIMASTER_PREABORTED           "preaborted"
-#define MULTIMASTER_SYNCPOINT_INTERVAL    10*1024*1024
 
 #define MTM_MAX_NODES 16
 

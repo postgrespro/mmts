@@ -33,6 +33,10 @@ typedef struct
 	XLogRecPtr	origin_lsn;
 } FilterEntry;
 
+
+extern int MtmSyncpointInterval;
+
+
 extern void MaybeLogSyncpoint(void);
 extern void SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 				  XLogRecPtr receiver_lsn);

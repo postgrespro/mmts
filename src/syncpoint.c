@@ -46,6 +46,8 @@
 #include "syncpoint.h"
 #include "logger.h"
 
+int			MtmSyncpointInterval;  /* in kilobytes */
+
 /* XXX: change to some receiver-local structures */
 static int
 origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
@@ -87,11 +89,11 @@ void
 MaybeLogSyncpoint(void)
 {
 	/* do unlocked check first */
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)
+	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MtmSyncpointInterval * 1024)
 		return;
 
 	LWLockAcquire(Mtm->syncpoint_lock, LW_EXCLUSIVE);
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint >= MULTIMASTER_SYNCPOINT_INTERVAL)
+	if (GetInsertRecPtr() - Mtm->latestSyncpoint >= MtmSyncpointInterval * 1024)
 	{
 		XLogRecPtr syncpoint_lsn;
 
