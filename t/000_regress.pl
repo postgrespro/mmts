@@ -59,9 +59,11 @@ unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
 END {
-	unlink "../../src/test/regress/regression.diffs";
-	my @outfiles = <../../src/test/regress/results/*.out>;
-	unlink @outfiles;
+	if(! $ENV{'KEEP_OUT'}) {
+		unlink "../../src/test/regress/regression.diffs";
+		my @outfiles = <../../src/test/regress/results/*.out>;
+		unlink @outfiles;
+	}
 }
 
 my $regress_shlib = TestLib::perl2host($ENV{REGRESS_SHLIB});
