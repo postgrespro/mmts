@@ -414,6 +414,13 @@ fe_send(PGconn *conn, char *msg, size_t len)
 	if (PQflush(conn) < 0)
 		return -1;
 
+	/*
+	 * libpq's PQflush() in pg 12 swallows socket errors during write, so we
+	 * need to try to read from socket to detect broken connections.
+	 */
+	if (!PQconsumeInput(conn))
+		return -1;
+
 	return 0;
 }
 
