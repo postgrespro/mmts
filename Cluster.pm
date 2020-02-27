@@ -255,7 +255,7 @@ sub await_nodes()
 		my $dbname = $self->{nodes}->[$i]->{dbname};
 		if (!$self->{nodes}->[$i]->poll_query_until($dbname, "select 't'"))
 		{
-			die "Timed out while waiting for mm node$i to became online";
+			die "Timed out waiting for mm node$i to become online";
 		}
 		else
 		{
