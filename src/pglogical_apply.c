@@ -545,6 +545,16 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 				restart_lsn = s->data.restart_lsn;
 		}
 		LWLockRelease(ReplicationSlotControlLock);
+
+		if (restart_lsn == InvalidXLogRecPtr)
+		{
+			/*
+			 * this might happen as we create slot later than start receiver,
+			 * c.f. start_node_workers
+			 */
+			mtm_log(SyncpointApply, "ignoring syncpoint as no logical slots are available yet");
+			return;
+		}
 	}
 
 	/*
