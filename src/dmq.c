@@ -475,8 +475,9 @@ dmq_sender_main(Datum main_arg)
 	 * conn is dead.
 	 */
 	int			sconn_cnt[DMQ_MAX_DESTINATIONS];
-
 	double		prev_timer_at = dmq_now();
+
+	MtmBackgroundWorker = true; /* includes bgw name in mtm_log */
 
 	on_shmem_exit(dmq_sender_at_exit, (Datum) 0);
 	initStringInfo(&heartbeat_buf);
@@ -1601,7 +1602,7 @@ dmq_reattach_shm_mq(int handle_id)
 			shm_mq	   *inq;
 
 			ConditionVariableCancelSleep();
-			mtm_log(DmqTraceShmMq, "[DMQ] attaching '%s', dsm handle %d",
+			mtm_log(DmqTraceShmMq, "[DMQ] attaching to shm_mq of receiver %s, dsm handle %d",
 					dmq_local.inhandles[handle_id].name,
 					receiver_dsm);
 

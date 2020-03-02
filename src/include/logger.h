@@ -13,7 +13,10 @@
  */
 
 #include "postgres.h"
+
+#include "postmaster/bgworker.h"
 #include "utils/elog.h"
+#include "utils/memutils.h"
 
 typedef enum MtmLogTag
 {
@@ -81,12 +84,31 @@ typedef enum MtmLogTag
 	NodeMgmt				= LOG
 } MtmLogTag;
 
-/*  XXX: also meaningful process name would be cool */
+#define MTM_TAG "[MTM]%s"
 
-#define MTM_TAG "[MTM] "
+/*
+ * I tried to use get_ps_display instead of MyBgworkerEntry, but it returns
+ * only dynamic 'activity' part which doesn't include bgw name. Apparently
+ * there is no way to retrieve main part. Weird.
+ */
+extern bool MtmBackgroundWorker; /* avoid including multimaster.h for this */
+static inline char *
+am(void)
+{
+	char *res = " ";
+	if (MtmBackgroundWorker)
+	{
+		/* this is for elog, so alloc in ErrorContext where fmt is evaluated */
+		MemoryContext old_ctx = MemoryContextSwitchTo(ErrorContext);
+		res = psprintf(" [%s] ", MyBgworkerEntry->bgw_name);
+		MemoryContextSwitchTo(old_ctx);
+	}
+	return res;
+}
 
-#define MTM_ERRMSG(fmt,...) errmsg(MTM_TAG fmt, ## __VA_ARGS__)
+#define MTM_ERRMSG(fmt,...) errmsg(MTM_TAG fmt, am(), ## __VA_ARGS__)
 
 #define mtm_log(tag, fmt, ...) ereport(tag, \
-								(errmsg(MTM_TAG fmt, ## __VA_ARGS__), \
+								(errmsg(MTM_TAG fmt, \
+										am(), ## __VA_ARGS__), \
 								errhidestmt(true), errhidecontext(true)))
