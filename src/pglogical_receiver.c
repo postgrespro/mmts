@@ -591,6 +591,9 @@ pglogical_receiver_main(Datum main_arg)
 	on_shmem_exit(pglogical_receiver_at_exit, PointerGetDatum(rctx));
 
 	MtmIsReceiver = true;
+	/* Run as replica session replication role. */
+	SetConfigOption("session_replication_role", "replica",
+									PGC_SUSET, PGC_S_OVERRIDE);
 	/* XXX: get rid of that */
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;

@@ -172,6 +172,10 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	queue = dsm_segment_address(seg);
 
 	MtmIsPoolWorker = true;
+	/* Run as replica session replication role. */
+	SetConfigOption("session_replication_role", "replica",
+									PGC_SUSET, PGC_S_OVERRIDE);
+
 	/* XXX: get rid of that */
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;

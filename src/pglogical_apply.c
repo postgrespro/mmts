@@ -84,13 +84,7 @@ static bool query_cancel_allowed;
 static Relation read_rel(StringInfo s, LOCKMODE mode);
 static void read_tuple_parts(StringInfo s, Relation rel, TupleData *tup);
 static EState *create_rel_estate(Relation rel);
-static bool find_pkey_tuple(ScanKey skey, Relation rel, Relation idxrel,
-				TupleTableSlot *slot, bool lock, LockTupleMode mode);
-static bool find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock);
-static bool build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup);
-static void UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot);
-static void UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot);
-static bool process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
+static void process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
 								 MtmReceiverWorkerContext *rwctx);
 static bool process_remote_message(StringInfo s,
 								   MtmReceiverWorkerContext *rwctx);
@@ -156,301 +150,12 @@ ApplyCancelHandler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-static bool
-find_heap_tuple(TupleData *tup, Relation rel, TupleTableSlot *slot, bool lock)
-{
-	HeapTuple	tuple;
-	HeapScanDesc scan;
-	SnapshotData snap;
-	TransactionId xwait;
-	TupleDesc	tupDesc = RelationGetDescr(rel);
-	int			natts = tupDesc->natts;
-	Datum	   *values = (Datum *) palloc(natts * sizeof(Datum));
-	bool	   *nulls = (bool *) palloc(natts * sizeof(bool));
-	bool		found = false;
-	int			i;
-
-	InitDirtySnapshot(snap);
-	scan = heap_beginscan(rel, &snap, 0, NULL);
-retry:
-	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
-	{
-		CHECK_FOR_INTERRUPTS();
-		heap_deform_tuple(tuple, tupDesc, values, nulls);
-
-		for (i = 0; i < natts; i++)
-		{
-			Form_pg_attribute att = TupleDescAttr(tupDesc, i);
-
-			if (att->attisdropped)
-				/* The case of ALTER TABLE ... DROP ... COLUMN */
-				continue;
-
-			if (nulls[i] && tup->isnull[i]) /* both nulls */
-				continue;
-
-			else if (nulls[i] ^ tup->isnull[i]) /* one is null and one is not
-												 * null */
-				break;
-
-			else if (!(att->attlen == -1
-					   ? datumIsEqual(PointerGetDatum(heap_tuple_untoast_attr((struct varlena *) DatumGetPointer(tup->values[i]))),
-									  PointerGetDatum(heap_tuple_untoast_attr((struct varlena *) DatumGetPointer(values[i]))), att->attbyval, -1)
-					   : datumIsEqual(tup->values[i], values[i], att->attbyval, att->attlen)))
-				/* Corresponding attributes are not identical */
-				break;
-		}
-
-		if (i == natts)
-		{
-			/* FIXME: Improve TupleSlot to not require copying the whole tuple */
-			ExecStoreTuple(tuple, slot, InvalidBuffer, false);
-			ExecMaterializeSlot(slot);
-
-			xwait = TransactionIdIsValid(snap.xmin) ?
-				snap.xmin : snap.xmax;
-
-			if (TransactionIdIsValid(xwait))
-			{
-				XactLockTableWait(xwait, NULL, NULL, XLTW_None);
-				heap_rescan(scan, NULL);
-				goto retry;
-			}
-			found = true;
-
-			if (lock)
-			{
-				Buffer		buf;
-				HeapUpdateFailureData hufd;
-				HTSU_Result res;
-				HeapTupleData locktup;
-
-				ItemPointerCopy(&slot->tts_tuple->t_self, &locktup.t_self);
-
-				PushActiveSnapshot(GetLatestSnapshot());
-
-				res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false), LockTupleExclusive,
-									  false /* wait */ ,
-									  false /* don't follow updates */ ,
-									  &buf, &hufd);
-				/* the tuple slot already has the buffer pinned */
-				ReleaseBuffer(buf);
-
-				PopActiveSnapshot();
-
-				switch (res)
-				{
-					case HeapTupleMayBeUpdated:
-						break;
-					case HeapTupleUpdated:
-						/* XXX: Improve handling here */
-						ereport(LOG,
-								(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-								 MTM_ERRMSG("concurrent update, retrying")));
-						heap_rescan(scan, NULL);
-						goto retry;
-					default:
-						mtm_log(ERROR, "unexpected HTSU_Result after locking: %u", res);
-						break;
-				}
-			}
-			break;
-		}
-	}
-	heap_endscan(scan);
-	pfree(values);
-	pfree(nulls);
-
-	return found;
-}
-
-/*
- * Search the index 'idxrel' for a tuple identified by 'skey' in 'rel'.
- *
- * If a matching tuple is found setup 'tid' to point to it and return true,
- * false is returned otherwise.
- */
-static bool
-find_pkey_tuple(ScanKey skey, Relation rel, Relation idxrel,
-				TupleTableSlot *slot, bool lock, LockTupleMode mode)
-{
-	HeapTuple	scantuple;
-	bool		found;
-	IndexScanDesc scan;
-	SnapshotData snap;
-	TransactionId xwait;
-
-	InitDirtySnapshot(snap);
-	scan = index_beginscan(rel, idxrel,
-						   &snap,
-						   IndexRelationGetNumberOfKeyAttributes(idxrel),
-						   0);
-
-retry:
-	found = false;
-
-	index_rescan(scan, skey, IndexRelationGetNumberOfKeyAttributes(idxrel), NULL, 0);
-
-	if ((scantuple = index_getnext(scan, ForwardScanDirection)) != NULL)
-	{
-		found = true;
-		/* FIXME: Improve TupleSlot to not require copying the whole tuple */
-		ExecStoreTuple(scantuple, slot, InvalidBuffer, false);
-		ExecMaterializeSlot(slot);
-
-		xwait = TransactionIdIsValid(snap.xmin) ?
-			snap.xmin : snap.xmax;
-
-		if (TransactionIdIsValid(xwait))
-		{
-			XactLockTableWait(xwait, NULL, NULL, XLTW_None);
-			goto retry;
-		}
-	}
-
-	if (lock && found)
-	{
-		Buffer		buf;
-		HeapUpdateFailureData hufd;
-		HTSU_Result res;
-		HeapTupleData locktup;
-
-		ItemPointerCopy(&slot->tts_tuple->t_self, &locktup.t_self);
-
-		PushActiveSnapshot(GetLatestSnapshot());
-
-		res = heap_lock_tuple(rel, &locktup, GetCurrentCommandId(false), mode,
-							  false /* wait */ ,
-							  false /* don't follow updates */ ,
-							  &buf, &hufd);
-		/* the tuple slot already has the buffer pinned */
-		ReleaseBuffer(buf);
-
-		PopActiveSnapshot();
-
-		switch (res)
-		{
-			case HeapTupleMayBeUpdated:
-				break;
-			case HeapTupleUpdated:
-				/* XXX: Improve handling here */
-				ereport(LOG,
-						(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
-						 MTM_ERRMSG("concurrent update, retrying")));
-				goto retry;
-			default:
-				mtm_log(ERROR, "unexpected HTSU_Result after locking: %u", res);
-				break;
-		}
-	}
-
-	index_endscan(scan);
-
-	return found;
-}
-
-/*
- * Setup a ScanKey for a search in the relation 'rel' for a tuple 'key' that
- * is setup to match 'rel' (*NOT* idxrel!).
- *
- * Returns whether any column contains NULLs.
- */
-static bool
-build_index_scan_key(ScanKey skey, Relation rel, Relation idxrel, TupleData *tup)
-{
-	int			attoff;
-	bool		isnull;
-	Datum		indclassDatum;
-	oidvector  *opclass;
-	int2vector *indkey = &idxrel->rd_index->indkey;
-	bool		hasnulls = false;
-
-	Assert(RelationGetReplicaIndex(rel) == RelationGetRelid(idxrel));
-
-	indclassDatum = SysCacheGetAttr(INDEXRELID, idxrel->rd_indextuple,
-									Anum_pg_index_indclass, &isnull);
-	Assert(!isnull);
-	opclass = (oidvector *) DatumGetPointer(indclassDatum);
-
-	/* Build scankey for every attribute in the index. */
-	for (attoff = 0; attoff < IndexRelationGetNumberOfKeyAttributes(idxrel); attoff++)
-	{
-		Oid			operator;
-		Oid			opfamily;
-		RegProcedure regop;
-		int			pkattno = attoff + 1;
-		int			mainattno = indkey->values[attoff];
-		Oid			optype = get_opclass_input_type(opclass->values[attoff]);
-
-		/*
-		 * Load the operator info.  We need this to get the equality operator
-		 * function for the scan key.
-		 */
-		opfamily = get_opclass_family(opclass->values[attoff]);
-
-		operator = get_opfamily_member(opfamily, optype,
-									   optype,
-									   BTEqualStrategyNumber);
-		if (!OidIsValid(operator))
-			elog(ERROR, "missing operator %d(%u,%u) in opfamily %u",
-				 BTEqualStrategyNumber, optype, optype, opfamily);
-
-		regop = get_opcode(operator);
-
-		/* Initialize the scankey. */
-		ScanKeyInit(&skey[attoff],
-					pkattno,
-					BTEqualStrategyNumber,
-					regop,
-					tup->values[mainattno - 1]);
-
-		/* Check for null value. */
-		if (tup->isnull[mainattno - 1])
-		{
-			hasnulls = true;
-			skey[attoff].sk_flags |= SK_ISNULL;
-		}
-	}
-
-	return hasnulls;
-}
-
-static void
-UserTableUpdateIndexes(EState *estate, TupleTableSlot *slot)
-{
-	/* HOT update does not require index inserts */
-	if (HeapTupleIsHeapOnly(slot->tts_tuple))
-		return;
-
-	ExecOpenIndices(estate->es_result_relation_info, false);
-	UserTableUpdateOpenIndexes(estate, slot);
-	ExecCloseIndices(estate->es_result_relation_info);
-}
-
-static void
-UserTableUpdateOpenIndexes(EState *estate, TupleTableSlot *slot)
-{
-	List	   *recheckIndexes = NIL;
-
-	/* HOT update does not require index inserts */
-	if (HeapTupleIsHeapOnly(slot->tts_tuple))
-		return;
-
-	if (estate->es_result_relation_info->ri_NumIndices > 0)
-	{
-		ExecInsertIndexTuples(slot, &slot->tts_tuple->t_self,
-							  estate, false, NULL, NIL);
-	}
-
-	/* FIXME: recheck the indexes */
-	list_free(recheckIndexes);
-}
-
 static EState *
 create_rel_estate(Relation rel)
 {
 	EState	   *estate;
 	ResultRelInfo *resultRelInfo;
+	RangeTblEntry *rte;
 
 	estate = CreateExecutorState();
 
@@ -466,13 +171,19 @@ create_rel_estate(Relation rel)
 	if (resultRelInfo->ri_TrigDesc)
 		estate->es_trig_tuple_slot = ExecInitExtraTupleSlot(estate, NULL);
 
+	rte = makeNode(RangeTblEntry);
+	rte->rtekind = RTE_RELATION;
+	rte->relid = RelationGetRelid(rel);
+	rte->relkind = rel->rd_rel->relkind;
+	estate->es_range_table = list_make1(rte);
+
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
 
 	return estate;
 }
 
-static bool
+static void
 process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
 					 MtmReceiverWorkerContext *rwctx)
 {
@@ -500,8 +211,6 @@ process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
 	// MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
 
 	suppress_internal_consistency_checks = true;
-
-	return true;
 }
 
 static void
@@ -814,6 +523,31 @@ read_tuple_parts(StringInfo s, Relation rel, TupleData *tup)
 		if (att->attisdropped && !tup->isnull[i])
 			mtm_log(ERROR, "data for dropped column");
 	}
+}
+
+static void
+tuple_to_slot(EState *estate, Relation rel, TupleData *tuple, TupleTableSlot *slot)
+{
+	TupleDesc	tupDesc = RelationGetDescr(rel);
+	int			natts = slot->tts_tupleDescriptor->natts;
+	HeapTuple	tup;
+	MemoryContext oldctx;
+
+	ExecClearTuple(slot);
+
+	/*
+	 * RelationFindReplTupleByIndex() expects virtual tuple, so let's set
+	 * them. We stick here to HeapTuple instead of VirtualTuple, because we
+	 * don't need to create own version of heap_modify_tuple().
+	 */
+	memcpy(slot->tts_values, tuple->values, natts * sizeof(Datum));
+	memcpy(slot->tts_isnull, tuple->isnull, natts * sizeof(bool));
+
+	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+	tup = heap_form_tuple(tupDesc, tuple->values, tuple->isnull);
+	// ExecStoreHeapTuple(tup, slot, false);
+	ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	MemoryContextSwitchTo(oldctx);
 }
 
 static void
@@ -1377,7 +1111,6 @@ process_remote_insert(StringInfo s, Relation rel)
 	ResultRelInfo *relinfo;
 	int			i;
 	TupleDesc	tupDesc = RelationGetDescr(rel);
-	HeapTuple	tup;
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 	estate = create_rel_estate(rel);
@@ -1429,13 +1162,14 @@ process_remote_insert(StringInfo s, Relation rel)
 						  bistate);
 		MemoryContextSwitchTo(oldcontext);
 
-		/*
-		 * If there are any indexes, update them for all the inserted tuples,
-		 * and run AFTER ROW INSERT triggers.
-		 */
-		if (relinfo->ri_NumIndices > 0)
+
+		for (i = 0; i < nBufferedTuples; i++)
 		{
-			for (i = 0; i < nBufferedTuples; i++)
+			/*
+			 * If there are any indexes, update them for all the inserted tuples,
+			 * and run AFTER ROW INSERT triggers.
+			 */
+			if (relinfo->ri_NumIndices > 0)
 			{
 				List	   *recheckIndexes;
 
@@ -1444,14 +1178,21 @@ process_remote_insert(StringInfo s, Relation rel)
 					ExecInsertIndexTuples(newslot, &bufferedTuples[i]->t_self,
 										  estate, false, NULL, NIL);
 
-				/* AFTER ROW INSERT Triggers */
-				if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
-				{
-					ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
+				ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
 										 recheckIndexes, NULL);
-				}
 
 				list_free(recheckIndexes);
+			}
+			/*
+			 * There's no indexes, but see if we need to run AFTER ROW INSERT
+			 * triggers anyway.
+			 */
+			else if (relinfo->ri_TrigDesc != NULL &&
+							(relinfo->ri_TrigDesc->trig_insert_after_row ||
+								relinfo->ri_TrigDesc->trig_insert_new_table))
+			{
+					ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
+															NIL, NULL);
 			}
 		}
 
@@ -1459,27 +1200,12 @@ process_remote_insert(StringInfo s, Relation rel)
 	}
 	else
 	{
-		MemoryContext oldctx;
-		TriggerDesc *tmp;
+		TupleTableSlot *newslot;
 
-		/* Insert single tuple */
-		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		tup = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
-		ExecStoreTuple(tup, newslot, InvalidBuffer, true);
-		MemoryContextSwitchTo(oldctx);
+		newslot = ExecInitExtraTupleSlot(estate, tupDesc);
+		tuple_to_slot(estate, rel, &new_tuple, newslot);
 
-		tmp = estate->es_result_relation_info->ri_TrigDesc;
-		estate->es_result_relation_info->ri_TrigDesc = NULL;
 		ExecSimpleRelationInsert(estate, newslot);
-		estate->es_result_relation_info->ri_TrigDesc = tmp;
-
-		/* AFTER ROW INSERT Triggers */
-		if (strcmp(get_namespace_name(RelationGetNamespace(rel)),
-				   MULTIMASTER_SCHEMA_NAME) == 0)
-		{
-			ExecARInsertTriggers(estate, relinfo, newslot->tts_tuple,
-								 NIL, NULL);
-		}
 	}
 	ExecCloseIndices(estate->es_result_relation_info);
 	if (ActiveSnapshotSet())
@@ -1506,17 +1232,20 @@ process_remote_update(StringInfo s, Relation rel)
 {
 	char		action;
 	EState	   *estate;
-	TupleTableSlot *newslot;
-	TupleTableSlot *oldslot;
-	bool		pkey_sent;
-	bool		found_tuple;
+	TupleTableSlot *remoteslot;
+	TupleTableSlot *localslot;
+	bool		has_oldtup;
+	bool		found;
 	TupleData	old_tuple;
 	TupleData	new_tuple;
 	Oid			idxoid = InvalidOid;
-	Relation	idxrel = NULL;
 	TupleDesc	tupDesc = RelationGetDescr(rel);
-	ScanKeyData skey[INDEX_MAX_KEYS];
-	HeapTuple	remote_tuple = NULL;
+	EPQState	epqstate;
+
+	estate = create_rel_estate(rel);
+	remoteslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	localslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	action = pq_getmsgbyte(s);
 
@@ -1525,20 +1254,16 @@ process_remote_update(StringInfo s, Relation rel)
 		mtm_log(ERROR, "expected action 'N' or 'K', got %c",
 				action);
 
-	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate, tupDesc);
-	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
-
 	if (action == 'K')
 	{
-		pkey_sent = true;
+		has_oldtup = true;
 		read_tuple_parts(s, rel, &old_tuple);
 		action = pq_getmsgbyte(s);
 	}
 	else
-		pkey_sent = false;
+		has_oldtup = false;
 
-	/* check for new  tuple */
+	/* check for new tuple */
 	if (action != 'N')
 		mtm_log(ERROR, "expected action 'N', got %c",
 				action);
@@ -1550,56 +1275,43 @@ process_remote_update(StringInfo s, Relation rel)
 	/* read new tuple */
 	read_tuple_parts(s, rel, &new_tuple);
 
-	/* lookup index to build scankey */
-	if (rel->rd_indexvalid == 0)
-		RelationGetIndexList(rel);
-	idxoid = rel->rd_replidindex;
+	idxoid = RelationGetReplicaIndex(rel);
+	if (!OidIsValid(idxoid))
+		idxoid = RelationGetPrimaryKeyIndex(rel);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
+	ExecOpenIndices(estate->es_result_relation_info, false);
 
-	if (!OidIsValid(idxoid))
-		found_tuple = find_heap_tuple(pkey_sent ? &old_tuple : &new_tuple, rel, oldslot, true);
+	tuple_to_slot(estate, rel, has_oldtup ? &old_tuple : &new_tuple, remoteslot);
+
+	if (OidIsValid(idxoid))
+	{
+		found = RelationFindReplTupleByIndex(rel, idxoid,
+											 LockTupleExclusive,
+											 remoteslot, localslot);
+	}
 	else
 	{
-		/* open index, so we can build scan key for row */
-		idxrel = index_open(idxoid, RowExclusiveLock);
-
-		Assert(idxrel->rd_index->indisunique);
-
-		/* Use columns from the new tuple if the key didn't change. */
-		build_index_scan_key(skey, rel, idxrel,
-							 pkey_sent ? &old_tuple : &new_tuple);
-
-		/* look for tuple identified by the (old) primary key */
-		found_tuple = find_pkey_tuple(skey, rel, idxrel, oldslot, true,
-									  pkey_sent ? LockTupleExclusive : LockTupleNoKeyExclusive);
-
+		found = RelationFindReplTupleSeq(rel, LockTupleExclusive,
+										 remoteslot, localslot);
 	}
-	if (found_tuple)
+
+	ExecClearTuple(remoteslot);
+
+	if (found)
 	{
-		remote_tuple = heap_modify_tuple(oldslot->tts_tuple,
+		HeapTuple	remote_tuple = NULL;
+
+		remote_tuple = heap_modify_tuple(localslot->tts_tuple,
 										 tupDesc,
 										 new_tuple.values,
 										 new_tuple.isnull,
 										 new_tuple.changed);
+		// ExecStoreHeapTuple(remote_tuple, remoteslot, false);
+		ExecStoreTuple(remote_tuple, remoteslot, InvalidBuffer, false);
 
-		ExecStoreTuple(remote_tuple, newslot, InvalidBuffer, true);
-
-#ifdef VERBOSE_UPDATE
-		{
-			StringInfoData o;
-
-			initStringInfo(&o);
-			tuple_to_stringinfo(&o, tupDesc, oldslot->tts_tuple, false);
-			appendStringInfo(&o, " to");
-			tuple_to_stringinfo(&o, tupDesc, remote_tuple, false);
-			mtm_log(LOG, "%lu: UPDATE: %s", GetCurrentTransactionId(), o.data);
-			resetStringInfo(&o);
-		}
-#endif
-
-		simple_heap_update(rel, &oldslot->tts_tuple->t_self, newslot->tts_tuple);
-		UserTableUpdateIndexes(estate, newslot);
+		EvalPlanQualSetSlot(&epqstate, remoteslot);
+		ExecSimpleRelationUpdate(estate, &epqstate, localslot, remoteslot);
 	}
 	else
 	{
@@ -1609,16 +1321,14 @@ process_remote_update(StringInfo s, Relation rel)
 				 errdetail("Most likely we have DELETE-UPDATE conflict")));
 	}
 
-	/* release locks upon commit */
-	if (OidIsValid(idxoid))
-		index_close(idxrel, NoLock);
-
+	ExecCloseIndices(estate->es_result_relation_info);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */
 	AfterTriggerEndQuery(estate);
 
-	ExecResetTupleTable(estate->es_tupleTable, true);
+	EvalPlanQualEnd(&epqstate);
+	ExecResetTupleTable(estate->es_tupleTable, false);
 	FreeExecutorState(estate);
 
 	CommandCounterIncrement();
@@ -1628,64 +1338,48 @@ static void
 process_remote_delete(StringInfo s, Relation rel)
 {
 	EState	   *estate;
-	TupleData	oldtup;
-	TupleTableSlot *oldslot;
+	TupleData	deltup;
+	EPQState	epqstate;
+	TupleTableSlot *localslot;
+	TupleTableSlot *remoteslot;
 	Oid			idxoid = InvalidOid;
-	Relation	idxrel = NULL;
-	TupleDesc	tupDesc = RelationGetDescr(rel);
-	ScanKeyData skey[INDEX_MAX_KEYS];
-	bool		found_old;
+	bool		found;
 
 	estate = create_rel_estate(rel);
-	oldslot = ExecInitExtraTupleSlot(estate, NULL);
-	ExecSetSlotDescriptor(oldslot, tupDesc);
+	remoteslot = ExecInitExtraTupleSlot(estate,
+										RelationGetDescr(rel));
+	localslot = ExecInitExtraTupleSlot(estate,
+										RelationGetDescr(rel));
 
-	read_tuple_parts(s, rel, &oldtup);
+	read_tuple_parts(s, rel, &deltup);
+	tuple_to_slot(estate, rel, &deltup, remoteslot);
 
-	/* lookup index to build scankey */
-	if (rel->rd_indexvalid == 0)
-		RelationGetIndexList(rel);
-	idxoid = rel->rd_replidindex;
+	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
+	ExecOpenIndices(estate->es_result_relation_info, false);
 
+	idxoid = RelationGetReplicaIndex(rel);
 	if (!OidIsValid(idxoid))
-		found_old = find_heap_tuple(&oldtup, rel, oldslot, true);
+		idxoid = RelationGetPrimaryKeyIndex(rel);
+
+	if (OidIsValid(idxoid))
+	{
+		found = RelationFindReplTupleByIndex(rel, idxoid,
+											 LockTupleExclusive,
+											 remoteslot, localslot);
+	}
 	else
 	{
-		/* Now open the primary key index */
-		idxrel = index_open(idxoid, RowExclusiveLock);
-
-		if (rel->rd_rel->relkind != RELKIND_RELATION)
-			mtm_log(ERROR, "unexpected relkind '%c' rel \"%s\"",
-					rel->rd_rel->relkind, RelationGetRelationName(rel));
-
-#ifdef VERBOSE_DELETE
-		{
-			HeapTuple	tup;
-
-			tup = heap_form_tuple(tupDesc,
-								  oldtup.values, oldtup.isnull);
-			ExecStoreTuple(tup, oldslot, InvalidBuffer, true);
-		}
-		log_tuple("DELETE old-key:%s", tupDesc, oldslot->tts_tuple);
-#endif
-
-		build_index_scan_key(skey, rel, idxrel, &oldtup);
-
-		/* try to find tuple via a (candidate|primary) key */
-		found_old = find_pkey_tuple(skey, rel, idxrel, oldslot, true, LockTupleExclusive);
+		found = RelationFindReplTupleSeq(rel, LockTupleExclusive,
+										 remoteslot, localslot);
 	}
-	if (found_old)
-	{
-		simple_heap_delete(rel, &oldslot->tts_tuple->t_self);
 
-		/* AFTER ROW DELETE Triggers */
-		if (strcmp(get_namespace_name(RelationGetNamespace(rel)), MULTIMASTER_SCHEMA_NAME) == 0)
-		{
-			ExecARDeleteTriggers(estate, estate->es_result_relation_info,
-								 &oldslot->tts_tuple->t_self, NULL, NULL);
-		}
+
+	if (found)
+	{
+		EvalPlanQualSetSlot(&epqstate, localslot);
+		ExecSimpleRelationDelete(estate, &epqstate, localslot);
 	}
 	else
 	{
@@ -1695,14 +1389,13 @@ process_remote_delete(StringInfo s, Relation rel)
 				 errdetail("Most likely we have DELETE-DELETE conflict")));
 	}
 
+	ExecCloseIndices(estate->es_result_relation_info);
 	PopActiveSnapshot();
 
 	/* Handle queued AFTER triggers. */
 	AfterTriggerEndQuery(estate);
 
-	if (OidIsValid(idxoid))
-		index_close(idxrel, NoLock);
-
+	EvalPlanQualEnd(&epqstate);
 	ExecResetTupleTable(estate->es_tupleTable, true);
 	FreeExecutorState(estate);
 
@@ -1773,8 +1466,9 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			{
 					/* BEGIN */
 				case 'B':
-					inside_transaction = process_remote_begin(&s, &current_gtid,
-															  rwctx);
+					process_remote_begin(&s, &current_gtid,
+										 rwctx);
+					inside_transaction = true;
 					break;
 					/* COMMIT */
 				case 'C':

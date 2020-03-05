@@ -37,6 +37,7 @@ CREATE TRIGGER on_node_create
     AFTER INSERT ON mtm.cluster_nodes
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_create();
+ALTER TABLE mtm.cluster_nodes ENABLE ALWAYS TRIGGER on_node_create;
 
 CREATE FUNCTION mtm.after_node_drop()
 RETURNS TRIGGER
@@ -47,6 +48,7 @@ CREATE TRIGGER on_node_drop
     AFTER DELETE ON mtm.cluster_nodes
     FOR EACH ROW
     EXECUTE FUNCTION mtm.after_node_drop();
+ALTER TABLE mtm.cluster_nodes ENABLE ALWAYS TRIGGER on_node_drop;
 
 /* remove syncpoints of node on its drop */
 CREATE FUNCTION mtm.after_node_drop_plpgsql() RETURNS TRIGGER AS $$
