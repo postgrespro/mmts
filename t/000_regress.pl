@@ -86,9 +86,11 @@ $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
 mkdir('results');
 unlink('results/regression.diffs');
-TestLib::append_to_file('results/regression.diffs', $res_diff);
 
 # finally compare regression.diffs with our version
-$diff = TestLib::system_log("diff results/regression.diffs expected/regression.diffs");
+# Do not use diffs extension as some upper level testing systems are searching for all
+# *.diffs files.
+TestLib::append_to_file('results/regression.diff', $res_diff);
+$diff = TestLib::system_log("diff results/regression.diff expected/regression.diff");
 
 is($diff, 0, "postgres regress");
