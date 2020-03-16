@@ -546,6 +546,7 @@ process_syncpoint(MtmReceiverContext *rctx, const char *msg, XLogRecPtr received
 							   PG_WAIT_EXTENSION);
 		LWLockAcquire(&Mtm->pools[rctx->node_id - 1].lock, LW_EXCLUSIVE);
 	}
+	ConditionVariableCancelSleep();
 
 	/*
 	 * Postgres decoding API doesn't disclose origin info about logical
