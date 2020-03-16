@@ -91,8 +91,23 @@ typedef struct
 {
 	char		stream_name[DMQ_NAME_MAXLEN];
 	int			procno;
+	uint64		procno_gen;
 } DmqStreamSubscription;
 
+/* receiver publishes this in shmem to let subscriber find his shm_mq */
+typedef struct
+{
+	dsm_handle	h;
+	uint64		procno_gen;
+} ReceiverDSMHandle;
+
+/* receiver state in shmem */
+typedef struct
+{
+	char		name[DMQ_NAME_MAXLEN];
+	pid_t		pid;
+	ReceiverDSMHandle *dsm_handles; /* indexed by pgprocno */
+} DmqReceiverSlot;
 
 /* Global state for dmq */
 struct DmqSharedState
@@ -141,16 +156,41 @@ struct DmqSharedState
 	 */
 	volatile int sconn_cnt[DMQ_MAX_DESTINATIONS];
 
-	/* receivers stuff */
-	struct
-	{
-		char		name[DMQ_NAME_MAXLEN];
-		dsm_handle	dsm_h;
-		int			procno;
-		bool		active;
-		pid_t		pid;
-	}			receivers[DMQ_MAX_RECEIVERS];
+	/*
+	 * Receivers stuff. Some notes on shm_mq management: one of the subtle
+	 * requirements here is avoid losing the message with live receiver, or we
+	 * might fool the counterparty to wait for an answer while request has
+	 * been dropped. OTOH, if receiver conn is dead, there is no point in
+	 * waiting for messages as we obviously never know when they arrive. Hence
+	 * naturally follows that mq should be created by receiver, not subscriber
+	 * -- i.e. attached queue at subscriber side must mean receiver appeared
+	 * (so we can wait for messages), and if he dies, he will detach from the
+	 * queue so we'll get an error in shm_mq_receive.
+	 *
+	 * shm_mq doesn't allow reattachment to the queue, and even if it did, it
+	 * would be cumbersome to maintain the failure detection logic as outlined
+	 * above (see dmq_pop_nb for user-facing semantics). So each
+	 * receiver-subscriber pair uses separate shm_mq (and underlying dsm
+	 * segment). To distinguish between different processes with the same
+	 * pgprocno, procno generations were invented. As additional nicety, this
+	 * means subscriber can never get messages aimed to another backend (with
+	 * the same procno). Also mqs are created on demand, backend who never
+	 * subscribes doesn't waste memory on queue (though currently this is of
+	 * little help as mqs for dead backends are not cleaned up until they are
+	 * reused).
+	 */
 
+	/*
+	 * using separate cv per receiver would be perceptibly more complicated
+	 * and negligibly more performant
+	 */
+	ConditionVariable shm_mq_creation_cv;
+	/*
+	 * Indexed by pgprocno; each subscriber increments himself here so we
+	 * could distinguish different processes with the same pgprocno.
+	 */
+	uint64 *procno_gens;
+	DmqReceiverSlot receivers[DMQ_MAX_RECEIVERS];
 }		   *dmq_state;
 
 /* special value for sconn_cnt[] meaning the connection is dead */
@@ -161,7 +201,11 @@ static HTAB *dmq_subscriptions;
 /* Backend-local i/o queues. */
 struct
 {
+	/* to send */
 	shm_mq_handle *mq_outh;
+
+	/* to receive */
+	uint64	my_procno_gen;
 	int			n_inhandles;
 	struct
 	{
@@ -223,6 +267,13 @@ dmq_sighup_handler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
+/* per one receiver slot */
+static Size
+receiver_dsm_handles_size(void)
+{
+	return mul_size(sizeof(ReceiverDSMHandle), MaxBackends);
+}
+
 /*
  * Set pointer to dmq shared state in all backends.
  */
@@ -247,18 +298,37 @@ dmq_shmem_startup_hook(void)
 	if (!found)
 	{
 		int			i;
+		bool		procno_gens_found;
 
 		dmq_state->lock = &(GetNamedLWLockTranche("dmq"))->lock;
 		dmq_state->out_dsm = DSM_HANDLE_INVALID;
 		memset(dmq_state->destinations, '\0', sizeof(DmqDestination) * DMQ_MAX_DESTINATIONS);
 
 		dmq_state->sender_pid = 0;
+
+		ConditionVariableInit(&dmq_state->shm_mq_creation_cv);
+		dmq_state->procno_gens =
+			ShmemInitStruct("dmq-procnogens",
+							mul_size(sizeof(uint64), MaxBackends),
+							&procno_gens_found);
+		Assert(!procno_gens_found);
+		MemSet(dmq_state->procno_gens, '\0', sizeof(uint64) * MaxBackends);
+
 		for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 		{
+			bool dsm_handles_found;
+			char dsm_handles_shmem_name[32];
+
 			dmq_state->receivers[i].name[0] = '\0';
-			dmq_state->receivers[i].dsm_h = DSM_HANDLE_INVALID;
-			dmq_state->receivers[i].procno = -1;
-			dmq_state->receivers[i].active = false;
+			dmq_state->receivers[i].pid = 0;
+			snprintf(dsm_handles_shmem_name, 32, "dmq-%d", i);
+			dmq_state->receivers[i].dsm_handles =
+				ShmemInitStruct(dsm_handles_shmem_name,
+								receiver_dsm_handles_size(),
+								&dsm_handles_found);
+			Assert(!dsm_handles_found);
+			MemSet(dmq_state->receivers[i].dsm_handles, '\0',
+				   receiver_dsm_handles_size());
 		}
 	}
 
@@ -380,7 +450,7 @@ dmq_sender_at_exit(int status, Datum arg)
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		if (dmq_state->receivers[i].active &&
+		if (dmq_state->receivers[i].name[0] != '\0' &&
 			dmq_state->receivers[i].pid > 0)
 		{
 			kill(dmq_state->receivers[i].pid, SIGTERM);
@@ -795,15 +865,63 @@ dmq_sender_main(Datum main_arg)
  *
  *****************************************************************************/
 
+/* recreate shm_mq to the given subscriber */
 static void
-dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg,
-				   char *sender_name, void *extra)
+dmq_receiver_recreate_mq(DmqReceiverSlot *my_slot,
+						 int procno, uint64 procno_gen,
+						 dsm_segment **seg_p, shm_mq_handle **mq_handle_p,
+						 bool locked)
+{
+	shm_mq	*mq;
+
+	/* release previous dsm, if any */
+	/* shm_mq_detach is done automatically on dsm detach */
+	if (*seg_p != NULL)
+		dsm_detach(*seg_p);
+	*seg_p = NULL;
+	*mq_handle_p = NULL;
+
+	/* allocate a new one, put shm_mq there */
+	*seg_p = dsm_create(DMQ_MQ_SIZE, 0);
+	dsm_pin_mapping(*seg_p);
+	mq = shm_mq_create(dsm_segment_address(*seg_p), DMQ_MQ_SIZE);
+	shm_mq_set_sender(mq, MyProc);
+	*mq_handle_p = shm_mq_attach(mq, *seg_p, NULL);
+
+	/* and publish it */
+	if (!locked)
+		LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	my_slot->dsm_handles[procno].h = dsm_segment_handle(*seg_p);
+	my_slot->dsm_handles[procno].procno_gen = procno_gen;
+	if (!locked)
+		LWLockRelease(dmq_state->lock);
+
+	mtm_log(DmqTraceShmMq, "[DMQ] created shm_mq to proc <%d, " UINT64_FORMAT ">, dsm handle %u",
+			procno, procno_gen, dsm_segment_handle(*seg_p));
+
+	/*
+	 * This often duplicates cv broadcast, but not always: subscriber might
+	 * not requested mq recreation directly but just subscribed to the stream
+	 * and went to sleep on latch, and we got here through message
+	 * receival. e.g. like mtm monitor with his permanent streams behaves like
+	 * this. OTOH, removing cv altogether would require to wake all
+	 * subscribers in dmq_receiver_at_exit, which is not too elegant as well.
+	 */
+	SetLatch(&ProcGlobal->allProcs[procno].procLatch);
+}
+
+/* hand over message to the subscriber */
+static void
+dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
+				   dsm_segment **segs, shm_mq_handle **mq_handles,
+				   void *extra)
 {
 	const char *stream_name;
 	const char *body;
 	int			body_len;
 	bool		found;
-	DmqStreamSubscription *sub;
+	DmqStreamSubscription sub;
+	DmqStreamSubscription *psub;
 	shm_mq_result res;
 
 	/*
@@ -833,7 +951,7 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg,
 			body_s.len = body_len;
 			body_s.maxlen = -1;
 			body_s.cursor = 0;
-			dmq_receiver_heartbeat_hook(sender_name, &body_s, extra);
+			dmq_receiver_heartbeat_hook(my_slot->name, &body_s, extra);
 		}
 		return;
 	}
@@ -843,9 +961,16 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg,
 	 * a signal, but likely that won't show any measurable speedup.
 	 */
 	LWLockAcquire(dmq_state->lock, LW_SHARED);
-	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions,
-												stream_name, HASH_FIND,
-												&found);
+	psub = (DmqStreamSubscription *) hash_search(dmq_subscriptions,
+												 stream_name, HASH_FIND,
+												 &found);
+	/*
+	 * that's quite stupid, but gcc complains 'sub.procno etc might be used
+	 * uninitialized' without this
+	 */
+	MemSet(&sub, '\0', sizeof(DmqStreamSubscription));
+	if (found)
+		sub = *psub;
 	LWLockRelease(dmq_state->lock);
 
 	if (!found)
@@ -856,15 +981,32 @@ dmq_handle_message(StringInfo msg, shm_mq_handle **mq_handles, dsm_segment *seg,
 		return;
 	}
 
+	/*
+	 * If we haven't created the queue to this backend, do this now without
+	 * waiting for SIGHUP. This is needed to maintain the basic 'message
+	 * arrived after dmq_stream_subscribe finished and connection is good =>
+	 * must pass the message' idea. This is e.g. critical for permanent
+	 * stream subscribers like monitor in mtm.
+	 * procno_gen is ever updated by me, so it is safe to look at it without
+	 * locks.
+	 */
+	if (mq_handles[sub.procno] == NULL ||
+		my_slot->dsm_handles[sub.procno].procno_gen != sub.procno_gen)
+	{
+		dmq_receiver_recreate_mq(my_slot, sub.procno, sub.procno_gen,
+								 &segs[sub.procno], &mq_handles[sub.procno],
+								 false);
+	}
+
 	mtm_log(DmqTraceIncoming,
 			"[DMQ] got message %s.%s (len=%d), passing to %d", stream_name, body,
-			body_len, sub->procno);
+			body_len, sub.procno);
 
 	/* and send it */
-	res = shm_mq_send(mq_handles[sub->procno], body_len, body, false);
+	res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
 	if (res != SHM_MQ_SUCCESS)
 	{
-		mtm_log(WARNING, "[DMQ] can't send to queue %d", sub->procno);
+		mtm_log(WARNING, "[DMQ] can't send to queue %d", sub.procno);
 	}
 }
 
@@ -1039,7 +1181,42 @@ _pq_getbyte_if_available(unsigned char *c)
 	}
 
 	return 0;
+}
 
+/*
+ * For each subscription, create shm_mq to subscriber if we don't have it yet.
+ */
+static void
+dmq_receiver_recreate_mqs(DmqReceiverSlot *my_slot, dsm_segment **segs,
+						  shm_mq_handle **mq_handles)
+{
+	HASH_SEQ_STATUS hash_seq;
+	DmqStreamSubscription *sub;
+
+	/*
+	 * can make separate lock for subs and create mqs after releasing the
+	 * lock if this seems too heavy
+	 */
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+
+	hash_seq_init(&hash_seq, dmq_subscriptions);
+	while ((sub = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (mq_handles[sub->procno] != NULL &&
+			my_slot->dsm_handles[sub->procno].procno_gen == sub->procno_gen)
+		{
+			/* queue is already good */
+			continue;
+		}
+
+		dmq_receiver_recreate_mq(my_slot, sub->procno, sub->procno_gen,
+								 &segs[sub->procno], &mq_handles[sub->procno],
+								 true);
+	}
+
+	LWLockRelease(dmq_state->lock);
+	/* let subscribers know we are done */
+	ConditionVariableBroadcast(&dmq_state->shm_mq_creation_cv);
 }
 
 static void
@@ -1053,15 +1230,17 @@ dmq_receiver_at_exit(int status, Datum receiver)
 	 * important.
 	 */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	strncpy(sender_name, dmq_state->receivers[receiver_id].name,
-			DMQ_NAME_MAXLEN);
-	dmq_state->receivers[receiver_id].active = false;
+	dmq_state->receivers[receiver_id].name[0] = '\0';
 	LWLockRelease(dmq_state->lock);
+
+	/* tell subscribers it is pointless to wait for shm_mq creation */
+	ConditionVariableBroadcast(&dmq_state->shm_mq_creation_cv);
 
 	if (dmq_receiver_stop_hook)
 		dmq_receiver_stop_hook(sender_name);
 }
 
+/* xxx should wrap all this in try/catch to turn any ERROR into FATAL */
 Datum
 dmq_receiver_loop(PG_FUNCTION_ARGS)
 {
@@ -1071,13 +1250,13 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		NeedMessage
 	}			reader_state = NeedByte;
 
-	dsm_segment *seg;
-	shm_toc    *toc;
 	StringInfoData s;
+	dsm_segment	  **segs;
 	shm_mq_handle **mq_handles;
 	char	   *sender_name;
 	char	   *proc_name;
 	int			i;
+	int			j;
 	int			receiver_id = -1;
 	int			recv_timeout;
 	double		last_message_at = dmq_now();
@@ -1089,32 +1268,19 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	proc_name = psprintf("mtm-dmq-receiver %s", sender_name);
 	set_ps_display(proc_name, true);
 
-	/* setup queues with backends */
-	seg = dsm_create(dmq_toc_size(), 0);
-	dsm_pin_mapping(seg);
-	toc = shm_toc_create(DMQ_MQ_MAGIC, dsm_segment_address(seg),
-						 dmq_toc_size());
-	mq_handles = palloc(MaxBackends * sizeof(shm_mq_handle *));
-	for (i = 0; i < MaxBackends; i++)
-	{
-		shm_mq	   *mq;
-
-		mq = shm_mq_create(shm_toc_allocate(toc, DMQ_MQ_SIZE), DMQ_MQ_SIZE);
-		shm_toc_insert(toc, i, mq);
-		shm_mq_set_sender(mq, MyProc);
-		mq_handles[i] = shm_mq_attach(mq, seg, NULL);
-	}
+	segs = palloc0(MaxBackends * sizeof(dsm_segment *));
+	mq_handles = palloc0(MaxBackends * sizeof(shm_mq_handle *));
 
 	/* register ourself in dmq_state */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 
-	/* is this sender already connected? */
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		if (!dmq_state->receivers[i].active) /* free slot */
+		if (dmq_state->receivers[i].name[0] == '\0') /* free slot */
 		{
 			receiver_id = i;
-		} else if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
+		}
+		else if (strcmp(dmq_state->receivers[i].name, sender_name) == 0)
 		{
 			mtm_log(ERROR, "[DMQ] sender '%s' already connected", sender_name);
 		}
@@ -1122,15 +1288,22 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	if (receiver_id < 0)
 		mtm_log(ERROR, "[DMQ] maximum number of dmq-receivers reached");
-	strncpy(dmq_state->receivers[receiver_id].name, sender_name, DMQ_NAME_MAXLEN);
 
-	dmq_state->receivers[receiver_id].dsm_h = dsm_segment_handle(seg);
-	dmq_state->receivers[receiver_id].procno = MyProc->pgprocno;
-	dmq_state->receivers[receiver_id].active = true;
+	strncpy(dmq_state->receivers[receiver_id].name, sender_name, DMQ_NAME_MAXLEN);
 	dmq_state->receivers[receiver_id].pid = MyProcPid;
+	for (j = 0; j < MaxBackends; j++)
+		dmq_state->receivers[receiver_id].dsm_handles[j].h = DSM_HANDLE_INVALID;
 	LWLockRelease(dmq_state->lock);
 
-	on_shmem_exit(dmq_receiver_at_exit, Int32GetDatum(receiver_id));
+	/*
+	 * This is not on_shmem_exit for a reason. We ought to check out from
+	 * shmem *before* detaching dsm; otherwise, a subscriber who had attached
+	 * previously might notice detached mq, find the same dsm and reattach to
+	 * its end for the second time. Surely we could track dsm handles in
+	 * subscribers local state and forbid attaching to the same handle twice,
+	 * but it is better to avoid the race at all rather than fight it.
+	 */
+	before_shmem_exit(dmq_receiver_at_exit, Int32GetDatum(receiver_id));
 
 	/* okay, switch client to copyout state */
 	pq_beginmessage(&s, 'W');
@@ -1184,7 +1357,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 			if (rc > 0)
 			{
-				dmq_handle_message(&s, mq_handles, seg, sender_name, extra);
+				dmq_handle_message(&s, &dmq_state->receivers[receiver_id],
+								   segs, mq_handles, extra);
 				last_message_at = dmq_now();
 				reader_state = NeedByte;
 			}
@@ -1215,6 +1389,17 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 		/* XXX: is it enough? */
 		CHECK_FOR_INTERRUPTS();
+		if (ConfigReloadPending)
+		{
+			/*
+			 * note: we are not calling ProcessConfigFile here, so dmq
+			 * receiver never rereads the actual conf. There are hardly any
+			 * GUCs that meaningfully influence it though.
+			 */
+			dmq_receiver_recreate_mqs(&dmq_state->receivers[receiver_id],
+									  segs, mq_handles);
+			ConfigReloadPending = false;
+		}
 
 		if (dmq_now() - last_message_at > recv_timeout)
 		{
@@ -1236,8 +1421,7 @@ dmq_terminate_receiver(char *name)
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
 	{
-		if (dmq_state->receivers[i].active &&
-			strncmp(dmq_state->receivers[i].name, name, DMQ_NAME_MAXLEN) == 0)
+		if (strncmp(dmq_state->receivers[i].name, name, DMQ_NAME_MAXLEN) == 0)
 		{
 			pid = dmq_state->receivers[i].pid;
 			Assert(pid > 0);
@@ -1338,103 +1522,110 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 		mtm_log(WARNING, "[DMQ] dmq_push: can't send to queue");
 }
 
+/*
+ * Called from the subscriber. (Re)attaches to shm_mq of receiver registered
+ * at handle_id if it is alive. Caller must have subscription at this point --
+ * it is a sign for receiver to create the queue.
+ * Returns true on success, false otherwise, but who cares?
+ */
 static bool
 dmq_reattach_shm_mq(int handle_id)
 {
-	shm_toc    *toc;
-	shm_mq	   *inq;
-	MemoryContext oldctx;
-
-	int			receiver_id = -1;
-	int			receiver_procno;
-	dsm_handle	receiver_dsm;
-	int			i;
-
-	dsm_segment *new_segmap;
-
-	LWLockAcquire(dmq_state->lock, LW_SHARED);
-	for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+	/*
+	 * Release the previous segment, if any. The placement of this here is not
+	 * entirely random: in common sequence
+	 * 1) connection lost, dmq_pop_nb calls dmq_reattach_shm_mq but fruitlessly
+	 * 2) connection is on, and we do dmq_stream_subscribe
+	 * this saves us from an excessive receive failure as NULL mqh forces
+	 * a rettachment attempt in dmq_stream_subscribe.
+	 */
+	if (dmq_local.inhandles[handle_id].dsm_seg != NULL)
 	{
-		/* XXX: change to hash maybe */
-		if (strcmp(dmq_state->receivers[i].name, dmq_local.inhandles[handle_id].name) == 0
-			&& dmq_state->receivers[i].active)
-		{
-			receiver_id = i;
-			receiver_procno = dmq_state->receivers[i].procno;
-			receiver_dsm = dmq_state->receivers[i].dsm_h;
-			break;
-		}
-	}
-	LWLockRelease(dmq_state->lock);
-
-	if (receiver_id < 0)
-	{
-		mtm_log(DmqTraceShmMq, "[DMQ] can't find receiver named '%s'",
-				dmq_local.inhandles[handle_id].name);
-		return false;
-	}
-
-	Assert(receiver_dsm != DSM_HANDLE_INVALID);
-
-	if (dsm_find_mapping(receiver_dsm))
-	{
-		mtm_log(DmqTraceShmMq,
-				"[DMQ] we already attached '%s', probably receiver is exiting",
-				dmq_local.inhandles[handle_id].name);
-		return false;
-	}
-
-	mtm_log(DmqTraceShmMq, "[DMQ] attaching '%s', dsm handle %d",
-			dmq_local.inhandles[handle_id].name,
-			receiver_dsm);
-
-	/* try to attch new segment before destroying old ones */
-	new_segmap = dsm_attach(receiver_dsm);
-	if (new_segmap == NULL)
-	{
-		mtm_log(DmqTraceShmMq, "unable to map dynamic shared memory segment");
-		return false;
-	}
-
-	if (dmq_local.inhandles[handle_id].dsm_seg)
-	{
-		if (dmq_local.inhandles[handle_id].mqh)
-		{
-			mtm_log(DmqTraceShmMq, "[DMQ] detach shm_mq_handle %p",
-					dmq_local.inhandles[handle_id].mqh);
-			shm_mq_detach(dmq_local.inhandles[handle_id].mqh);
-		}
-		mtm_log(DmqTraceShmMq, "[DMQ] detach dsm_seg %p",
-				dmq_local.inhandles[handle_id].dsm_seg);
+		/* mq is detached automatically in dsm detach cb */
 		dsm_detach(dmq_local.inhandles[handle_id].dsm_seg);
+		dmq_local.inhandles[handle_id].dsm_seg = NULL;
+		dmq_local.inhandles[handle_id].mqh = NULL;
 	}
 
-	dmq_local.inhandles[handle_id].dsm_seg = new_segmap;
-	dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
+	/*
+	 * Loop until receiver creates queue for us or we find it dead.
+	 */
+	for (;;)
+	{
+		int			i;
+		pid_t		receiver_pid = 0;
+		dsm_handle	receiver_dsm = DSM_HANDLE_INVALID;
 
-	toc = shm_toc_attach(DMQ_MQ_MAGIC,
-						 dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg));
-	if (toc == NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("bad magic number in dynamic shared memory segment")));
+		LWLockAcquire(dmq_state->lock, LW_SHARED);
+		for (i = 0; i < DMQ_MAX_RECEIVERS; i++)
+		{
+			DmqReceiverSlot *rslot = &dmq_state->receivers[i];
 
-	inq = shm_toc_lookup(toc, MyProc->pgprocno, false);
+			/* XXX: change to hash maybe */
+			if (strcmp(rslot->name,
+					   dmq_local.inhandles[handle_id].name) == 0)
+			{
+				receiver_pid = rslot->pid;
 
-	/* re-create */
-	mtm_log(DmqTraceShmMq, "[DMQ] creating shm_mq handle %p", inq);
-	inq = shm_mq_create(inq, DMQ_MQ_SIZE);
-	//XXX
-		shm_mq_set_receiver(inq, MyProc);
-	shm_mq_set_sender(inq, &ProcGlobal->allProcs[receiver_procno]);
-	//XXX
+				if ((rslot->dsm_handles[MyProc->pgprocno].h != DSM_HANDLE_INVALID) &&
+					(rslot->dsm_handles[MyProc->pgprocno].procno_gen ==
+					 dmq_local.my_procno_gen))
+				{
+					/* good queue found */
+					receiver_dsm = rslot->dsm_handles[MyProc->pgprocno].h;
+				}
+				break;
+			}
+		}
+		LWLockRelease(dmq_state->lock);
 
-		oldctx = MemoryContextSwitchTo(TopMemoryContext);
-	dmq_local.inhandles[handle_id].mqh = shm_mq_attach(inq,
-													   dmq_local.inhandles[handle_id].dsm_seg, NULL);
-	MemoryContextSwitchTo(oldctx);
+		if (!receiver_pid)
+		{
+			/* receiver is dead, no good to wait */
+			ConditionVariableCancelSleep();
+			return false;
+		}
 
-	return true;
+		if (receiver_dsm != DSM_HANDLE_INVALID)
+		{
+			/* success, attach to the queue */
+			MemoryContext oldctx;
+			shm_mq	   *inq;
+
+			ConditionVariableCancelSleep();
+			mtm_log(DmqTraceShmMq, "[DMQ] attaching '%s', dsm handle %d",
+					dmq_local.inhandles[handle_id].name,
+					receiver_dsm);
+
+			dmq_local.inhandles[handle_id].dsm_seg = dsm_attach(receiver_dsm);
+			if (dmq_local.inhandles[handle_id].dsm_seg == NULL)
+			{
+				mtm_log(DmqTraceShmMq, "unable to map dynamic shared memory segment");
+				/* looks like receiver just exited */
+				return false;
+			}
+			dsm_pin_mapping(dmq_local.inhandles[handle_id].dsm_seg);
+
+			inq = dsm_segment_address(dmq_local.inhandles[handle_id].dsm_seg);
+			shm_mq_set_receiver(inq, MyProc);
+			oldctx = MemoryContextSwitchTo(TopMemoryContext);
+			dmq_local.inhandles[handle_id].mqh = shm_mq_attach(
+				inq,
+				dmq_local.inhandles[handle_id].dsm_seg,
+				NULL);
+			MemoryContextSwitchTo(oldctx);
+
+			return true;
+		}
+
+		/*
+		 * receiver seems to be live, but there is no queue yet;
+		 * poke it to create one
+		 */
+		kill(receiver_pid, SIGHUP);
+		ConditionVariableSleep(&dmq_state->shm_mq_creation_cv,
+							   PG_WAIT_EXTENSION);
+	}
 }
 
 /*
@@ -1475,8 +1666,15 @@ void dmq_attach_receiver(char *sender_name, int8 mask_pos)
 	dmq_local.inhandles[handle_id].mqh = NULL;
 	dmq_local.inhandles[handle_id].mask_pos = mask_pos;
 	strncpy(dmq_local.inhandles[handle_id].name, sender_name, DMQ_NAME_MAXLEN);
+	mtm_log(DmqTraceIncoming, "[DMQ] dmq_attach_receiver from %s with mask_pos %d at handle %d done",
+			sender_name, mask_pos, handle_id);
 
-	dmq_reattach_shm_mq(handle_id);
+	/*
+	 * TODO: idea to use subscriptions as trigger to mq creation was not so
+	 * good: we might hang here if backend hasn't subscribed yet. Better to
+	 * publish required procno_gens separately, then we could uncomment this.
+	 */
+	/* dmq_reattach_shm_mq(handle_id); */
 }
 
 void
@@ -1511,10 +1709,13 @@ dmq_detach_receiver(char *sender_name)
 	}
 
 	dmq_local.inhandles[handle_id].name[0] = '\0';
+	mtm_log(DmqTraceIncoming, "[DMQ] dmq_detach_receiver %s from handle %d done",
+			sender_name, handle_id);
 }
 
 /*
- * Subscribes caller to msgs from stream_name.
+ * Subscribes caller to msgs from stream_name and attempts to reattach to
+ * receivers.
  */
 void
 dmq_stream_subscribe(char *stream_name)
@@ -1522,6 +1723,16 @@ dmq_stream_subscribe(char *stream_name)
 	bool		found;
 	DmqStreamSubscription *sub;
 	int			i;
+
+	/*
+	 * If our process subscribes for the first time obtain a procno gen.
+	 */
+	if (dmq_local.my_procno_gen == 0)
+	{
+		dmq_local.my_procno_gen = ++dmq_state->procno_gens[MyProc->pgprocno];
+		mtm_log(DmqTraceShmMq, "my_procno_gen issued, my id <%d, " UINT64_FORMAT ">",
+				MyProc->pgprocno, dmq_local.my_procno_gen);
+	}
 
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions, stream_name,
@@ -1533,6 +1744,7 @@ dmq_stream_subscribe(char *stream_name)
 				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
 	}
 	sub->procno = MyProc->pgprocno;
+	sub->procno_gen = dmq_local.my_procno_gen;
 	LWLockRelease(dmq_state->lock);
 
 	/*
@@ -1547,18 +1759,15 @@ dmq_stream_subscribe(char *stream_name)
 	 */
 	for (i = 0; i < dmq_local.n_inhandles; i++)
 	{
-		Size		len;
-		void	   *data;
-		shm_mq_result res;
+		if (dmq_local.inhandles[i].name[0] == '\0')
+			continue; /* unused slot */
 
-		if (dmq_local.inhandles[i].mqh)
-			res = shm_mq_receive(dmq_local.inhandles[i].mqh, &len, &data, true);
-		else
-			res = SHM_MQ_DETACHED;
-
-		Assert(res != SHM_MQ_SUCCESS);
-
-		if (res == SHM_MQ_DETACHED)
+		/*
+		 * TODO: it would be nice to attempt reattach if we have the handle
+		 * but the queue is already broken (sender detached), however shm_mq
+		 * doesn't have this in its API and hand-crafting it is a crutch.
+		 */
+		if (dmq_local.inhandles[i].mqh == NULL)
 			dmq_reattach_shm_mq(i);
 	}
 }
@@ -1593,6 +1802,7 @@ dmq_get_sendconn_cnt(uint64 participants, int *sconn_cnt)
 	}
 }
 
+/* XXX: this is never used, not well maintained and should be removed */
 bool
 dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask)
 {
@@ -1671,6 +1881,15 @@ dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask)
  * mask_pos in dmq_attach_receiver.
  * sender_mask_pos returns the sender (again mask_pos) which returned message
  * or failed. -1 means all shm_mqs are SHM_MQ_WOULD_BLOCK.
+ *
+ * Failure detection semantics: if we don't have record of live connection to
+ * receiver (attached shm_mq internally) in the moment of calling this, error
+ * will be reported (even if immediate reconnect is successfull, we might
+ * already missed the reply, so this is necessary behaviour). After such
+ * failure and in dmq_stream_subscribe we try to find receiver ~ live TCP
+ * connection again. If it is found, next dmq_pop_nb might be successfull. So
+ * this reattach acts like an error flush (the error won't be reported again)
+ * and at the same time a reconnection attempt.
  *
  * Returns true if successfully filled msg, false otherwise; in the latter
  * case, *wait is true if failed shmem_mq was successfully reestablished,
