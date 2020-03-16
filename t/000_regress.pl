@@ -85,7 +85,7 @@ $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 #SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
 mkdir('results');
-unlink('results/regression.diffs');
+unlink('results/regression.diff');
 
 # finally compare regression.diffs with our version
 # Do not use diffs extension as some upper level testing systems are searching for all
