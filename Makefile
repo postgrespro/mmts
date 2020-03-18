@@ -104,4 +104,4 @@ run-pathman-regress-ext:
 pg-regress: | start run-pg-regress
 pathman-regress: | start run-pathman-regress-ext stop
 installcheck:
-       $(prove_installcheck)
+	$(prove_installcheck)
