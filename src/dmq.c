@@ -1230,6 +1230,8 @@ dmq_receiver_at_exit(int status, Datum receiver)
 	 * important.
 	 */
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	strncpy(sender_name, dmq_state->receivers[receiver_id].name,
+			DMQ_NAME_MAXLEN);
 	dmq_state->receivers[receiver_id].name[0] = '\0';
 	LWLockRelease(dmq_state->lock);
 
