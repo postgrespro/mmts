@@ -3158,7 +3158,6 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		/* Create logical slot for our publication to this neighbour */
 		ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
 		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
-		/* XXX? */
 										false,	/* do not build snapshot */
 										logical_read_local_xlog_page, NULL, NULL,
 										NULL);

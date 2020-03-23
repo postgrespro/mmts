@@ -1307,7 +1307,6 @@ process_remote_update(StringInfo s, Relation rel)
 										 new_tuple.values,
 										 new_tuple.isnull,
 										 new_tuple.changed);
-		// ExecStoreHeapTuple(remote_tuple, remoteslot, false);
 		ExecStoreTuple(remote_tuple, remoteslot, InvalidBuffer, false);
 
 		EvalPlanQualSetSlot(&epqstate, remoteslot);
