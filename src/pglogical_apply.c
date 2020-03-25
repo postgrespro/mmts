@@ -1253,12 +1253,13 @@ process_remote_commit(StringInfo in,
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
-				StartTransactionCommand();
-				MtmBeginSession(origin_node);
-
 				gtx = GlobalTxAcquire(gid, false);
 				if (!gtx)
 					break;
+
+				StartTransactionCommand();
+				MtmBeginSession(origin_node);
+
 				FinishPreparedTransaction(gid, true, false);
 				CommitTransactionCommand();
 				gtx->state.status = GTXCommitted;
@@ -1283,12 +1284,13 @@ process_remote_commit(StringInfo in,
 
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
-				MtmBeginSession(origin_node);
-				StartTransactionCommand();
-
 				gtx = GlobalTxAcquire(gid, false);
 				if (!gtx)
 					break;
+
+				MtmBeginSession(origin_node);
+				StartTransactionCommand();
+
 				FinishPreparedTransaction(gid, false, false);
 				CommitTransactionCommand();
 				gtx->state.status = GTXAborted;
