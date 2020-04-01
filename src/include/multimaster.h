@@ -111,6 +111,8 @@ typedef struct MtmSeqPosition
 typedef enum
 {
 	PGLOGICAL_COMMIT,
+	/* can be sent if prepared xact is aborted during decoding */
+	PGLOGICAL_ABORT,
 	PGLOGICAL_PREPARE,
 	PGLOGICAL_COMMIT_PREPARED,
 	PGLOGICAL_ABORT_PREPARED,

@@ -724,10 +724,17 @@ pg_filter_decode_txn(LogicalDecodingContext *ctx,
 	return false;
 }
 
-/* ABORT callback */
+/*
+ * ABORT callback, it can be called if prepared transaction was aborted during
+ * decoding.
+ */
 static void
 pg_decode_abort_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					XLogRecPtr abort_lsn)
 {
-	return;
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
+
+	MtmOutputPluginPrepareWrite(ctx, true, true);
+	pglogical_write_abort(ctx->out, data, txn, abort_lsn);
+	MtmOutputPluginWrite(ctx, true, true);
 }

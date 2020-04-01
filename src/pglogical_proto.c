@@ -542,6 +542,30 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 }
 
+void
+pglogical_write_abort(StringInfo out, PGLogicalOutputData *data,
+					  ReorderBufferTXN *txn, XLogRecPtr lsn)
+{
+	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
+	uint8		event = PGLOGICAL_ABORT;
+
+	/* send fixed fields */
+	pq_sendbyte(out, 'C');
+	pq_sendbyte(out, event);
+
+	/* The rest of fields is of (dubious) debugging use only */
+	pq_sendbyte(out, hooks_data->cfg->my_node_id);
+
+	/* send fixed fields */
+	pq_sendint64(out, lsn);
+	pq_sendint64(out, txn->end_lsn);
+	pq_sendint64(out, txn->commit_time);
+
+	send_node_id(out, txn, hooks_data);
+	pq_sendint64(out, txn->origin_lsn);
+}
+
+
 /*
  * Write a tuple to the outputstream, in the most efficient format possible.
  */

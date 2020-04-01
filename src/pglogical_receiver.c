@@ -900,8 +900,15 @@ pglogical_receiver_main(Datum main_arg)
 						ByteBufferAppend(&buf, stmt, msg_len);
 						if (stmt[0] == 'C') /* commit */
 						{
-							if (!MtmFilterTransaction(stmt, msg_len, spvector,
-													  filter_map, rctx))
+							/*
+							 * Don't apply xact if our filter says we already
+							 * did so. Drop it if this is ABORT as well --
+							 * this means PREPARE at sender was aborted during
+							 * in the middle of decoding.
+							 */
+							if ((!MtmFilterTransaction(stmt, msg_len, spvector,
+													   filter_map, rctx) &&
+								 stmt[1] != PGLOGICAL_ABORT))
 							{
 								if (spill_file >= 0)
 								{
