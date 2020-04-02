@@ -31,7 +31,7 @@ The same procedure in pseudocode ([6.824]):
      2	    choose n, unique and higher than any n seen so far
      3	    send prepare(n) to all servers including self
      4	    if prepare_ok(n, na, va) from majority:
-     5	      v' = va with highest na; choose own v otherwise   
+     5	      v' = va with highest na; choose own v otherwise
      6	      send accept(n, v') to all
      7	      if accept_ok(n) from majority:
      8	        send decided(v') to all
@@ -91,6 +91,7 @@ self.global_txs = {} # Dict[gid:str -> GTX]
 class GTX:
     acquired_by: int
     gid: str
+	status: string
     proposal_term: Tuple[int, int]
     accepted_term: Tuple[int, int]
     # node_id -> StatusResp[gid, node_id, status, proposal_term, accepted_term]

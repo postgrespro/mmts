@@ -318,11 +318,11 @@ ConsiderGenSwitch(Generation gen, nodemask_t donors) {
   /* We are not member of this generation... */
   if !IsMemberOfGen(me, gen) ||
      /*
-      * .. or we can't be online in it due to promise: when we voted for last_vote.num,
-      * we promised that the oldest gen among gens with num <= last_vote.num in
-      * which we ever can be online (and thus create xacts) is last_online_in
-      * on the moment of voting, and it should stay forever. To keep that
-      * promise, prevent getting ONLINE in gens with <= last_vote.num numbers.
+      * .. or we we voted for greater last_vote.num, which means we've
+      * promised that the highest gen among gens with num < last_vote.num
+      * in which we ever can be online (and thus create xacts) is
+      * last_online_in on the moment of voting. To keep that promise,
+      * prevent getting ONLINE in gens with < last_vote.num numbers.
       */
      genstate->last_vote.num > gen.num {
     /*
@@ -535,11 +535,11 @@ bool HandleParallelSafe(ps) {
   LWLockAcquire(GenLock, LW_EXCLUSIVE);
 
   /*
-   * Either we are not interested in this gen (we are in newer one or promised
-   * not to join this one or not a member of it) or we are already online.
+   * Not interested in this P.S. if we are in newer gen. Otherwise, still not
+   * interested if we are already ONLINE in this one or can never be online in
+   * it (due to promise or just not being a member).
    */
-  if (genstate->current_gen.num != ps.gen.num ||
-      genstate->status != RECOVERY) {
+  if (genstate->current_gen.num != ps.gen.num || genstate->status != RECOVERY) {
     LWLockRelease(GenLock);
     return false;
   }
@@ -555,7 +555,7 @@ bool HandleParallelSafe(ps) {
    * we probably just have given out all prepares before it to parallel
    * workers without applying them. Reconnect in recovery.
    */
-  if (ctx->replMode == ONLINE) {
+  if (ctx->replMode == REPLMODE_NORMAL) {
    LWLockRelease(GenLock);
    return true;
   }
@@ -620,7 +620,7 @@ bool HandlePrepare(prepare, rcv_ctx) {
        return true;
    }
 
-  if rcv_ctx.mode == RECOVERY
+  if genstate->status == RECOVERY
     if prepare.gen.num == genstate->current_gen.num {
       /*
        * Depending on implementation, under extremely unlikely circumstances due
@@ -697,7 +697,7 @@ it most probably (unless many events pass during voting period) won't need
 recovery at all (its last_online_in is the same as clique's max) or it first
 recovers from node with max last_online_in until lag is less than some
 configured bound (or just to last fsync as currently). Obviously, the fresher
-last_online_in of other nodes we consider, the less change we would need long
+last_online_in of other nodes we consider, the less chance we would need long
 recovery while we think we don't.
 
 Whom to propose exactly? On the first glance, a clique, but here is a kind of
@@ -705,7 +705,7 @@ issue which especially subtle on >=5 nodes. We shouldn't propose other nodes if
 they were not present in current gen even if they are in clique, because their
 lag might be arbitrary big: let them decide on their own when to join. Thus we
 should propose something like current_gen.members & clique + me. However, with
-\>=5 nodes such formula might always yield minority, even if majority is alive
+\>=5 nodes such formula might constantly yield minority, even if majority is alive
 (if this majority consists of one node from latest gen and two laggers) unless
 we allow to elect gens with minority members. To sum up,
  - Propose for voting current_gen.members & clique + me.
@@ -716,7 +716,7 @@ we allow to elect gens with minority members. To sum up,
    recovered enough.
  - Reply to vote request accepting just any clique conforming offer is sort of
    not enough, as simple example shows; with previous example,
-   - 13 is elected, 2 in it
+   - 13 is elected, 2 knows about this gen (switched to it)
    - Then 345 unite again and write 10gb of data, 1 again deeply lagging;
    - Then 123 live again; 2 quickly recovers and proposes 123 while 1 shouldn't
      be proposed because another gen without it emerged since then.
