@@ -153,9 +153,9 @@ mtm_commit_cleanup(int status, Datum arg)
 		if (mtm_commit_state.gtx != NULL)
 		{
 			mtm_commit_state.gtx->orphaned = true;
-			ResolverWake();
 			GlobalTxRelease(mtm_commit_state.gtx);
 			mtm_commit_state.gtx = NULL;
+			ResolverWake();
 		}
 	}
 }
