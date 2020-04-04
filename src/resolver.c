@@ -233,7 +233,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
 	{
 		/* skip acquired until next round */
-		if (gtx->orphaned && gtx->acquired_by == 0)
+		if (gtx->orphaned && gtx->acquired_by == InvalidBackendId)
 		{
 			uint64		connected;
 			MtmTxRequest status_msg = {
@@ -253,6 +253,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 					gtx->state.accepted),
 				false);
 			gtx->state.proposal = new_term;
+			mtm_log(ResolverState, "proposal term (%d,%d) stamped to transaction %s",
+					new_term.ballot, new_term.node_id, gtx->gid);
 			/*
 			 * We should set GTRS_AwaitStatus here, otherwise if one
 			 * attempt to to resolve failed in GTRS_AwaitAcks, we would
