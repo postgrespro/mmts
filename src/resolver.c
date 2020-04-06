@@ -267,8 +267,6 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		}
 	}
 	LWLockRelease(gtx_shared->lock);
-
-	mtm_log(ResolverState, "Term (%d,%d) is stamped", new_term.ballot, new_term.node_id);
 }
 
 static void

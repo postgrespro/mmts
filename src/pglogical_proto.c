@@ -286,6 +286,10 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 	pq_sendint64(out, end_lsn);
 	pq_sendint(out, sz, 4);
 	pq_sendbytes(out, message, sz);
+
+	mtm_log(ProtoTraceMessage, "Sent %c message to node %d",
+			*prefix, hooks_data->receiver_node_id);
+
 }
 
 /*
@@ -487,6 +491,8 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, 42);
 
 	pq_sendstring(out, txn->gid);
+
+	mtm_log(ProtoTraceSender, "pglogical_write_commit_prepared %s", txn->gid);
 }
 
 /*
@@ -516,6 +522,8 @@ pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* skip CSN */
 
 	pq_sendstring(out, txn->gid);
+
+	mtm_log(ProtoTraceSender, "pglogical_write_abort_prepared %s", txn->gid);
 }
 
 static void

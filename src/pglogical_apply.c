@@ -1142,7 +1142,6 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
-				/* PREPARE itself */
 				gtx = GlobalTxAcquire(gid, true);
 
 				/*
@@ -1156,6 +1155,7 @@ process_remote_commit(StringInfo in,
 
 				PrepareTransactionBlock(gid);
 				AllowTempIn2PC = true;
+				/* PREPARE itself */
 				CommitTransactionCommand();
 				ReleasePB();
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);

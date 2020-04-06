@@ -2642,8 +2642,6 @@ check_status_requests(MtmConfig *mtm_cfg)
 		int			sender_node_id;
 		int			dest_id;
 
-		/* elog(WARNING, "monitor got message of len %d", packed_msg.len); */
-
 		sender_node_id = sender_mask_pos + 1;
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
@@ -2657,6 +2655,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 		{
 			MtmTxRequest *msg = (MtmTxRequest *) raw_msg;
 			GlobalTx   *gtx;
+
+			mtm_log(ResolverTx, "got '%s' from %d",
+					MtmMesageToString(raw_msg), sender_node_id);
 
 			if (msg->type == MTReq_Status)
 			{
