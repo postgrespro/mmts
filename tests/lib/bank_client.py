@@ -19,11 +19,12 @@ class MtmTxAggregate(object):
 
     def __init__(self):
         # self.name = name
-        self.isolation = 0
+        self.isolation = 0  # number of isolation errors, for total_tx
         self.clear_values()
 
     def clear_values(self):
         self.max_latency = 0.0
+        # xact finish status ('commit' or error msg) => counter
         self.finish = {}
 
     def start_tx(self):
@@ -96,29 +97,29 @@ class MtmClient(object):
             "avgTransDelay", "lastStatusChange", "oldestSnapshot", "SenderPid",
             "SenderStartTime ", "ReceiverPid", "ReceiverStartTime", "connStr"]
         self.oops = '''
-                        . . .                         
-                         \|/                          
-                       `--+--'                        
-                         /|\                          
-                        ' | '                         
-                          |                           
-                          |                           
-                      ,--'#`--.                       
-                      |#######|                       
-                   _.-'#######`-._                    
-                ,-'###############`-.                 
-              ,'#####################`,               
-             /#########################\              
-            |###########################|             
-           |#############################|            
-           |#############################|            
-           |#############################|            
-           |#############################|            
-            |###########################|             
-             \#########################/              
-              `.#####################,'               
-                `._###############_,'                 
-                   `--..#####..--'      
+                        . . .
+                         \|/
+                       `--+--'
+                         /|\
+                        ' | '
+                          |
+                          |
+                      ,--'#`--.
+                      |#######|
+                   _.-'#######`-._
+                ,-'###############`-.
+              ,'#####################`,
+             /#########################\
+            |###########################|
+           |#############################|
+           |#############################|
+           |#############################|
+           |#############################|
+            |###########################|
+             \#########################/
+              `.#####################,'
+                `._###############_,'
+                   `--..#####..--'
 '''
 
     def initdb(self):
@@ -151,7 +152,11 @@ class MtmClient(object):
             con = psycopg2.connect(dsn)
             con.autocommit = True
             cur = con.cursor()
-            cur.execute('select 1')
+            # xxx: make write transaction to ensure generational perturbations
+            # after init have calmed down
+            # do we really need that?
+
+            cur.execute('create table if not exists bulka ()')
             cur.close()
             con.close()
 
@@ -203,11 +208,11 @@ class MtmClient(object):
             cur.close()
             con.close()
 
-        print(hashes)
-        print(hashes2)
+        print("bank_test hashes: {}".format(hashes))
+        print("insert_test hashes: {}".format(hashes2))
         return (len(hashes) == 1 and len(hashes2) == 1)
 
-    def no_prepared_tx(self):
+    def n_prepared_tx(self):
         n_prepared = 0
 
         for dsn in self.dsns:
@@ -215,10 +220,12 @@ class MtmClient(object):
             cur = con.cursor()
             cur.execute("select count(*) from pg_prepared_xacts;")
             n_prepared += int(cur.fetchone()[0])
+            if n_prepared != 0:
+                print("{} prepared xacts on node {}".format(n_prepared, dsn))
             cur.close()
             con.close()
 
-        print("n_prepared = %d" % (n_prepared))
+        print("total num of prepared xacts on all nodes: %d" % (n_prepared))
         return (n_prepared)
 
     def list_prepared(self, node_id):
@@ -390,6 +397,9 @@ class MtmClient(object):
         self.evloop_process = multiprocessing.Process(target=self.run, args=())
         self.evloop_process.start()
 
+    # returns list indexed by node id - 1; each member is dict
+    # {agg name (transaction type, e.g. 'transfer') :
+    #    dict as returned by as_dict}
     def get_aggregates(self, _print=True, clean=True):
         if clean:
             self.parent_pipe.send('status')
@@ -405,12 +415,14 @@ class MtmClient(object):
     def clean_aggregates(self):
         self.parent_pipe.send('status')
         self.parent_pipe.recv()
+        print('aggregates cleaned')
 
     def stop(self):
         self.running = False
         self.evloop_process.terminate()
         self.evloop_process.join()
         time.sleep(3)
+        print('client stopped')
 
     @classmethod
     def print_aggregates(cls, aggs):

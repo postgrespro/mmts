@@ -26,6 +26,8 @@ if [ "$1" = 'postgres' ]; then
 			max_replication_slots = 10
 			max_wal_senders = 10
 			log_statement = all
+			log_connections = true
+			log_lock_waits = true
 
 			shared_preload_libraries = 'multimaster'
 			multimaster.volkswagen_mode = off

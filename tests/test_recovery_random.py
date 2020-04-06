@@ -1,15 +1,23 @@
+#!/usr/bin/env python3
+
 #
 # Based on Aphyr's test for CockroachDB.
 #
+# Randomized recovery test for multimaster. Currently it picks a random node,
+# crash-recovers it or drops/rejects packets to and from it under load and
+# checks that things are ok, i.e. the rest two continue working and after
+# eliminating the failure the victim successfully recovers, with no hanged
+# prepares and data being identic everywhere. Lather, rinse, repeat.
 
-import unittest
-import time
-import subprocess
 import datetime
 import docker
-import warnings
+import os
 import random
 import socket
+import subprocess
+import time
+import unittest
+import warnings
 
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
@@ -53,27 +61,34 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
     @classmethod
     def tearDownClass(cls):
-        print('tearDown')
-        cls.client.stop()
+        print('tearDownClass')
 
-        time.sleep(TEST_STOP_DELAY)
-        cls.collectLogs()
+        # ohoh
+        th = TestHelper()
+        th.client = cls.client
 
-        if not cls.client.is_data_identic():
-            raise AssertionError('Different data on nodes')
+        # collect logs for CI anyway
+        try:
+            th.assertDataSync()
+            cls.client.stop()
+        except Exception as e:
+            print('got exception during final assertDataSync: ', e)
 
-        if cls.client.no_prepared_tx() != 0:
-            raise AssertionError('There are some uncommitted tx')
-
-        # XXX: check nodes data identity here
-        subprocess.check_call(['docker-compose', 'down'])
+        # Destroying containers is really unhelpful for local debugging, so
+        # do this automatically only in CI.
+        if 'CI' in os.environ:
+            cls.collectLogs()
+            subprocess.check_call(['docker-compose', 'down'])
 
     @classmethod
     def collectLogs(cls):
+        print('collecting logs')
         # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
-        subprocess.run('docker logs node1 &> mmts_node1.log', shell=True)
-        subprocess.run('docker logs node2 &> mmts_node2.log', shell=True)
-        subprocess.run('docker logs node3 &> mmts_node3.log', shell=True)
+        # non-standard &> doesn't work in e.g. default Debian dash, so
+        # use old school > 2>&1
+        subprocess.run('docker logs node1 >mmts_node1.log 2>&1', shell=True)
+        subprocess.run('docker logs node2 >mmts_node2.log 2>&1', shell=True)
+        subprocess.run('docker logs node3 >mmts_node3.log 2>&1', shell=True)
 
     def setUp(self):
         warnings.simplefilter("ignore", ResourceWarning)
@@ -106,6 +121,14 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
             print(f'Iteration #{i} is OK')
 
+# useful to temporary run inidividual tests for debugging
+def suite():
+    suite = unittest.TestSuite()
+    suite.addTest(RecoveryTest('test_tmp'))
+    return suite
 
 if __name__ == '__main__':
     unittest.main()
+
+    # runner = unittest.TextTestRunner(verbosity=2, failfast=True)
+    # runner.run(suite())

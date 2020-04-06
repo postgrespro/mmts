@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 #
 # Based on Aphyr's test for CockroachDB.
 #
@@ -37,17 +39,14 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     @classmethod
     def tearDownClass(cls):
         print('tearDown')
+
+        # ohoh
+        th = TestHelper()
+        th.client = cls.client
+
+        th.assertDataSync()
         cls.client.stop()
 
-        time.sleep(TEST_STOP_DELAY)
-
-        if not cls.client.is_data_identic():
-            raise AssertionError('Different data on nodes')
-
-        if cls.client.no_prepared_tx() != 0:
-            raise AssertionError('There are some uncommitted tx')
-
-        # XXX: check nodes data identity here
         # subprocess.check_call(['docker-compose','down'])
 
     def setUp(self):
@@ -138,7 +137,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def test_node_bicrash(self):
         print('### test_node_bicrash ###')
 
-        for _ in range(10):
+        for i in range(10):
             aggs_failure, aggs = self.performFailure(CrashRecoverNode('node3'),
                 node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
 
@@ -160,9 +159,18 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.assertIsolation(aggs)
 
             self.assertDataSync()
-            print('### iteration okay ###')
+            print('### iteration {} okay ###'.format(i + 1))
 
 
-if __name__ == '__main__':
+# useful to temporary run inidividual tests for debugging
+def suite():
+    suite = unittest.TestSuite()
+    suite.addTest(RecoveryTest('test_normal_operations'))
+    return suite
+
+if __name__ == "__main__":
+    # all tests
     unittest.main()
 
+    # runner = unittest.TextTestRunner(verbosity=2, failfast=True)
+    # runner.run(suite())

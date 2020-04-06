@@ -6,6 +6,7 @@ import random
 import os
 
 from .failure_injector import *
+from .bank_client import keep_trying
 
 TEST_WARMING_TIME = 3
 TEST_DURATION = 10
@@ -46,8 +47,9 @@ class TestHelper(object):
         total_sleep = 0
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
+            print('waiting for commit on node {}, slept for {}, aggregates:'.format(node_id + 1, total_sleep))
             aggs = self.client.get_aggregates(clean=False, _print=True)
-            print('=== ',aggs[node_id]['transfer']['finish'])
+            print('=== transfer finishes: ', aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
                 break
@@ -68,21 +70,40 @@ class TestHelper(object):
                 one = int(cur.fetchone()[0])
                 cur.close()
                 con.close()
-                print("Online!")
+                print("{} is online!".format(dsn))
                 break
             except Exception as e:
-                print('Waiting for online:', str(e))
+                print('Waiting for {} to get online:'.format(dsn), str(e))
                 time.sleep(5)
                 total_sleep += 5
+
+    def AssertNoPrepares(self):
+        n_prepared = self.client.n_prepared_tx()
+        if n_prepared != 0:
+            print(self.client.oops)
+            raise AssertionError('There are some unfinished tx')
 
     def assertDataSync(self):
         self.client.stop()
 
+        # wait until prepares will be resolved
+
+        # TODO: port graceful client termination from current stable branches.
+        # In that case I'd expect tests to pass without waiting as there are at
+        # least several seconds between 'all nodes are online' and this check
+        # (and with current hard client stop 1-2 hanged prepares are rarely
+        # but repeatedly seen). However generally there is no strict guarantee
+        # 'nodes are online and no clients => there are no unresolved xacts'
+        # in current mtm, end of recovery doesn't mean node doesn't have any
+        # prepares. Probably we could such guarantee via counter of orphaned
+        # xacts?
+        keep_trying(40, 1, self.AssertNoPrepares, 'AssertNoPrepares')
+
         if not self.client.is_data_identic():
             raise AssertionError('Different data on nodes')
 
-        if self.client.no_prepared_tx() != 0:
-            raise AssertionError('There are some uncommitted tx')
+        # no new PREPARE should have appeared, the client is stopped
+        self.AssertNoPrepares()
 
         self.client.bgrun()
 
@@ -96,7 +117,7 @@ class TestHelper(object):
     def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
 
         time.sleep(TEST_WARMING_TIME)
-         
+
         print('Simulate failure at ',datetime.datetime.utcnow())
 
         failure.start()
@@ -106,19 +127,27 @@ class TestHelper(object):
 
         time.sleep(TEST_DURATION)
 
-        print('Getting aggs at ',datetime.datetime.utcnow())
+        print('Getting aggs during failure at ',datetime.datetime.utcnow())
         aggs_failure = self.client.get_aggregates()
-
+        # helps to bail out earlier, making the investigation easier
+        # TODO: control this via arg
+        # if isinstance(failure, SingleNodePartition) or isinstance(failure, SingleNodePartitionReject):
+            # for n in range(3):
+                # if n == node_wait_for_commit:
+                    # self.assertNoCommits([aggs_failure[n]])
+                # else:
+                    # self.assertCommits([aggs_failure[n]])
 
         time.sleep(wait)
         failure.stop()
 
-        print('Eliminate failure at ',datetime.datetime.utcnow())
+        print('failure eliminated at', datetime.datetime.utcnow())
 
         self.client.clean_aggregates()
 
         if stop_load:
             time.sleep(3)
+            print('aggs before client stop:')
             self.client.get_aggregates(clean=False)
             self.client.stop()
 
@@ -137,6 +166,7 @@ class TestHelper(object):
             time.sleep(TEST_RECOVERY_TIME)
 
         time.sleep(TEST_RECOVERY_TIME)
+        print('aggs after failure:')
         aggs = self.client.get_aggregates()
 
         return (aggs_failure, aggs)
