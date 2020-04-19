@@ -381,6 +381,17 @@ PackGenAndDonors(StringInfo s, MtmGeneration gen, nodemask_t donors)
 void
 MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 {
+	/* generations with the same number must be the identic */
+#ifdef USE_ASSERT_CHECKING
+	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+	if (pg_atomic_read_u64(&mtm_state->current_gen_num) == gen.num)
+	{
+		Assert(mtm_state->current_gen_members == gen.members);
+		Assert(mtm_state->current_gen_configured == gen.configured);
+	}
+	LWLockRelease(mtm_state->gen_lock);
+#endif
+
 	/* fast path executed normally */
 	if (likely(pg_atomic_read_u64(&mtm_state->current_gen_num) >= gen.num))
 		return;
@@ -596,7 +607,7 @@ MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
    MtmStateSave();
 
    MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
-   mtm_log(MtmStateSwitch, "[STATE]	switched to online in generation num=" UINT64_FORMAT ", members=%s, donors=%s by applying ParallelSafe logged at %X/%X",
+   mtm_log(MtmStateSwitch, "[STATE] switched to online in generation num=" UINT64_FORMAT ", members=%s, donors=%s by applying ParallelSafe logged at %X/%X",
 				ps_gen.num,
 				maskToString(ps_gen.members),
 				maskToString(ps_donors),
@@ -1397,8 +1408,9 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 		 * Ok, we can vote for the proposed gen. Let's check if it makes sense:
 		 *  1) We would like to adhere to the rule 'node can add only  itself
 		 *     to new gen' to prevent election of lagging nodes. This is
-		 *     already checked by proposer, but his info could be stale, so it
-		 *     seems useful to verify it at voter side, c.f. generations2.md.
+		 *     already checked by the proposer, but his info could be stale,
+		 *     so it seems useful to verify it at the voter side, c.f.
+		 *     generations2.md.
 		 *  2) It should conform to our idea of the clique.
 		 *  3) Set of configured nodes should match.
 		 */
@@ -1409,8 +1421,29 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 			is_submask(req->gen.members, clique) &&
 			req->gen.configured == mtm_cfg->mask)
 		{
+			MtmStatusInGen old_status_in_gen = MtmGetCurrentStatusInGen();
+
 			resp.vote_ok = true;
 			resp.last_online_in = mtm_state->last_online_in;
+
+			/* persist the vote */
+			mtm_state->last_vote = req->gen;
+			MtmStateSave();
+
+			/*
+			 * If we are not online in current generation, probably after
+			 * giving this vote we are forbidden to ever become so -- this
+			 * allows the generation campaigner to use last_online_in in our
+			 * answer to reliably determine donors.
+			 */
+			if (old_status_in_gen == MTM_GEN_RECOVERY &&
+				MtmGetCurrentStatusInGen() == MTM_GEN_DEAD)
+			{
+				mtm_log(MtmStateMessage, "switched to dead in generation num=" UINT64_FORMAT "after giving vote for generation num=" UINT64_FORMAT,
+						MtmGetCurrentGenNum(),
+						req->gen.num);
+				MtmSetReceiveMode(RECEIVE_MODE_DISABLED);
+			}
 		}
 		else
 		{
@@ -1430,6 +1463,17 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	dmq_push_buffer(dest_id, "genvoteresp", packed_msg->data, packed_msg->len);
 }
 
+static char *
+MtmReceiveModeMnem(uint32 mode)
+{
+	if (mode == RECEIVE_MODE_DISABLED)
+		return "disabled";
+	else if (mode == RECEIVE_MODE_NORMAL)
+		return "normal";
+	else
+		return psprintf("recovery from node %d", mode);
+}
+
 static void
 MtmSetReceiveMode(uint32 mode)
 {
@@ -1437,6 +1481,7 @@ MtmSetReceiveMode(uint32 mode)
 	/* waking up receivers while disabled is not dangerous but pointless */
 	if (mode != RECEIVE_MODE_DISABLED)
 		ConditionVariableBroadcast(&Mtm->receivers_cv);
+	mtm_log(MtmStateDebug, "receive mode set to %s", MtmReceiveModeMnem(mode));
 }
 
 /* In what mode we should currently receive from the given node? */
@@ -1584,6 +1629,7 @@ MtmOnDmqReceiverDisconnect(char *node_name)
 	int			node_id;
 	nodemask_t old_connected_mask;
 	bool changed = false;
+	pid_t walreceiver_pid;
 
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
@@ -1596,11 +1642,26 @@ MtmOnDmqReceiverDisconnect(char *node_name)
 	mtm_state->connectivity_matrix[node_id - 1] = 0;
 
 	LWLockRelease(mtm_state->connectivity_lock);
-
 	if (changed)
 		CampaignerWake();
 
 	mtm_log(MtmStateMessage, "[STATE] dmq receiver from node %d disconnected", node_id);
+
+	/*
+	 * dmq receiver services heartbeats so it should control the lifetime of
+	 * walreceiver: e.g. if packets to the node are silently dropped, dmq
+	 * receiver will spot that pretty soon and terminate our walreceiver (who
+	 * doesn't even obey wal_receiver_timeout and might hang infinitely or,
+	 * more likely, until the kernel gives up sending the feedback ~ 15
+	 * minutes by default)
+	 *
+	 */
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	walreceiver_pid = Mtm->peers[node_id - 1].walreceiver_pid;
+	LWLockRelease(Mtm->lock);
+	if (walreceiver_pid != InvalidPid)
+		kill(walreceiver_pid, SIGTERM);
+
 }
 
 void

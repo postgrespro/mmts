@@ -703,7 +703,6 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 												  record_lsn);
 				if (reconnect)
 				{
-					rwctx->graceful_exit = true;
 					proc_exit(0);
 				}
 
@@ -1129,7 +1128,6 @@ process_remote_commit(StringInfo in,
 							  prepare_gen_num == MtmGetCurrentGenNum())))
 				{
 					ReleasePB();
-					rwctx->graceful_exit = true;
 					proc_exit(0);
 				}
 
@@ -1364,7 +1362,6 @@ process_remote_commit(StringInfo in,
 
 					if (unlikely((rwctx->mode != MtmGetReceiverMode(rwctx->sender_node_id))))
 					{
-						rwctx->graceful_exit = true;
 						proc_exit(0);
 					}
 				}
@@ -2008,7 +2005,8 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			!TransactionIdIsValid(current_gtid.my_xid))
 		{
 			if (rwctx->mode == REPLMODE_RECOVERY)
-				Assert(false);
+				mtm_log(WARNING, "got ERROR while applying in recovery, xid=" XID_FMT,
+					current_gtid.my_xid);
 			PG_RE_THROW();
 		}
 

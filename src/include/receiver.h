@@ -20,12 +20,6 @@ typedef struct
 {
 	int					sender_node_id;
 	MtmReplicationMode	mode;
-	/*
-	 * This says to restart receiver immediately to reconnect in another mode
-	 * instead of usual sleep after error. Alternatively we could have
-	 * internal reconnection loop, but that would be a bit more cumbersome.
-	 */
-	bool				graceful_exit;
 } MtmReceiverWorkerContext;
 
 extern BackgroundWorkerHandle *MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid);

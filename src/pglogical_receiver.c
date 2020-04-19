@@ -456,6 +456,7 @@ static void
 pglogical_receiver_at_exit(int status, Datum arg)
 {
 	MtmReceiverContext *rctx = (MtmReceiverContext *) DatumGetPointer(arg);
+	bool wrong_mode;
 
 	/*
 	 * We might've come here after siglongjmp to bgworker.c which had restored
@@ -474,18 +475,25 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	 */
 	BackgroundWorkerUnblockSignals();
 
+	/*
+	 * If we should apply in another mode, we will restart immediately;
+	 * otherwise, we exit due to error/shutdown and should wait a timeout
+	 * before retry.
+	 */
+	wrong_mode = rctx->w.mode != MtmGetReceiverMode(rctx->w.sender_node_id);
 	/* seems better to log this *before* we start killing workers */
-	if (rctx->w.graceful_exit)
-		mtm_log(MtmApplyError, "receiver %s is restarting to reconnect in another mode",
+	if (wrong_mode)
+		mtm_log(MtmApplyError, "receiver %s is exiting to reconnect in another mode",
 				MyBgworkerEntry->bgw_name);
 	else
 		/*
 		 * XXX: message is somewhat confusing as it will be issued on any
-		 * non-panic exit, e.g. after SIGTERM (instance shutdown, for example),
-		 * and distinguishing it from real error is not straightforward.
-		 * Probably better not to log it at all -- pm will anyway mention it.
+		 * non-panic exit, e.g. after SIGTERM (instance shutdown, for
+		 * example), and distinguishing it from real error is not
+		 * straightforward.  Probably better not to log it at all -- pm will
+		 * anyway mention non-zero exit code termination.
 		 */
-		mtm_log(MtmApplyError, "receiver %s caught an error and will die",
+		mtm_log(MtmApplyError, "receiver %s is exiting due to error",
 				MyBgworkerEntry->bgw_name);
 
 	ReleasePB();
@@ -524,8 +532,10 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	 * Sleep a bit if we exit due to error; monitor will restart us
 	 * immediately. Usage of wal_retrieve_retry_interval is slightly weird,
 	 * but we follow vanilla LR here.
+	 * TODO: this is obviously horrible idea leading to long sleep during
+	 * normal shutdown, this logic should be moved to monitor.
 	 */
-	if (!rctx->w.graceful_exit)
+	if (!wrong_mode)
 		MtmSleep(wal_retrieve_retry_interval * INT64CONST(1000));
 }
 
@@ -594,7 +604,7 @@ pglogical_receiver_main(Datum main_arg)
 								  (Datum) 0);
 
 	BgwPoolStart(sender, MyBgworkerEntry->bgw_name, db_id, user_id);
-	mtm_log(MtmReceiverStart, "Receiver %s has started.", MyBgworkerEntry->bgw_name);
+	mtm_log(MtmReceiverStart, "receiver %s started.", MyBgworkerEntry->bgw_name);
 
 	/* TODO there used to be PG_TRY block, reindent it back */
 	{
@@ -602,6 +612,7 @@ pglogical_receiver_main(Datum main_arg)
 		Syncpoint  *spvector = NULL;
 		HTAB	   *filter_map = NULL;
 		char	   *conninfo;
+		nodemask_t	connected_mask;
 
 		/*
 		 * Determine how we should pull and ensure we won't interfere with
@@ -632,6 +643,17 @@ pglogical_receiver_main(Datum main_arg)
 			ConditionVariableSleep(&Mtm->receivers_cv, PG_WAIT_EXTENSION);
 		}
 		ConditionVariableCancelSleep();
+		mtm_log(MtmReceiverStart, "registered as running in %s mode",
+				MtmReplicationModeMnem[rctx->w.mode]);
+
+		/*
+		 * do not start until dmq connection to the node is established,
+		 * c.f. MtmOnDmqReceiverDisconnect
+		 */
+		connected_mask = MtmGetConnectedMask(false);
+		if (!BIT_CHECK(connected_mask, rctx->w.sender_node_id - 1))
+			elog(ERROR, "receiver %s exits as dmq connection to node %d is not yet established",
+				 MyBgworkerEntry->bgw_name, rctx->w.sender_node_id);
 
 		/* Acquire recovery rep slot, so we can advance it without search */
 		ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
@@ -674,14 +696,14 @@ pglogical_receiver_main(Datum main_arg)
 			int			i;
 			StringInfo	message = makeStringInfo();
 
-			appendStringInfoString(message, "starting receiver:\n");
-			appendStringInfo(message, "\t replication_node = %d\n", sender);
-			appendStringInfo(message, "\t mode = %s\n",
+			appendStringInfoString(message, "starting receiver: ");
+			appendStringInfo(message, "replication_node = %d", sender);
+			appendStringInfo(message, ", mode = %s",
 							 MtmReplicationModeMnem[rctx->w.mode]);
-			appendStringInfo(message, "\t remote_start = %" INT64_MODIFIER "x\n",
+			appendStringInfo(message, ", remote_start = %" INT64_MODIFIER "x",
 							 remote_start);
 
-			appendStringInfo(message, "\t syncpoint_vector (origin/local) = {");
+			appendStringInfo(message, ", syncpoint_vector (origin/local) = {");
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
 				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
@@ -769,7 +791,6 @@ pglogical_receiver_main(Datum main_arg)
 				 */
 				if (unlikely(rctx->w.mode != MtmGetReceiverMode(sender)))
 				{
-					rctx->w.graceful_exit = true;
 					proc_exit(0);
 				}
 
