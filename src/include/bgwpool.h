@@ -41,8 +41,8 @@ typedef struct
 	size_t		size;			/* Size of queue aligned to INT word */
 
 	/* Worker state */
-	size_t		active;
-	size_t		pending;
+	size_t		active;	 /* number of busy workers */
+	size_t		pending; /* number of pending jobs in the queue */
 	bool		producerBlocked;
 
 	char		poolName[MAX_NAME_LEN];

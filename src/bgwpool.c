@@ -286,7 +286,13 @@ BgwStartExtraWorker(BgwPool *poolDesc)
 	if (RegisterDynamicBackgroundWorker(&worker, &handle))
 		poolDesc->bgwhandles[poolDesc->nWorkers++] = handle;
 	else
-		elog(WARNING, "Failed to start dynamic background worker");
+	{
+		ereport(WARNING,
+				(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+				 errmsg("failed to start mtm dynamic background worker"),
+				 errhint("You might need to increase max_worker_processes.")));
+		return;
+	}
 
 	status = WaitForBackgroundWorkerStartup(handle, &pid);
 	if (status != BGWH_STARTED)
