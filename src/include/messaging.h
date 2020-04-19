@@ -48,12 +48,17 @@ typedef struct
 
 /*
  * Response to 2A msg by apply worker or by monitor (during resolving).
+ * This could be named just 2B, ha.
  */
 typedef struct
 {
 	MtmMessageTag		tag;
 	int					node_id;
-	/* our LastVote in terms of the Part-time Parliament paper. */
+	/*
+	 * Our prevVote in terms of the Part-Time Parliament paper. Actually there
+	 * is no need to carry the decree (status) itself, ballot (term) is
+	 * enough, but it is kept for convenience.
+	 */
 	GlobalTxStatus		status;
 	GlobalTxTerm		accepted_term;
 	int32				errcode;
@@ -93,15 +98,8 @@ typedef struct
 	MtmTxRequestValue	type;
 	GlobalTxTerm		term;
 	const char		   *gid;
+	XLogRecPtr			coordinator_end_lsn; /* matters for 1a */
 } MtmTxRequest;
-
-// char const * const MtmTxRequestValueMnem[] = {
-// 	"MTReq_Abort",
-// 	"MTReq_Commit",
-// 	"MTReq_Precommit",
-// 	"MTReq_Preabort",
-// 	"MTReq_Status"
-// };
 
 extern char const * const MtmTxRequestValueMnem[];
 

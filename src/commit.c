@@ -13,6 +13,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/transam.h"
+#include "access/xlog.h"
 #include "storage/proc.h"
 #include "storage/spin.h"
 #include "utils/guc.h"
@@ -123,6 +124,8 @@ static void
 mtm_commit_cleanup(int status, Datum arg)
 {
 	ReleasePB();
+	/* 0 is ERROR, 1 is on exit hook */
+	bool on_exit = DatumGetInt32(arg) == 1;
 
 	if (mtm_commit_state.subscribed)
 	{
@@ -130,17 +133,38 @@ mtm_commit_cleanup(int status, Datum arg)
 		mtm_commit_state.subscribed = false;
 	}
 
-	if (mtm_commit_state.abort_prepare)
+	/*
+	 * XXX it would be nice if 'abort my xact if I can' rule worked in case
+	 * of backend shutdown (e.g. in the middle of commit sequence) too,
+	 * but for that we must 1) carefully determine when this is safe
+	 * 2) reach an agreement with global_tx.c shmem_exit hook: currently we
+	 * we might get here when gtx is already released.
+	 * Alternatively, we could add
+	 * 'this is my orphaned prepare => directly abort it' logic to resolver.
+	 */
+	if (!on_exit && mtm_commit_state.abort_prepare)
 	{
 		/* no need to burden the resolver, he'd do the same */
+		/*
+		 * XXX: generally FinishPreparedTransaction and
+		 * SetPreparedTransactionState should run in xact, i.e.
+		 * surrounded by StartTransactionCommand/CommitTransactionCommand.
+		 * e.g. LockGXact will fail if I am not the owner of gxact. However,
+		 * in commit.c that would require careful hops to avoid entering
+		 * MtmTwoPhaseCommit/MtmBeginTransaction twice. In particular,
+		 * erroring out from MtmBeginTransaction on attempt to abort xact
+		 * after we got network error because, well, we are isolated after
+		 * network error is really unpleasant. This relates to all
+		 * StartTransactionCommand/CommitTransactionCommand in this file.
+		 */
 		FinishPreparedTransaction(mtm_commit_state.gid, false, false);
 		mtm_commit_state.gtx->state.status = GTXAborted;
 		mtm_commit_state.abort_prepare = false;
-		GlobalTxRelease(mtm_commit_state.gtx);
+		GlobalTxRelease(mtm_commit_state.gtx, true);
 		mtm_commit_state.gtx = NULL;
 		mtm_log(MtmTxFinish, "TXFINISH: %s aborted", mtm_commit_state.gid);
 	}
-	else
+	else if (!on_exit) /* see note above about global_tx.c hook interference */
 	{
 		if (mtm_commit_state.in_doubt)
 		{
@@ -153,7 +177,7 @@ mtm_commit_cleanup(int status, Datum arg)
 		if (mtm_commit_state.gtx != NULL)
 		{
 			mtm_commit_state.gtx->orphaned = true;
-			GlobalTxRelease(mtm_commit_state.gtx);
+			GlobalTxRelease(mtm_commit_state.gtx, false);
 			mtm_commit_state.gtx = NULL;
 			ResolverWake();
 		}
@@ -190,7 +214,7 @@ MtmBeginTransaction()
 		CacheRegisterSyscacheCallback(PROCOID,
 									  proc_change_cb,
 									  (Datum) 0);
-		on_shmem_exit(mtm_commit_cleanup, (Datum) 0);
+		on_shmem_exit(mtm_commit_cleanup, Int32GetDatum(1));
 		init_done = true;
 	}
 
@@ -402,7 +426,7 @@ MtmTwoPhaseCommit(void)
 
 		/* prepare transaction on our node */
 
-		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true);
+		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true, NULL);
 		Assert(mtm_commit_state.gtx->state.status == GTXInvalid);
 		/*
 		 * PREPARE doesn't happen here; ret 0 just means we were already in
@@ -418,8 +442,13 @@ MtmTwoPhaseCommit(void)
 		AllowTempIn2PC = true;
 		CommitTransactionCommand(); /* here we actually PrepareTransaction */
 		ReleasePB(); /* don't hold generation switch anymore */
-		mtm_commit_state.gtx->state.status = GTXPrepared;
-		mtm_log(MtmTxFinish, "TXFINISH: %s prepared", mtm_commit_state.gid);
+		mtm_commit_state.gtx->prepared = true;
+		/* end_lsn of PREPARE */
+		mtm_commit_state.gtx->coordinator_end_lsn = XactLastCommitEnd;
+		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
+				mtm_commit_state.gid,
+				(uint32) (mtm_commit_state.gtx->coordinator_end_lsn >> 32),
+				(uint32) mtm_commit_state.gtx->coordinator_end_lsn);
 
 		/*
 		 * By definition of generations, we must collect PREPARE ack from
@@ -496,7 +525,9 @@ MtmTwoPhaseCommit(void)
 
 		/* ok, we have all prepare responses, precommit */
 		SetPreparedTransactionState(mtm_commit_state.gid,
-			serialize_gtx_state(GTXPreCommitted, (GlobalTxTerm) {1,0}, (GlobalTxTerm) {1,0}),
+			serialize_gtx_state(GTXPreCommitted,
+								InitialGTxTerm,
+								InitialGTxTerm),
 			false);
 		/*
 		 * since this moment direct aborting is not allowed; others can
@@ -572,24 +603,24 @@ MtmTwoPhaseCommit(void)
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);
 		mtm_commit_state.gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", mtm_commit_state.gid);
+		GlobalTxRelease(mtm_commit_state.gtx, true);
+		mtm_commit_state.gtx = NULL;
 
 		// /* XXX: make this conditional */
 		// gather(participants, (MtmMessage **) messages, NULL, &n_messages, false);
+
+		dmq_stream_unsubscribe(mtm_commit_state.stream_name);
+		mtm_commit_state.subscribed = false;
+		mtm_log(MtmTxTrace, "%s unsubscribed for %s",
+				mtm_commit_state.gid, mtm_commit_state.stream_name);
 	}
 	PG_CATCH();
 	{
-		mtm_commit_cleanup(0, 0);
+		mtm_commit_cleanup(0, Int32GetDatum(0));
 
 		PG_RE_THROW();
 	}
 	PG_END_TRY();
-
-	GlobalTxRelease(mtm_commit_state.gtx);
-	mtm_commit_state.gtx = NULL;
-	dmq_stream_unsubscribe(mtm_commit_state.stream_name);
-	mtm_commit_state.subscribed = false;
-	mtm_log(MtmTxTrace, "%s unsubscribed for %s",
-			mtm_commit_state.gid, mtm_commit_state.stream_name);
 
 	MaybeLogSyncpoint();
 

@@ -103,7 +103,7 @@ ResolveForRefereeWinner(int n_all_nodes)
 				continue;
 			}
 
-			if (state == GTXPrepared)
+			if (state == GTXInvalid)
 			{
 				FinishPreparedTransaction(gtx->gid, false, true);
 				mtm_log(ResolverTx, "TXFINISH: %s aborted", gtx->gid);
@@ -180,6 +180,29 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	{
 		if (gtx->orphaned)
 			have_orphaned = true;
+
+		/*
+		 * TODO: currently it is possible that on the moment of P apply xact
+		 * will already be known to be aborted (via gtx_proposals resolution)
+		 * -- we finish it here. It would probably be nice to move the
+		 * finalization to P apply (normally) and GlobalTxLoadAll (if receiver
+		 * fails before doing this) -- than we could get rid of 'remove' flag
+		 * of GlobalTxRelease.
+		 * BTW, doing this under lock is really not nice, but this should
+		 * be very rare.
+		 */
+		if ((gtx->state.status == GTXCommitted ||
+			 gtx->state.status == GTXAborted) &&
+			gtx->prepared &&
+			gtx->acquired_by == InvalidBackendId)
+		{
+			FinishPreparedTransaction(gtx->gid,
+									  gtx->state.status == GTXCommitted,
+									  false);
+			mtm_log(MtmTxFinish, "TXFINISH: %s %s", gtx->gid,
+					gtx->state.status == GTXCommitted ? "committed" : "aborted");
+			hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, NULL);
+		}
 	}
 	LWLockRelease(gtx_shared->lock);
 
@@ -189,26 +212,33 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 
 	mtm_log(ResolverState, "Orphaned transactions detected");
 
-	/* Generate next term */
+	/*
+	 * Generate next term.
+	 * Picking at least max local proposal term + 1 guarantees we never try
+	 * the same term twice. A round of collecting others' max terms ought
+	 * to help to conduct it successfully.
+	 */
 	{
 		MtmMessage	msg = {T_MtmLastTermRequest};
 		uint64		connected;
 		MtmLastTermResponse *acks[MTM_MAX_NODES];
 		int			n_acks;
 		int			i;
+		int		   sconn_cnt[DMQ_N_MASK_POS];
 
 		/* local max proposal */
 		new_term = GlobalTxGetMaxProposal();
 
 		/* ask peers about their last term */
 		connected = MtmGetConnectedMask(false);
+		dmq_get_sendconn_cnt(connected, sconn_cnt);
 		scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &msg));
 
 		/* .. and get all responses */
 		gather(connected,
 			   (MtmMessage **) acks, NULL, &n_acks,
 			   last_term_gather_hook, 0,
-			   NULL, MtmInvalidGenNum);
+			   sconn_cnt, MtmInvalidGenNum);
 
 		for (i = 0; i < n_acks; i++)
 		{
@@ -233,19 +263,25 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
 	{
 		/* skip acquired until next round */
-		if (gtx->orphaned && gtx->acquired_by == InvalidBackendId)
+		if (gtx->orphaned && gtx->acquired_by == InvalidBackendId &&
+			/* not much sense to resove xact if we don't have PREPARE */
+			gtx->prepared &&
+			gtx->state.status != GTXCommitted && gtx->state.status != GTXAborted &&
+			/*
+			 * monitor could already vote in the short gap after
+			 * GlobalTxGetMaxProposal
+			 */
+			term_cmp(new_term, gtx->state.proposal) > 0)
 		{
 			uint64		connected;
 			MtmTxRequest status_msg = {
 				T_MtmTxRequest,
 				MTReq_Status,
 				new_term,
-				gtx->gid
+				gtx->gid,
+				gtx->coordinator_end_lsn
 			};
 
-			/*
-			 * ars: must check proposal num again before changing state
-			 */
 			SetPreparedTransactionState(gtx->gid,
 				serialize_gtx_state(
 					gtx->state.status,
@@ -253,7 +289,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 					gtx->state.accepted),
 				false);
 			gtx->state.proposal = new_term;
-			mtm_log(ResolverState, "proposal term (%d,%d) stamped to transaction %s",
+			mtm_log(ResolverState, "proposal term (%d, %d) stamped to transaction %s",
 					new_term.ballot, new_term.node_id, gtx->gid);
 			/*
 			 * We should set GTRS_AwaitStatus here, otherwise if one
@@ -281,8 +317,10 @@ handle_responses(MtmConfig *mtm_cfg)
 	{
 		MtmMessage *raw_msg;
 
-		/* ars: better just create mem ctx and reset it instead of commit.
-		 * It is more clear and cheaper.
+		/*
+		 * SetPreparedTransactionState as well as FinishPreparedTransaction
+		 * requires live xact. Yeah, you can't do many things in PG unless you
+		 * have one.
 		 */
 		StartTransactionCommand();
 
@@ -298,14 +336,29 @@ handle_responses(MtmConfig *mtm_cfg)
 }
 
 static bool
-quorum(MtmConfig *mtm_cfg, GTxState * all_states)
+quorum(MtmConfig *mtm_cfg, GTxState *all_states)
 {
 	int i, n_states = 0;
 	GTxState my_state = all_states[mtm_cfg->my_node_id - 1];
 
+	/*
+	 * Make sure it is actually our term we are trying to assemble majority
+	 * for, not of some neighbour who invited us (via monitor) to its own
+	 * voting. I'm not entirely sure removing this would make the algorithm
+	 * incorrect, but better be safe.
+	 */
+	if (my_state.proposal.node_id != mtm_cfg->my_node_id)
+		return false;
+
 	for (i = 0; i < MTM_MAX_NODES; i++)
 	{
-		if (all_states[i].status == GTXInvalid)
+		/*
+		 * Zero proposal term means value doesn't exist (no node with this id)
+		 * or node refused to vote. Note that .status perfectly can be
+		 * GTXInvalid here -- e.g. if this is reply to 1a and node has never
+		 * gave a vote yet.
+		 */
+		if (term_cmp(all_states[i].proposal, InvalidGTxTerm) == 0)
 			continue;
 
 		if (term_cmp(my_state.proposal, all_states[i].proposal) == 0)
@@ -330,17 +383,24 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 	mtm_log(ResolverTx, "handle_response: got '%s'", MtmMesageToString(raw_msg));
 
-	gtx = GlobalTxAcquire(gid, false);
+	gtx = GlobalTxAcquire(gid, false, NULL);
 	if (!gtx)
 		return;
+	if (gtx->state.status == GTXAborted || gtx->state.status == GTXCommitted)
+	{
+		GlobalTxRelease(gtx, false);
+		return;
+	}
+	/* we resolve only prepared xacts */
+	Assert(gtx->prepared);
 
 	mtm_log(ResolverTx, "handle_response: processing gtx %s", GlobalTxToString(gtx));
 
-	if (gtx->resolver_stage == GTRS_AwaitStatus)
+	if (gtx->resolver_stage == GTRS_AwaitStatus &&
+		raw_msg->tag == T_MtmTxStatusResponse)
 	{
 		MtmTxStatusResponse *msg;
 
-		Assert(raw_msg->tag == T_MtmTxStatusResponse);
 		msg = (MtmTxStatusResponse *) raw_msg;
 
 		gtx->phase1_acks[mtm_cfg->my_node_id-1] = gtx->state;
@@ -348,15 +408,19 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 		if (msg->state.status == GTXCommitted)
 		{
-			gtx->state.status = GTXCommitted;
 			FinishPreparedTransaction(gtx->gid, true, false);
+			gtx->state.status = GTXCommitted;
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gtx->gid);
+			GlobalTxRelease(gtx, true);
+			return;
 		}
 		else if (msg->state.status == GTXAborted)
 		{
-			gtx->state.status = GTXAborted;
 			FinishPreparedTransaction(gtx->gid, false, false);
+			gtx->state.status = GTXAborted;
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gtx->gid);
+			GlobalTxRelease(gtx, true);
+			return;
 		}
 		else if (quorum(mtm_cfg, gtx->phase1_acks))
 		{
@@ -368,18 +432,28 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			MtmTxRequest request_msg;
 			uint64		connected;
 
+			/*
+			 * Determine the highest term of collected prevVote's
+			 */
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
-				if (gtx->phase1_acks[i].status == GTXInvalid)
+				/* like in quorum(), skip empty/refused votes */
+				if (term_cmp(gtx->phase1_acks[i].proposal, InvalidGTxTerm) == 0)
 					continue;
 
 				if (term_cmp(gtx->phase1_acks[i].accepted, max_accepted) > 0)
 					max_accepted = gtx->phase1_acks[i].accepted;
 			}
 
+			/*
+			 * And the decision is the decree of this highest term vote.
+			 * Decrees of all the votes with this term must be equal, seize
+			 * the moment to sanity check it.
+			 */
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
-				if (gtx->phase1_acks[i].status == GTXInvalid)
+				/* like in quorum(), skip empty/refused votes */
+				if (term_cmp(gtx->phase1_acks[i].proposal, InvalidGTxTerm) == 0)
 					continue;
 
 				if (term_cmp(gtx->phase1_acks[i].accepted, max_accepted) == 0)
@@ -424,32 +498,33 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				T_MtmTxRequest,
 				decision == GTXPreCommitted ? MTReq_Precommit : MTReq_Preabort,
 				gtx->state.accepted,
-				gtx->gid
+				gtx->gid,
+				InvalidXLogRecPtr
 			};
 			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
 		}
-
 	}
-	else if (gtx->resolver_stage == GTRS_AwaitAcks)
+	else if (gtx->resolver_stage == GTRS_AwaitAcks &&
+			 raw_msg->tag == T_Mtm2AResponse)
 	{
 		Mtm2AResponse *msg;
 
-		/*
-		 * ars: we might get T_MtmTxStatusResponse because we switched to
-		 * GTRS_AwaitAcks immediately after collecting majority, but there
-		 * can be more nodes willing to send 1b to us.
-		 */
-		Assert(raw_msg->tag == T_Mtm2AResponse);
 		msg = (Mtm2AResponse *) raw_msg;
 		Assert(msg->gid[0] != '\0');
-		Assert(msg->status == GTXPreAborted || msg->status == GTXPreCommitted);
+		/* If GTXInvalid, node refused to accept the ballot */
+		if (!(msg->status == GTXPreAborted || msg->status == GTXPreCommitted))
+		{
+			GlobalTxRelease(gtx, false);
+			return;
+		}
 
 		gtx->phase2_acks[mtm_cfg->my_node_id-1] = gtx->state;
+		/* abuse GTxState to reuse quorum() without fuss */
 		gtx->phase2_acks[msg->node_id-1] = (GTxState) {
-			msg->status,
 			msg->accepted_term,
-			msg->accepted_term
+			msg->accepted_term,
+			msg->status
 		};
 
 		if (quorum(mtm_cfg, gtx->phase2_acks))
@@ -460,24 +535,24 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			Assert(gtx->state.status == msg->status);
 			FinishPreparedTransaction(msg->gid, msg->status == GTXPreCommitted,
 									  false);
-			mtm_log(MtmTxFinish, "TXFINISH: %s %s", msg->gid,
+			mtm_log(MtmTxFinish, "TXFINISH: %s %s via quorum of 2a acks", msg->gid,
 					msg->status == GTXPreCommitted ? "committed" : "aborted");
 			gtx->state.status = msg->status;
+			GlobalTxRelease(gtx, true);
 
 			request_msg = (MtmTxRequest) {
 				T_MtmTxRequest,
 				msg->status == GTXPreCommitted ? MTReq_Commit : MTReq_Abort,
-				(GlobalTxTerm) {0,0},
-				gtx->gid
+				InvalidGTxTerm,
+				gid
 			};
 			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
+			return;
 		}
 	}
-	else
-		Assert(false);
 
-	GlobalTxRelease(gtx);
+	GlobalTxRelease(gtx, false);
 }
 
 static void
@@ -566,6 +641,8 @@ ResolverMain(Datum main_arg)
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)
 		{
+			/* vacuum obsolete in table proposals periodically */
+			GlobalTxGCInTableProposals();
 			StartTransactionCommand();
 			scatter_status_requests(mtm_cfg);
 			CommitTransactionCommand();

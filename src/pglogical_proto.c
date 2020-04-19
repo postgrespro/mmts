@@ -44,6 +44,7 @@
 
 #include "pglogical_relid_map.h"
 
+#include "global_tx.h"
 #include "multimaster.h"
 #include "state.h"
 #include "ddl.h"
@@ -435,6 +436,23 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 
 	/* Ensure that we reset DDLInProgress */
 	Assert(!DDLInProgress);
+
+	/*
+	 * If this is state_3pc change, send only 2a with initial term, that's
+	 * what the coordinator uses; 1a as well as later 2a are sent by resolver
+	 * directly via dmq and wal-logged only for persistency.
+	 */
+	if (txn->state_3pc[0] != '\0')
+	{
+		GlobalTxStatus status;
+		GlobalTxTerm prop, acc;
+
+		parse_gtx_state(txn->state_3pc, &status, &prop, &acc);
+		if (status != GTXPreCommitted || term_cmp(acc, InitialGTxTerm) != 0)
+		{
+			return;
+		}
+	}
 
 	/*
 	 * COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn

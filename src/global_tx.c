@@ -16,6 +16,8 @@
 #include "catalog/pg_type.h"
 #include "executor/spi.h"
 #include "storage/ipc.h"
+#include "utils/lsyscache.h"
+#include "utils/pg_lsn.h"
 #include "utils/snapmgr.h"
 #include "utils/hsearch.h"
 #include "miscadmin.h"
@@ -27,10 +29,11 @@
 /*
  * Definitions for the "mtm.gtx_proposals" table.
  */
-#define MTM_GTX_PROPOSALS				"mtm.gtx_proposals"
-#define Natts_mtm_gtx_proposals			2
-#define Anum_mtm_gtx_proposals_gid		1	/* gid */
-#define Anum_mtm_gtx_proposals_state	2	/* state_3pc */
+#define MTM_GTX_PROPOSALS							"mtm.gtx_proposals"
+#define Natts_mtm_gtx_proposals						3
+#define Anum_mtm_gtx_proposals_gid					1	/* gid */
+#define Anum_mtm_gtx_proposals_prepare_origin_lsn	2	/* origin_lsn */
+#define Anum_mtm_gtx_proposals_state				3	/* state_3pc */
 
 gtx_shared_data *gtx_shared;
 static GlobalTx *my_locked_gtx;
@@ -39,14 +42,11 @@ static bool gtx_exit_registered;
 char const *const GlobalTxStatusMnem[] =
 {
 	"GTXInvalid",
-	"GTXPrepared",
 	"GTXPreCommitted",
 	"GTXPreAborted",
 	"GTXCommitted",
 	"GTXAborted"
 };
-
-static void delete_table_proposal(const char *gid);
 
 int
 term_cmp(GlobalTxTerm t1, GlobalTxTerm t2)
@@ -75,14 +75,19 @@ serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop, GlobalTxTerm 
 	char	   *state;
 	char	   *status_abbr;
 
-	if (status == GTXPreCommitted)
+	if (status == GTXInvalid)
+		status_abbr = "in";
+	else if (status == GTXPreCommitted)
 		status_abbr = "pc";
 	else if (status == GTXPreAborted)
 		status_abbr = "pa";
-	else if (status == GTXPrepared)
-		status_abbr = "pp";
+	else if (status == GTXCommitted)
+		status_abbr = "cm";
 	else
-		Assert(false);
+	{
+		Assert(status == GTXAborted);
+		status_abbr = "ab";
+	}
 
 	state = psprintf("%s-%d:%d-%d:%d",
 					 status_abbr,
@@ -99,27 +104,37 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 
 	Assert(state);
 
+	/*
+	 * Might be immediately after PrepareTransaction. It would be better to
+	 * also pass state_3pc to it, but...
+	 */
 	if (state[0] == '\0')
 	{
-		*status = GTXPrepared;
+		*status = GTXInvalid;
 		*term_prop = (GlobalTxTerm) {1,0};
 		*term_acc = (GlobalTxTerm) {0,0};
 	}
 	else
 	{
-		*status = GTXInvalid;
-		if (strncmp(state, "pc-", 3) == 0)
+		if (strncmp(state, "in-", 3) == 0)
+			*status = GTXInvalid;
+		else if (strncmp(state, "pc-", 3) == 0)
 			*status = GTXPreCommitted;
 		else if (strncmp(state, "pa-", 3) == 0)
 			*status = GTXPreAborted;
-		else if (strncmp(state, "pp-", 3) == 0)
-			*status = GTXPrepared;
+		else if (strncmp(state, "cm-", 3) == 0)
+			*status = GTXCommitted;
+		else
+		{
+			Assert((strncmp(state, "ab-", 3) == 0));
+			*status = GTXAborted;
+		}
 
 		n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
 						&term_prop->ballot, &term_prop->node_id,
 						&term_acc->ballot, &term_acc->node_id);
 
-		Assert(*status != GTXInvalid && n_parsed == 4);
+		Assert(n_parsed == 4);
 	}
 }
 
@@ -191,7 +206,7 @@ MtmGlobalTxShmemStartup(void)
  * will read that commit (abort).
  */
 GlobalTx *
-GlobalTxAcquire(const char *gid, bool create)
+GlobalTxAcquire(const char *gid, bool create, bool *is_new)
 {
 	GlobalTx   *gtx = NULL;
 	bool		found;
@@ -201,6 +216,9 @@ GlobalTxAcquire(const char *gid, bool create)
 		before_shmem_exit(GlobalTxAtExit, 0);
 		gtx_exit_registered = true;
 	}
+
+	if (is_new != NULL)
+		*is_new = false;
 
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 
@@ -215,14 +233,19 @@ GlobalTxAcquire(const char *gid, bool create)
 			{
 				gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gid, HASH_ENTER, &found);
 
+				gtx->coordinator_end_lsn = InvalidXLogRecPtr;
 				gtx->acquired_by = MyBackendId;
 				gtx->state.status = GTXInvalid;
-				gtx->state.proposal = (GlobalTxTerm) {1, 0};
-				gtx->state.accepted = (GlobalTxTerm) {0, 0};
+				gtx->state.proposal = InitialGTxTerm;
+				gtx->state.accepted = InvalidGTxTerm;
+				gtx->prepared = false;
 				gtx->orphaned = false;
 				gtx->resolver_stage = GTRS_AwaitStatus;
 				memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
 				memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
+
+				if (is_new != NULL)
+					*is_new = true;
 			}
 			else
 			{
@@ -250,33 +273,44 @@ GlobalTxAcquire(const char *gid, bool create)
 }
 
 /*
- * Release our lock on this transaction and remove it from hash if it is in the
- * decided state.
+ * Release our lock on this transaction and remove it from hash. Xacts
+ * finished via CP|AP are removed here; shmem mirrors of obsolete
+ * gtx_proposals entries are cleaned up in GlobalTxGCInTableProposals.
+ *
+ * We also automatically remove shmem entry if gtx is not prepared and there
+ * is no voting state -- no xact and no data, essentially. This is used by
+ *  - monitor 1a handling who after GlobalTxAcquire might decide it won't vote
+ *    (too old xact)
+ *  - apply COMMIT_PREPARED handling -- if insertion into gtx_proposals
+ *    table fails (no real reasons for that, but who knows), we should
+ *    cleanup the entry.
+ *  - coordinator, if PREPARE on it failed.
  */
 void
-GlobalTxRelease(GlobalTx *gtx)
+GlobalTxRelease(GlobalTx *gtx, bool remove)
 {
 	bool		found;
 
 	Assert(gtx->acquired_by == MyBackendId);
 
-	if (gtx->in_table && (gtx->state.status == GTXCommitted ||
-						  gtx->state.status == GTXAborted))
-		delete_table_proposal(gtx->gid);
-
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
 
 	/* status GTXInvalid can be caused by an error during PREPARE */
-	if (gtx->state.status == GTXCommitted ||
-		gtx->state.status == GTXInvalid ||
-		gtx->state.status == GTXAborted)
+	if (remove ||
+		(!gtx->prepared &&
+		 (term_cmp(gtx->state.proposal, InitialGTxTerm) == 0) &&
+		 gtx->state.status == GTXInvalid))
+	{
 		hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
-
-	LWLockRelease(gtx_shared->lock);
-
-	if (gtx->orphaned)
+	}
+	else if (gtx->orphaned && gtx->prepared)
+	{
 		mtm_log(ResolverTasks, "Transaction %s is orphaned", gtx->gid);
+	}
+
+	/* mtm_log(LOG, "released gtx %s by %d", gtx->gid, MyBackendId); */
+	LWLockRelease(gtx_shared->lock);
 
 	my_locked_gtx = NULL;
 }
@@ -308,13 +342,16 @@ GlobalTxLoadAll()
 		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, pxacts[i].gid, HASH_ENTER, &found);
 		Assert(!found);
 
-		gtx->orphaned = true;
+		gtx->coordinator_end_lsn = pxacts[i].origin_lsn == InvalidXLogRecPtr ?
+			pxacts[i].prepare_end_lsn : pxacts[i].origin_lsn;
 		gtx->acquired_by = InvalidBackendId;
-		gtx->in_table = false;
+		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status,
+						&gtx->state.proposal, &gtx->state.accepted);
+		gtx->prepared = true;
+		gtx->orphaned = true;
 		gtx->resolver_stage = GTRS_AwaitStatus;
 		memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
 		memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
-		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 	}
 
 	/* Walk over proposals table */
@@ -350,17 +387,54 @@ GlobalTxLoadAll()
 		 */
 		if (!found)
 		{
+			bool isnull;
+
+			gtx->coordinator_end_lsn = DatumGetLSN(
+				SPI_getbinval(tup, tupdesc,
+							  Anum_mtm_gtx_proposals_prepare_origin_lsn,
+							  &isnull));
+			Assert(!isnull);
+			Assert(TupleDescAttr(tupdesc, Anum_mtm_gtx_proposals_prepare_origin_lsn - 1)->atttypid == LSNOID);
+			parse_gtx_state(sstate, &gtx->state.status,
+							&gtx->state.proposal, &gtx->state.accepted);
+			gtx->prepared = false;
 			gtx->orphaned = true;
 			gtx->acquired_by = InvalidBackendId;
-			gtx->in_table = true;
 			gtx->resolver_stage = GTRS_AwaitStatus;
 			memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
 			memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
-			parse_gtx_state(sstate, &gtx->state.status, &gtx->state.proposal, &gtx->state.accepted);
 		}
-		else
+		/*
+		 * ... but if there is PREPARE in WAL without voting state at all but
+		 * gtx_proposals has an entry with one, it must mean we have unluckily
+		 * crashed after applying PREPARE but before migrating in table state
+		 * to state_3pc. Do the migration now then. See PGLOGICAL_PREPARE
+		 * handling in apply for what this is hacking around.
+		 *
+		 * XXX: in this case we must purge gtx_proposals entry right away
+		 * (before starting resolving/applying); otherwise (very unluckily) we
+		 * might commit/abort the xact, then crash, get up, load obsolete in
+		 * table state (we might have changed it since voting state migrated
+		 * to state_3pc) and use it in resolving with other nodes, effectively
+		 * forgetting our votes.
+		 */
+		else if (term_cmp(gtx->state.proposal, (GlobalTxTerm) {1, 0}) == 0)
 		{
-			gtx->in_table = true;
+			GTxState in_table_state;
+
+			parse_gtx_state(sstate, &in_table_state.status,
+							&in_table_state.proposal, &in_table_state.accepted);
+			if (term_cmp(in_table_state.proposal, (GlobalTxTerm) {1, 0}) != 0)
+			{
+				/* for now let's imagine this can't happen */
+				/* Assert(false); */ /* no, it can */
+				SetPreparedTransactionState(gid,
+											serialize_gtx_state(
+												in_table_state.status,
+												in_table_state.proposal,
+												in_table_state.accepted),
+											false);
+			}
 		}
 	}
 
@@ -373,38 +447,61 @@ GlobalTxLoadAll()
 }
 
 /*
- * Save proposal in table. That happens when we received status request before
+ * Save (new or update current) transaction voting state in table. That
+ * happens when we receive status request and participate in resolving before
  * prepare itself.
+ *
+ * Note: it performs a transaction itself.
  */
 void
-GlobalTxSaveInTable(const char *gid, GlobalTxStatus status,
+GlobalTxSaveInTable(const char *gid, XLogRecPtr coordinator_end_lsn,
+					GlobalTxStatus status,
 					GlobalTxTerm term_prop, GlobalTxTerm term_acc)
 {
 	int			rc;
 	char	   *sql;
+	char	   *slsn;
+	char	   *sstate;
+	MemoryContext oldcontext = CurrentMemoryContext;
+	Oid typOutput;
+	bool typIsVarlena;
+
+	StartTransactionCommand();
 
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
-
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	sql = psprintf("insert into " MTM_GTX_PROPOSALS " values ('%s','%s')",
-				   gid,
-				   serialize_gtx_state(status,
-									   term_prop,
-									   term_acc));
+	getTypeOutputInfo(LSNOID, &typOutput, &typIsVarlena);
+	slsn = OidOutputFunctionCall(typOutput, LSNGetDatum(coordinator_end_lsn));
+	sstate = serialize_gtx_state(status, term_prop, term_acc);
+
+	mtm_log(MtmTxTrace, "saving in table gid %s, olsn %s, state %s",
+			gid, slsn, sstate);
+
+	/* upsert overwriting whatever there was */
+	sql = psprintf("insert into " MTM_GTX_PROPOSALS " values ('%s', '%s', '%s')"
+				   "on conflict (gid) do update "
+				   "set gid = excluded.gid, "
+				   "prepare_origin_lsn = excluded.prepare_origin_lsn, "
+				   "state = excluded.state",
+				   gid, slsn, sstate);
+
 	rc = SPI_execute(sql, false, 0);
 	if (rc < 0 || rc != SPI_OK_INSERT)
 		mtm_log(ERROR, "Failed to save global_tx proposal");
 
 	if (SPI_finish() != SPI_OK_FINISH)
 		mtm_log(ERROR, "could not finish SPI connection");
-
 	PopActiveSnapshot();
+
+	CommitTransactionCommand();
+	/* transaction knocked down old ctx*/
+	MemoryContextSwitchTo(oldcontext);
 }
 
-static void
-delete_table_proposal(const char *gid)
+void
+GlobalTxDeleteFromTable(const char *gid)
 {
 	int			rc;
 	bool		inside_tx = IsTransactionState();
@@ -445,6 +542,73 @@ delete_table_proposal(const char *gid)
 }
 
 /*
+ * This should be called sometimes as we might get resolve request before
+ * PREPARE, save in table proposal and then, if xact is resolved to abort,
+ * PREPARE might have never been received (aborted 2PCs are not decoded and it
+ * might not apply anyway). Moreover, if several nodes independently resolved
+ * xact to CP, first outcome will finish our xact and the following one will
+ * be recorded in table, as there is no quick|easy way to check whether we
+ * already applied xact (see PGLOGICAL_COMMIT_PREPARED handling). Such hanged
+ * in table entries are vacuumed here.
+ *
+ * We can safely delete entry once syncpoint machinery says that PREPARE LSN
+ * was eaten. If it was applied successfully, voting state migrated to
+ * state_3pc and will live there until CP|AP. Otherwise, this is definitely
+ * abort, and we will refuse to vote normally for the xact -- see monitor
+ * actions.
+ *
+ * If we fail/got killed mid the way that's fine, the whole xact is rolled
+ * back, with some of shmem entries probably already deleted. Will retry next
+ * time.
+ */
+void
+GlobalTxGCInTableProposals(void)
+{
+	int rc;
+	int i;
+
+	return; /* TODO rework */
+
+	StartTransactionCommand();
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	rc = SPI_execute("delete from " MTM_GTX_PROPOSALS "p using mtm.latest_syncpoints s "
+					 "where p.node_id = s.node_id and "
+					 "p.prepare_origin_lsn <= s.origin_lsn "
+					 "returning gid",
+					 false, 0);
+	if (rc < 0 || rc != SPI_OK_DELETE_RETURNING)
+		mtm_log(ERROR, "Failed to delete obsolete global_tx proposals");
+
+	/* and repeat the deletion for shmem */
+	for (i = 0; i < SPI_processed; i++)
+	{
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+		HeapTuple	tup = SPI_tuptable->vals[i];
+		char		*gid = SPI_getvalue(tup, tupdesc, 1);
+
+		GlobalTxAcquire(gid, false, NULL);
+		LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
+		/*
+		 * Concurrent PREPARE apply purges in table entry immediately after,
+		 * well, apply, so we can't here accidently remove gtx mirroring
+		 * prepared xact.
+		 */
+		hash_search(gtx_shared->gid2gtx, gid, HASH_REMOVE, NULL);
+		LWLockRelease(gtx_shared->lock);
+		my_locked_gtx = NULL;
+	}
+
+
+	PopActiveSnapshot();
+	if (SPI_finish() != SPI_OK_FINISH)
+		mtm_log(ERROR, "could not finish SPI");
+	CommitTransactionCommand();
+}
+
+/*
  * Get maximux proposal among all transactions.
  */
 GlobalTxTerm
@@ -473,7 +637,7 @@ GlobalTxMarkOrphaned(int node_id)
 	HASH_SEQ_STATUS hash_seq;
 	GlobalTx   *gtx;
 
-	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
 	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
 	{
@@ -512,11 +676,14 @@ GlobalTxToString(GlobalTx *gtx)
 	initStringInfo(&si);
 	appendStringInfoString(&si, "{");
 	appendStringInfo(&si, "\"gid\": \"%s\"", gtx->gid);
+	appendStringInfo(&si, ", \"coordinator_end_lsn\": \"%X/%X\"",
+					 (uint32) (gtx->coordinator_end_lsn >> 32),
+					 (uint32) gtx->coordinator_end_lsn);
 	appendStringInfo(&si, ", \"state.status\": \"%s\"", GlobalTxStatusMnem[gtx->state.status]);
 	appendStringInfo(&si, ", \"state.proposal\": [%d, %d]", gtx->state.proposal.ballot, gtx->state.proposal.node_id);
 	appendStringInfo(&si, ", \"state.accepted\": [%d, %d]", gtx->state.accepted.ballot, gtx->state.accepted.node_id);
 	appendStringInfo(&si, ", \"orphaned\": %s", gtx->orphaned ? "true" : "false");
-	appendStringInfo(&si, ", \"in_table\": %s", gtx->in_table ? "true" : "false");
+	appendStringInfo(&si, ", \"prepared\": %s", gtx->prepared ? "true" : "false");
 	appendStringInfo(&si, ", \"resolver_stage\": %d", gtx->resolver_stage);
 
 	appendStringInfoString(&si, ", \"phase1_acks\": [");

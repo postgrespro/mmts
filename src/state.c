@@ -27,7 +27,9 @@
 
 #include "multimaster.h"
 #include "bkb.h"
+#include "commit.h"
 #include "state.h"
+#include "syncpoint.h"
 #include "logger.h"
 #include "messaging.h"
 
@@ -2629,6 +2631,276 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 		elog(ERROR, "Failed to start monitor worker");
 }
 
+/* Reply to 1A of paxos */
+static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
+{
+	GlobalTx   *gtx;
+	bool		gtx_created;
+	StringInfo	packed_msg;
+	/*
+	 * We always respond something -- it will be useful if we ever switch to
+	 * synchronous resolving instead of that 'resolve during 3 seconds or I'll
+	 * start a new ballot'. If by Paxos rules we must ignore the message, we
+	 * reply with invalid terms and status -- resolver won't regard it as ack.
+	 */
+	MtmTxStatusResponse resp = {
+		.tag = T_MtmTxStatusResponse,
+		.node_id = Mtm->my_node_id,
+		.state = {
+			.proposal = InvalidGTxTerm,
+			.accepted = InvalidGTxTerm,
+			.status = GTXInvalid
+		},
+		.gid = msg->gid
+	};
+
+	gtx = GlobalTxAcquire(msg->gid, true, &gtx_created);
+	Assert(gtx != NULL);
+
+	if (!gtx_created) /* already have some state */
+	{
+		/* known to be committed|aborted */
+		if (gtx->state.status == GTXCommitted ||
+			gtx->state.status == GTXAborted)
+		{
+			resp.state.status = gtx->state.status;
+		}
+		/*
+		 * Check whether paxos 1a handling rules allow us to
+		 * process it.
+		 */
+		else if (term_cmp(msg->term, gtx->state.proposal) > 0)
+		{
+			/*
+			 * voting state might be in PREPARE as well as in
+			 * gtx_proposals
+			 */
+			if (gtx->prepared)
+			{
+				bool		done;
+				char	   *sstate;
+				MemoryContext oldcontext = CurrentMemoryContext;
+
+				sstate = serialize_gtx_state(gtx->state.status,
+												 msg->term,
+											 gtx->state.accepted);
+				StartTransactionCommand();
+				done = SetPreparedTransactionState(gtx->gid, sstate,
+												   false);
+				CommitTransactionCommand();
+				MemoryContextSwitchTo(oldcontext);
+
+				if (!done)
+					Assert(false);
+			}
+			else
+			{
+				GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
+									gtx->state.status,
+									msg->term, gtx->state.accepted);
+			}
+			gtx->state.proposal = msg->term;
+			mtm_log(MtmTxTrace, "TXTRACE: processed 1a, set state %s", GlobalTxToString(gtx));
+
+			resp.state = (GTxState) {
+				.proposal = gtx->state.proposal,
+				.accepted = gtx->state.accepted,
+				.status = gtx->state.status
+			};
+		}
+	}
+	else /* there is no live gtx */
+	{
+		/* probably we already committed xact, check out wal */
+		char *state_3pc = GetLoggedPreparedXactState(gtx->gid);
+
+		if (strcmp(state_3pc, "committed") == 0)
+		{
+			resp.state.status = GTXCommitted;
+		}
+		else if (strcmp(state_3pc, "aborted") == 0)
+		{
+			resp.state.status = GTXAborted;
+		}
+		else
+		{
+			int coordinator;
+			Syncpoint sp;
+
+			Assert(strcmp(state_3pc, "notfound") == 0);
+
+			/*
+			 * So there is no gtx and no CP|AP. Probably we've never seen xact
+			 * yet (prepare not applied -- c.f. GlobalTx why we still need to
+			 * vote in this sutiation), or we could have already finished (or
+			 * perhaps skipped, if this is abort) it and purged WAL.
+			 *
+			 * We can't just vote unconditionally here because of the double
+			 * voting risk: we must be sure we've never voted previously. The
+			 * red line is syncpoint to origin (coordinator) node saying that
+			 * PREPARE is definitely eaten; gtx_proposals entry (if any
+			 * existed) is guaranteed to be kept until this happens. After
+			 * that point, we reply with ABORT because if there was COMMIT,
+			 * failure to find CP in WAL means it was already streamed to
+			 * everyone, so our answer doesn't matter. OTOH, we might never
+			 * get P (and thus AP) for aborted xact, so the necessity to
+			 * answer with abort here is not something impossible.
+			 *
+			 * If you wonder about the schedules where double voting is the
+			 * trouble, here is one:
+			 * - nodes ABCDE
+			 * - A makes xact with gen ABE and writes PC on itself,
+			 *	 PC on E and P on B.
+			 * - BCD resolve xact to abort, with C and D not
+			 *	 having P.
+			 * - C and D apply A's syncpoint behind P. A reasonable
+			 *	 question is how they can do
+			 *	 that without applying P itself. Heh, we have B
+			 *	 who already aborted xact. So they recover from B,
+			 *	 but P is not streamed from it. Now in-table state
+			 *	 (aborted) for xact is vacuumed on C and D.
+			 * - If C and D agree to join voting with E who PC,
+			 *	 they will incorrectly resolve to CP now.
+			 *
+			 * Similar effect exists for case when xact was actually prepared:
+			 * D and C could get P itself, resolve in with B to abort stream
+			 * AP to E before E even got P. Again, CD must be sure not to join
+			 * the voting after AP in wal was purged.
+			 */
+			coordinator = MtmGidParseNodeId(gtx->gid);
+			sp = SyncpointGetLatest(coordinator);
+
+			if (msg->coordinator_end_lsn <= sp.origin_lsn)
+			{
+				resp.state.status = GTXAborted;
+				mtm_log(StatusRequest, "old xact %s status requested, replying with abort: coordinator_end_lsn=%X/%X, latest syncpoint origin_lsn=%X/%X",
+						gtx->gid,
+						(uint32) (msg->coordinator_end_lsn >> 32),
+						(uint32) msg->coordinator_end_lsn,
+						(uint32) (sp.origin_lsn >> 32),
+						(uint32) sp.origin_lsn);
+			}
+			else
+			{
+				/* okay, vote through gtx_proposals */
+				GlobalTxSaveInTable(gtx->gid, msg->coordinator_end_lsn,
+									GTXInvalid,
+									msg->term, InvalidGTxTerm);
+				gtx->coordinator_end_lsn = msg->coordinator_end_lsn;
+				gtx->state.proposal = msg->term;
+				resp.state = (GTxState) {
+					.proposal = gtx->state.proposal,
+					.accepted = gtx->state.accepted,
+					.status = gtx->state.status
+				};
+			}
+		}
+	}
+
+	packed_msg = MtmMessagePack((MtmMessage *) &resp);
+	mtm_log(StatusRequest, "replying to 1a from node %d with %s",
+			dest_node_id,
+			MtmMesageToString((MtmMessage *) &resp));
+	dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
+
+	GlobalTxRelease(gtx, false);
+}
+
+/* reply to 2a of paxos */
+static void
+handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
+{
+	GlobalTx   *gtx;
+	StringInfo	packed_msg;
+	/*
+	 * Similarly to handle_1a, always reply something.
+	 */
+	Mtm2AResponse resp = (Mtm2AResponse) {
+		T_Mtm2AResponse,
+		Mtm->my_node_id,
+		GTXInvalid,
+		InvalidGTxTerm,
+		ERRCODE_SUCCESSFUL_COMPLETION,
+		"",
+		msg->gid
+	};
+
+	gtx = GlobalTxAcquire(msg->gid, false, NULL);
+	/*
+	 * gtx is created if needed and finalized statuses are sent on 1a, no
+	 * need to bother with this here
+	 */
+	if (!gtx ||
+		gtx->state.status == GTXAborted || gtx->state.status == GTXCommitted)
+	{
+		goto reply;
+	}
+
+	/*
+	 * Some parts of various papers use proposal term here, some
+	 * accepted, some strong equality -- either variant is fine.
+	 */
+	if (term_cmp(msg->term, gtx->state.proposal) >= 0)
+	{
+		GlobalTxStatus new_status;
+
+		new_status = msg->type == MTReq_Precommit ?
+			GTXPreCommitted : GTXPreAborted;
+
+		/*
+		 * voting state might be in PREPARE as well as in
+		 * gtx_proposals
+		 */
+		if (gtx->prepared)
+		{
+			bool		done;
+			char	   *sstate;
+			MemoryContext oldcontext = CurrentMemoryContext;
+
+			sstate = serialize_gtx_state(new_status,
+										 msg->term,
+										 msg->term);
+			StartTransactionCommand();
+			done = SetPreparedTransactionState(gtx->gid, sstate,
+											   false);
+			CommitTransactionCommand();
+			/* transaction knocked down old ctx*/
+			MemoryContextSwitchTo(oldcontext);
+
+			if (!done)
+				Assert(false);
+		}
+		else
+		{
+			GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
+								new_status, msg->term, msg->term);
+		}
+		gtx->state.proposal = msg->term;
+		gtx->state.accepted = msg->term;
+		gtx->state.status = new_status;
+		mtm_log(MtmTxTrace, "TXTRACE: processed 2a, set state %s", GlobalTxToString(gtx));
+
+		resp.status = gtx->state.status;
+		resp.accepted_term = msg->term;
+	}
+
+reply:
+	mtm_log(StatusRequest, "replying to 2a from node %d with %s",
+			dest_node_id,
+			MtmMesageToString((MtmMessage *) &resp));
+	packed_msg = MtmMessagePack((MtmMessage *) &resp);
+	dmq_push_buffer(dest_id, "txresp", packed_msg->data,
+					packed_msg->len);
+
+	if (gtx)
+		GlobalTxRelease(gtx, false);
+}
+
+/*
+ * We might need to perform local xacts inside (gtx_proposals table
+ * manipulations) and commit them immediately (persist before reply), so pass
+ * the mem context to get back into after commits.
+ */
 static void
 check_status_requests(MtmConfig *mtm_cfg)
 {
@@ -2648,151 +2920,49 @@ check_status_requests(MtmConfig *mtm_cfg)
 		LWLockRelease(Mtm->lock);
 		Assert(dest_id >= 0);
 
-		/* GlobalTxSaveInTable needs xact */
-		StartTransactionCommand();
-
 		if (raw_msg->tag == T_MtmTxRequest)
 		{
 			MtmTxRequest *msg = (MtmTxRequest *) raw_msg;
 			GlobalTx   *gtx;
 
-			mtm_log(ResolverTx, "got '%s' from %d",
+			mtm_log(StatusRequest, "got '%s' from %d",
 					MtmMesageToString(raw_msg), sender_node_id);
 
-			if (msg->type == MTReq_Status)
+			if (msg->type == MTReq_Status) /* 1a */
 			{
-				bool		reply = false;
-
-				gtx = GlobalTxAcquire(msg->gid, true);
-				Assert(gtx != NULL);
-
-				/*
-				 * If status is GTXInvalid we've just created GTX entry.
-				 * That may happend if never saw that transaction or if we
-				 * already finished it.
-				 */
-				if (gtx->state.status == GTXInvalid)
-				{
-					char *state_3pc = GetLoggedPreparedXactState(gtx->gid);
-
-					if (strcmp(state_3pc, "committed") == 0)
-					{
-						gtx->state.status = GTXCommitted;
-					}
-					else if (strcmp(state_3pc, "aborted") == 0)
-					{
-						gtx->state.status = GTXAborted;
-					}
-					else if (strcmp(state_3pc, "notfound") == 0)
-					{
-						Assert(term_cmp(msg->term, gtx->state.proposal) > 0);
-						GlobalTxSaveInTable(gtx->gid, gtx->state.status,
-											msg->term, gtx->state.accepted);
-						gtx->state.proposal = msg->term;
-					}
-					else
-					{
-						/* It should have been loaded during boot */
-						Assert(false);
-					}
-
-					reply = true;
-				}
-				else
-				{
-					Assert(gtx->state.status == GTXPrepared ||
-						   gtx->state.status == GTXPreCommitted ||
-						   gtx->state.status == GTXPreAborted);
-
-					if (term_cmp(msg->term, gtx->state.proposal) > 0)
-					{
-						char	   *sstate;
-						bool		done;
-
-						sstate = serialize_gtx_state(gtx->state.status,
-													 msg->term,
-													 gtx->state.accepted);
-						done = SetPreparedTransactionState(gtx->gid, sstate,
-														   false);
-						Assert(done);
-						reply = true;
-					}
-				}
-
-				if (reply)
-				{
-					StringInfo	packed_msg;
-					MtmTxStatusResponse resp = {
-						T_MtmTxStatusResponse,
-						mtm_cfg->my_node_id,
-						gtx->state,
-						gtx->gid
-					};
-
-					packed_msg = MtmMessagePack((MtmMessage *) &resp);
-					dmq_push_buffer(dest_id, "txresp", packed_msg->data,
-									packed_msg->len);
-				}
-
-				GlobalTxRelease(gtx);
+				handle_1a(msg, dest_id, sender_node_id);
 			}
-			else
+			else if (msg->type == MTReq_Preabort || /* 2a */
+					 msg->type == MTReq_Precommit)
 			{
+				handle_2a(msg, dest_id, sender_node_id);
+			}
+			else /* commit|abort */
+			{
+				MemoryContext oldcontext = CurrentMemoryContext;
 
-				gtx = GlobalTxAcquire(msg->gid, false);
-				if (!gtx)
+				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
+
+				gtx = GlobalTxAcquire(msg->gid, false, NULL);
+				/* finish iff we have PREPARE */
+				if (!gtx || !gtx->prepared)
+				{
+					if (gtx)
+						GlobalTxRelease(gtx, false);
 					continue;
-
-				if (msg->type == MTReq_Abort || msg->type == MTReq_Commit)
-				{
-					FinishPreparedTransaction(gtx->gid,
-											  msg->type == MTReq_Commit,
-											  false);
 				}
-				else if (msg->type == MTReq_Preabort ||
-						 msg->type == MTReq_Precommit)
-				{
-					if (term_cmp(msg->term, gtx->state.proposal) >= 0)
-					{
-						bool		done = false;
-						char	   *sstate;
-						GlobalTxStatus new_status;
-						StringInfo	packed_msg;
-						Mtm2AResponse resp;
 
-						new_status = msg->type == MTReq_Precommit ?
-									 GTXPreCommitted : GTXPreAborted;
+				StartTransactionCommand();
+				FinishPreparedTransaction(gtx->gid,
+										  msg->type == MTReq_Commit,
+										  false);
+				mtm_log(MtmTxFinish, "TXFINISH: %s %s via MTReq", msg->gid,
+					msg->type == MTReq_Commit ? "committed" : "aborted");
+				CommitTransactionCommand();
+				MemoryContextSwitchTo(oldcontext);
 
-						sstate = serialize_gtx_state(new_status,
-													 msg->term,
-													 msg->term);
-						/* ars: how about gtx->in_table? */
-						done = SetPreparedTransactionState(gtx->gid, sstate,
-														   false);
-						Assert(done);
-
-						gtx->state.proposal = msg->term;
-						gtx->state.accepted = msg->term;
-						gtx->state.status = new_status;
-
-						resp = (Mtm2AResponse) {
-							T_Mtm2AResponse,
-							mtm_cfg->my_node_id,
-							gtx->state.status,
-							gtx->state.accepted,
-							ERRCODE_SUCCESSFUL_COMPLETION,
-							"",
-							gtx->gid
-						};
-						packed_msg = MtmMessagePack((MtmMessage *) &resp);
-						dmq_push_buffer(dest_id, "txresp", packed_msg->data,
-										packed_msg->len);
-					}
-				}
-				else
-					Assert(false);
-
-				GlobalTxRelease(gtx);
+				gtx->state.status = msg->type;
+				GlobalTxRelease(gtx, true);
 			}
 		}
 		else if (raw_msg->tag == T_MtmLastTermRequest)
@@ -2816,8 +2986,6 @@ check_status_requests(MtmConfig *mtm_cfg)
 		{
 			Assert(false);
 		}
-
-		CommitTransactionCommand();
 	}
 }
 
@@ -3060,6 +3228,9 @@ MtmMonitor(Datum arg)
 	BackgroundWorkerHandle *receivers[MTM_MAX_NODES];
 	BackgroundWorkerHandle *resolver = NULL;
 	BackgroundWorkerHandle *campaigner = NULL;
+	MemoryContext mon_loop_ctx = AllocSetContextCreate(TopMemoryContext,
+													   "MonitorContext",
+													   ALLOCSET_DEFAULT_SIZES);
 
 	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
 
@@ -3274,18 +3445,20 @@ MtmMonitor(Datum arg)
 		}
 
 		/*
-		 * Check and restart resolver and receivers if its stopped by any
-		 * error.
+		 * Check and restart resolver, campaigner and receivers if they were
+		 * stopped by any error.
 		 */
 		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
 		{
 			mtm_log(MtmStateMessage, "resolver is dead, restarting it");
+			pfree(resolver);
 			resolver = ResolverStart(db_id, user_id);
 		}
 		if (GetBackgroundWorkerPid(campaigner, &pid) == BGWH_STOPPED)
 		{
 			mtm_log(MtmStateMessage, "campaigner is dead, restarting it");
-			resolver = CampaignerStart(db_id, user_id);
+			pfree(campaigner);
+			campaigner = CampaignerStart(db_id, user_id);
 		}
 
 		for (i = 0; i < MTM_MAX_NODES; i++)
@@ -3297,12 +3470,17 @@ MtmMonitor(Datum arg)
 			{
 				mtm_log(MtmStateMessage, "Restart receiver for the node%d", i + 1);
 				/* Receiver has finished by some kind of mistake. Start it. */
+				pfree(receivers[i]);
 				receivers[i] = MtmStartReceiver(i + 1, MyDatabaseId,
 												GetUserId(), MyProcPid);
 			}
 		}
 
+		/* reset once per monitor loop, mainly for messages pack/unpack */
+		MemoryContextReset(mon_loop_ctx);
+		MemoryContextSwitchTo(mon_loop_ctx);
 		check_status_requests(mtm_cfg);
+		MemoryContextSwitchTo(TopMemoryContext);
 
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,

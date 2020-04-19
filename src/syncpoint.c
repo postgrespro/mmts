@@ -278,6 +278,7 @@ SyncpointGetLatest(int node_id)
 	int			rc;
 	char	   *sql;
 	Syncpoint	sp;
+	MemoryContext oldcontext;
 
 	Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
 
@@ -286,6 +287,7 @@ SyncpointGetLatest(int node_id)
 	sp.origin_lsn = InvalidXLogRecPtr;
 
 	/* Init SPI */
+	oldcontext = CurrentMemoryContext;
 	StartTransactionCommand();
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
@@ -328,6 +330,8 @@ SyncpointGetLatest(int node_id)
 	SPI_finish();
 	PopActiveSnapshot();
 	CommitTransactionCommand();
+	/* transaction knocked down old ctx*/
+	MemoryContextSwitchTo(oldcontext);
 
 	return sp;
 }
@@ -353,9 +357,7 @@ SyncpointGetAllLatest()
 	/*
 	 * Load latest checkpoints for all origins we have
 	 */
-	rc = SPI_execute("select distinct on (node_id) node_id, "
-					 "origin_lsn, local_lsn from mtm.syncpoints "
-					 "order by node_id, origin_lsn desc",
+	rc = SPI_execute("select * from mtm.latest_syncpoints",
 					 true, 0);
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
@@ -547,6 +549,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 		char	   *errormsg = NULL;
 		RepOriginId origin_id;
 		int			node_id;
+		char		*gid = ""; /* for debugging */
 
 		record = XLogReadRecord(xlogreader, start_lsn, &errormsg);
 		if (record == NULL)
@@ -605,6 +608,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 						ParsePrepareRecord(info, XLogRecGetData(xlogreader), &parsed);
 						entry.origin_lsn = parsed.origin_lsn;
+						gid = parsed.twophase_gid;
 						break;
 					}
 				case XLOG_XACT_COMMIT_PREPARED:
@@ -613,6 +617,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 						ParseCommitRecord(info, (xl_xact_commit *) XLogRecGetData(xlogreader), &parsed);
 						entry.origin_lsn = parsed.origin_lsn;
+						gid = parsed.twophase_gid;
 						break;
 					}
 				case XLOG_XACT_ABORT_PREPARED:
@@ -621,6 +626,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 						ParseAbortRecord(info, (xl_xact_abort *) XLogRecGetData(xlogreader), &parsed);
 						entry.origin_lsn = parsed.origin_lsn;
+						gid = parsed.twophase_gid;
 						break;
 					}
 				default:
@@ -635,8 +641,8 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 				continue;
 
 			Assert(entry.origin_lsn != InvalidXLogRecPtr);
-			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %" INT64_MODIFIER "x } %d (%" INT64_MODIFIER "x)",
-					entry.node_id, entry.origin_lsn, info & XLOG_XACT_OPMASK, xlogreader->EndRecPtr);
+			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %" INT64_MODIFIER "x } xact_opmask=%d local_lsn=%" INT64_MODIFIER "x, gid=%s",
+					entry.node_id, entry.origin_lsn, info & XLOG_XACT_OPMASK, xlogreader->EndRecPtr, gid);
 			hash_search(filter_map, &entry, HASH_ENTER, &found);
 			Assert(!found);
 		}
