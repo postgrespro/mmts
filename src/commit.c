@@ -56,7 +56,6 @@ static struct MtmCommitState
 	char gid[GIDSIZE];
 	GlobalTx *gtx;
 	bool abort_prepare; /* whether cleanup can (should) abort xact immediately */
-	bool in_doubt; /* not sure whether xact will be committed or aborted */
 } mtm_commit_state;
 
 static void
@@ -123,9 +122,10 @@ MtmXactCallback(XactEvent event, void *arg)
 static void
 mtm_commit_cleanup(int status, Datum arg)
 {
-	ReleasePB();
 	/* 0 is ERROR, 1 is on exit hook */
 	bool on_exit = DatumGetInt32(arg) == 1;
+
+	ReleasePB();
 
 	if (mtm_commit_state.subscribed)
 	{
@@ -133,54 +133,71 @@ mtm_commit_cleanup(int status, Datum arg)
 		mtm_commit_state.subscribed = false;
 	}
 
-	/*
-	 * XXX it would be nice if 'abort my xact if I can' rule worked in case
-	 * of backend shutdown (e.g. in the middle of commit sequence) too,
-	 * but for that we must 1) carefully determine when this is safe
-	 * 2) reach an agreement with global_tx.c shmem_exit hook: currently we
-	 * we might get here when gtx is already released.
-	 * Alternatively, we could add
-	 * 'this is my orphaned prepare => directly abort it' logic to resolver.
-	 */
-	if (!on_exit && mtm_commit_state.abort_prepare)
+	if (mtm_commit_state.gtx != NULL)
 	{
-		/* no need to burden the resolver, he'd do the same */
 		/*
-		 * XXX: generally FinishPreparedTransaction and
-		 * SetPreparedTransactionState should run in xact, i.e.
-		 * surrounded by StartTransactionCommand/CommitTransactionCommand.
-		 * e.g. LockGXact will fail if I am not the owner of gxact. However,
-		 * in commit.c that would require careful hops to avoid entering
-		 * MtmTwoPhaseCommit/MtmBeginTransaction twice. In particular,
-		 * erroring out from MtmBeginTransaction on attempt to abort xact
-		 * after we got network error because, well, we are isolated after
-		 * network error is really unpleasant. This relates to all
-		 * StartTransactionCommand/CommitTransactionCommand in this file.
+		 * This crutchy dance matters if this is proc exit (FATAL in the
+		 * middle of commit sequence): global_tx.c automatically releases gtx,
+		 * and it would be really not nice to rely on the order in which the
+		 * hooks are called. So reacquire the gtx if it was already released.
 		 */
-		FinishPreparedTransaction(mtm_commit_state.gid, false, false);
-		mtm_commit_state.gtx->state.status = GTXAborted;
-		mtm_commit_state.abort_prepare = false;
-		GlobalTxRelease(mtm_commit_state.gtx, true);
-		mtm_commit_state.gtx = NULL;
-		mtm_log(MtmTxFinish, "TXFINISH: %s aborted", mtm_commit_state.gid);
-	}
-	else if (!on_exit) /* see note above about global_tx.c hook interference */
-	{
-		if (mtm_commit_state.in_doubt)
+		Assert(GetMyGlobalTx() != NULL || on_exit);
+		if (GetMyGlobalTx() == NULL)
+			mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid,
+												   false,
+												   NULL);
+		/*
+		 * If we managed to prepare the xact, tell resolver to deal with it
+		 */
+		if (mtm_commit_state.gtx != NULL && mtm_commit_state.gtx->prepared)
 		{
-			ereport(WARNING,
-					(errcode(ERRCODE_TRANSACTION_RESOLUTION_UNKNOWN),
-					 errmsg("[multimaster] exiting commit sequence of transaction %s with unknown status",
-							mtm_commit_state.gid),
-					 errdetail("The transaction will be committed or aborted later.")));
+			/*
+			 * If there were no precommit, xact will definitely be aborted. We
+			 * could abort it right here, but this requires very careful
+			 * acting:
+			 * 1) who would release gtx if we fail during
+			 *    FinishPreparedTransaction?
+			 *
+			 * 2) Generally FinishPreparedTransaction and
+			 *    SetPreparedTransactionState should run in xact, i.e.
+			 *    surrounded by
+			 *    StartTransactionCommand/CommitTransactionCommand.
+			 *    e.g. LockGXact will fail if I am not the owner of
+			 *    gxact. However, some hops are needed to avoid entering
+			 *    MtmTwoPhaseCommit/MtmBeginTransaction twice. In particular,
+			 *    erroring out from MtmBeginTransaction on attempt to abort
+			 *    xact after we got network error because, well, we are
+			 *    isolated after network error is really unpleasant. This
+			 *    relates to all
+			 *    StartTransactionCommand/CommitTransactionCommand in this
+			 *    file.
+			 *
+			 * As a sort of compromise, we could instead add the 'this is my
+			 * orphaned prepare => directly abort it' logic to resolver.
+			 */
+			if (term_cmp(mtm_commit_state.gtx->state.accepted,
+						 InvalidGTxTerm) == 0)
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 errmsg("[multimaster] exiting commit sequence of transaction %s which will be aborted",
+								mtm_commit_state.gid)));
+
+			}
+			else
+			{
+				ereport(WARNING,
+						(errcode(ERRCODE_TRANSACTION_RESOLUTION_UNKNOWN),
+						 errmsg("[multimaster] exiting commit sequence of transaction %s with unknown status",
+								mtm_commit_state.gid),
+						 errdetail("The transaction will be committed or aborted later.")));
+			}
+			mtm_commit_state.gtx->orphaned = true;
 		}
 		if (mtm_commit_state.gtx != NULL)
-		{
-			mtm_commit_state.gtx->orphaned = true;
 			GlobalTxRelease(mtm_commit_state.gtx, false);
-			mtm_commit_state.gtx = NULL;
-			ResolverWake();
-		}
+		mtm_commit_state.gtx = NULL;
+		ResolverWake();
 	}
 }
 
@@ -389,7 +406,6 @@ MtmTwoPhaseCommit(void)
 	mtm_commit_state.subscribed = false;
 	mtm_commit_state.gtx = NULL;
 	mtm_commit_state.abort_prepare = false;
-	mtm_commit_state.in_doubt = false;
 	/*
 	 * Note that we do not HOLD_INTERRUPTS; user might cancel waiting whenever
 	 * he wants. However, probably xact status would be unclear at that
@@ -535,7 +551,6 @@ MtmTwoPhaseCommit(void)
 		 */
 		mtm_commit_state.gtx->state.status = GTXPreCommitted;
 		mtm_commit_state.gtx->state.accepted = (GlobalTxTerm) {1, 0};
-		mtm_commit_state.in_doubt = true;
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", mtm_commit_state.gid);
 
 		/*
@@ -598,7 +613,6 @@ MtmTwoPhaseCommit(void)
 		}
 
 		/* we have majority precommits, commit */
-		mtm_commit_state.in_doubt = false;
 		StartTransactionCommand();
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);
 		mtm_commit_state.gtx->state.status = GTXCommitted;

@@ -273,6 +273,14 @@ GlobalTxAcquire(const char *gid, bool create, bool *is_new)
 }
 
 /*
+ * needed for ugly hack in commit.c exit hook
+ */
+GlobalTx *GetMyGlobalTx(void)
+{
+	return my_locked_gtx;
+}
+
+/*
  * Release our lock on this transaction and remove it from hash. Xacts
  * finished via CP|AP are removed here; shmem mirrors of obsolete
  * gtx_proposals entries are cleaned up in GlobalTxGCInTableProposals.
