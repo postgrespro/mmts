@@ -78,6 +78,7 @@ BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id)
 	ConditionVariableInit(&poolDesc->overflow_cv);
 	poolDesc->bgwhandles = (BackgroundWorkerHandle **) palloc0(MtmMaxWorkers *
 															   sizeof(BackgroundWorkerHandle *));
+	poolDesc->receiver_pid = MyProcPid;
 	LWLockInitialize(&poolDesc->lock, LWLockNewTrancheId());
 	LWLockRegisterTranche(poolDesc->lock.tranche, "BGWPOOL_LWLOCK");
 }
@@ -109,6 +110,31 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 									(pool->head == pool->tail))
 
 static void
+BgwPoolBeforeShmemExit(int status, Datum arg)
+{
+	BgwPool *poolDesc = (BgwPool *) DatumGetPointer(arg);
+	pid_t receiver_pid;
+
+	/*
+	 * Dynamic workers never die one by one normally because receiver is
+	 * completely clueless whether the worker managed to do his job before he
+	 * exited, so he doesn't know whether (and how) should he reassign it to
+	 * someone else. As another manifestation of this, receiver might hang
+	 * forever in process_syncpoint if workers exited unless they notified
+	 * him. So make sure to pull down the whole pool if we are exiting.
+	 */
+	LWLockAcquire(&poolDesc->lock, LW_SHARED);
+	receiver_pid = poolDesc->receiver_pid;
+	LWLockRelease(&poolDesc->lock);
+	if (receiver_pid != InvalidPid)
+	{
+		kill(receiver_pid, SIGTERM);
+		mtm_log(BgwPoolEventDebug, "killed main receiver %d", (int) receiver_pid);
+	}
+	mtm_log(BgwPoolEvent, "exiting");
+}
+
+static void
 BgwPoolMainLoop(BgwPool *poolDesc)
 {
 	int			size;
@@ -121,6 +147,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	MemSet(&rwctx, '\0', sizeof(MtmReceiverWorkerContext));
 	rwctx.sender_node_id = poolDesc->sender_node_id;
 	rwctx.mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
+	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(poolDesc));
 
 	/* Connect to the queue */
 	Assert(!dsm_find_mapping(poolDesc->dsmhandler));
@@ -460,16 +487,21 @@ BgwPoolCancel(BgwPool *poolDesc)
 {
 	int			i;
 
+	/*
+	 * (at least currently) this is called only when receiver is already
+	 * exiting; there is no point in giving each worker the pleasure to kill
+	 * me
+	 */
+	LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
+	poolDesc->receiver_pid = InvalidPid;
+	LWLockRelease(&poolDesc->lock);
+
 	/* Send termination signal to each worker and wait for end of its work. */
 	for (i = 0; i < MtmMaxWorkers; i++)
 	{
-		pid_t		pid;
-
-		if (poolDesc->bgwhandles[i] == NULL ||
-			GetBackgroundWorkerPid(poolDesc->bgwhandles[i], &pid) != BGWH_STARTED)
+		if (poolDesc->bgwhandles[i] == NULL)
 			continue;
-		Assert(pid > 0);
-		kill(pid, SIGINT);
+		TerminateBackgroundWorker(poolDesc->bgwhandles[i]);
 		WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
 		pfree(poolDesc->bgwhandles[i]);
 	}

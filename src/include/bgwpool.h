@@ -55,6 +55,7 @@ typedef struct
 	TimestampTz lastDynamicWorkerStartTime;
 	/* Handlers of workers at the pool */
 	BackgroundWorkerHandle **bgwhandles;
+	pid_t		receiver_pid;
 } BgwPool;
 
 

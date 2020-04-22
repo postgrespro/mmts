@@ -42,6 +42,7 @@ typedef enum MtmLogTag
 
 	/* pool */
 	BgwPoolEvent			= LOG,
+	BgwPoolEventDebug		= LOG,
 
 	/* ddd */
 	DeadlockCheck			= DEBUG1,
