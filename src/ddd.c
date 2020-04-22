@@ -58,9 +58,17 @@
  * EXCLUSIVE or higher so not to delay rollback till `deadlock_timeout` event.
  */
 bool
-MtmDetectGlobalDeadLock(PGPROC *proc)
+MtmDetectGlobalDeadLock(PGPROC *proc, Datum arg)
 {
-	return MtmIsReceiver || MtmIsPoolWorker;
+	MtmReplicationMode *repl_mode = (MtmReplicationMode *) DatumGetPointer(arg);
+	return (repl_mode != NULL) &&
+			/*
+			 * There is no need to check for deadlocks in recovery: all
+			 * conflicting transactions must be eventually committed/aborted
+			 * by the resolver. It would not be fatal, but restarting due to
+			 * deadlock ERRORs might significantly slow down the recovery
+			 */
+		*repl_mode == REPLMODE_NORMAL;
 }
 
 #if 0

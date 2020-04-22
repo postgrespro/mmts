@@ -111,6 +111,7 @@ char const *const MtmMessageTagMnem[] =
 static TransactionManager MtmTM =
 {
 	MtmDetectGlobalDeadLock,
+	(Datum) 0,
 	MtmGetTransactionStateSize,
 	MtmSerializeTransactionState,
 	MtmDeserializeTransactionState,

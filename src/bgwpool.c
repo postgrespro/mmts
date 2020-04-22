@@ -1,4 +1,5 @@
 #include "postgres.h"
+#include "access/xtm.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -148,6 +149,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	rwctx.sender_node_id = poolDesc->sender_node_id;
 	rwctx.mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
 	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(poolDesc));
+	TM->DetectGlobalDeadLockArg = PointerGetDatum(&rwctx.mode);
 
 	/* Connect to the queue */
 	Assert(!dsm_find_mapping(poolDesc->dsmhandler));

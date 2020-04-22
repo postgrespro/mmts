@@ -656,6 +656,18 @@ MtmGetCurrentStatusInGen(void)
 		return MTM_GEN_DEAD; /* can't ever be online there */
 }
 
+/* most callers held lock, hence the second func instead of arg */
+MtmStatusInGen
+MtmGetCurrentStatusInGenNotLocked(void)
+{
+	MtmStatusInGen res;
+
+	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+	res = MtmGetCurrentStatusInGen();
+	LWLockRelease(mtm_state->gen_lock);
+	return res;
+}
+
 /*
  * Mtm current status accessor for user facing code. Augments
  * MtmGetCurrentStatusInGen with connectivity state: see, even if we are

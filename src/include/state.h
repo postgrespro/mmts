@@ -94,6 +94,7 @@ extern void MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors);
 extern bool MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
 								  bool is_recovery, XLogRecPtr end_lsn);
 extern MtmStatusInGen MtmGetCurrentStatusInGen(void);
+extern MtmStatusInGen MtmGetCurrentStatusInGenNotLocked(void);
 extern MtmNodeStatus MtmGetCurrentStatus(bool gen_locked, bool vote_locked);
 
 /* receiver bits */

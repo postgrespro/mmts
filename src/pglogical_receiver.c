@@ -19,6 +19,7 @@
 #include <sys/time.h>
 
 #include "postgres.h"
+#include "access/xtm.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pqexpbuffer.h"
@@ -634,6 +635,7 @@ pglogical_receiver_main(Datum main_arg)
 				Mtm->peers[sender - 1].receiver_mode = mode;
 				BIT_SET(Mtm->walreceivers_mask, rctx->w.sender_node_id - 1);
 				rctx->w.mode = mode;
+				TM->DetectGlobalDeadLockArg = PointerGetDatum(&rctx->w.mode);
 			}
 			LWLockRelease(Mtm->lock);
 
