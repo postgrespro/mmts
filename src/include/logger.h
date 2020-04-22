@@ -67,14 +67,14 @@ typedef enum MtmLogTag
 	/* receiver */
 	MtmReceiverStart		= LOG,
 	MtmReceiverFilter		= DEBUG1,
-	MtmApplyMessage			= DEBUG2,
-	MtmApplyTrace			= DEBUG2,
+	MtmApplyMessage			= LOG,
+	MtmApplyTrace			= LOG,
 	MtmApplyError			= LOG,
 	MtmApplyBgwFinish		= LOG,
 
 	/* state */
-	MtmStateSwitch			= LOG,
 	MtmStateMessage			= LOG,
+	MtmStateSwitch			= LOG,
 	MtmStateDebug			= LOG,
 
 	/* syncpoints */
