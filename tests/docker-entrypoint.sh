@@ -22,13 +22,14 @@ if [ "$1" = 'postgres' ]; then
 
 			max_prepared_transactions = 100
 			wal_level = logical
-			max_worker_processes = 50
+			max_worker_processes = 100
 			max_replication_slots = 10
 			max_wal_senders = 10
 			log_statement = all
 
 			shared_preload_libraries = 'multimaster'
-			multimaster.volkswagen_mode = on
+			multimaster.volkswagen_mode = off
+                        multimaster.max_workers = 30
 		EOF
 
 		if [ -n "$MAJOR" ]; then

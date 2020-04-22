@@ -649,12 +649,25 @@ check_config(int node_id)
 		ok = false;
 	}
 
-	workers_required = 2 * node_id + 1;
+	/*
+	 * There are 4 constant bgws (launcher, monitor, resolver, campaigner)
+	 * and, for (n - 1) neighbours 1 main receiver + up to MtmMaxWorkers
+	 * dynamic workers. Setting max_worker_processes too low might lead to one
+	 * receiver hogging the covers and occupying all slots with its workers
+	 * while another one wouldn't be able to spin even one, thus hanging the
+	 * cluster.
+	 *
+	 * We hope that the configuration is the same on all nodes, so it is ok to
+	 * abuse node_id as number of nodes in the cluster.
+	 */
+	workers_required = 4 + (node_id - 1) * (MtmMaxWorkers + 1);
 	if (max_worker_processes < workers_required)
 	{
 		mtm_log(WARNING,
-				"multimaster requires max_worker_processes >= %d",
-				workers_required);
+				"multimaster requires max_worker_processes at least "
+				"4 + (num_nodes - 1) * (multimaster.max_workers + 1), "
+				"which is %d in your configuration, but it is set to %d",
+				workers_required, max_worker_processes);
 		ok = false;
 	}
 

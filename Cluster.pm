@@ -40,11 +40,12 @@ sub init
 			unix_socket_directories = ''
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
+			log_line_prefix = '%m [%p] %i '
 
 			shared_preload_libraries = 'multimaster, pg_pathman'
 
 			max_prepared_transactions = 250
-			max_worker_processes = 170
+			max_worker_processes = 220
 			max_wal_senders = 6
 			max_replication_slots = 12
 			wal_sender_timeout = 0
