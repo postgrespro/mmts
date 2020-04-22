@@ -975,7 +975,12 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 
 	if (!found)
 	{
-		mtm_log(WARNING,
+		/*
+		 * Beware of using WARNING/NOTICEs in the receiver code; they will go
+		 * to the sender, and evidently nobody cared to read them there.
+		 * This ought to be fixed actually.
+		 */
+		mtm_log(COMMERROR,
 				"[DMQ] subscription %s is not found (body = %s)",
 				stream_name, body);
 		return;
@@ -1006,7 +1011,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
 	if (res != SHM_MQ_SUCCESS)
 	{
-		mtm_log(WARNING, "[DMQ] can't send to queue %d", sub.procno);
+		mtm_log(COMMERROR, "[DMQ] can't send to queue %d", sub.procno);
 	}
 }
 
