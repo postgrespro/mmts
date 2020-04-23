@@ -52,15 +52,18 @@ class TestHelper(object):
             print('=== transfer finishes: ', aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
-                break
+                return
             self.client.list_prepared(node_id)
             time.sleep(5)
             total_sleep += 5
+
+        raise AssertionError('awaitCommit on node {} exceeded timeout {}'.format(node_id, TEST_MAX_RECOVERY_TIME))
 
     @staticmethod
     def awaitOnline(dsn):
         total_sleep = 0
         one = 0
+        con = None
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
             try:
@@ -69,13 +72,18 @@ class TestHelper(object):
                 cur.execute("select 1")
                 one = int(cur.fetchone()[0])
                 cur.close()
-                con.close()
                 print("{} is online!".format(dsn))
-                break
+                return
             except Exception as e:
                 print('Waiting for {} to get online:'.format(dsn), str(e))
                 time.sleep(5)
                 total_sleep += 5
+            finally:
+                if con is not None:
+                    con.close()
+
+        # Max recovery time was exceeded
+        raise AssertionError('awaitOnline on {} exceeded timeout {}'.format(dsn, TEST_MAX_RECOVERY_TIME))
 
     def AssertNoPrepares(self):
         n_prepared = self.client.n_prepared_tx()
@@ -173,9 +181,11 @@ class TestHelper(object):
 
     def nodeExecute(dsn, statements):
         con = psycopg2.connect(dsn)
-        con.autocommit = True
-        cur = con.cursor()
-        for statement in statements:
-            cur.execute(statement)
-        cur.close()
-        con.close()
+        try:
+            con.autocommit = True
+            cur = con.cursor()
+            for statement in statements:
+                cur.execute(statement)
+            cur.close()
+        finally:
+            con.close()

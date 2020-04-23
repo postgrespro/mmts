@@ -124,41 +124,47 @@ class MtmClient(object):
 
     def initdb(self):
         conn = psycopg2.connect(self.dsns[0])
-        cur = conn.cursor()
-        cur.execute('drop table if exists bank_test')
-        cur.execute('create table bank_test(uid int primary key, amount int)')
-        cur.execute('create table insert_test(id text primary key)')
-        cur.execute('''
-                insert into bank_test
-                select *, 0 from generate_series(0, %s)''',
-                (self.n_accounts,))
-        conn.commit()
-        cur.close()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute('drop table if exists bank_test')
+            cur.execute('create table bank_test(uid int primary key, amount int)')
+            cur.execute('create table insert_test(id text primary key)')
+            cur.execute('''
+            insert into bank_test
+            select *, 0 from generate_series(0, %s)''',
+                        (self.n_accounts,))
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
 
     def execute(self, node_id, statements):
         con = psycopg2.connect(self.dsns[node_id])
-        con.autocommit = True
-        cur = con.cursor()
-        for statement in statements:
-            cur.execute(statement)
-        cur.close()
-        con.close()
+        try:
+            con.autocommit = True
+            cur = con.cursor()
+            for statement in statements:
+                cur.execute(statement)
+            cur.close()
+        finally:
+            con.close()
 
     def await_nodes(self):
         print("await_nodes")
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
-            con.autocommit = True
-            cur = con.cursor()
-            # xxx: make write transaction to ensure generational perturbations
-            # after init have calmed down
-            # do we really need that?
+            try:
+                con.autocommit = True
+                cur = con.cursor()
+                # xxx: make write transaction to ensure generational perturbations
+                # after init have calmed down
+                # do we really need that?
 
-            cur.execute('create table if not exists bulka ()')
-            cur.close()
-            con.close()
+                cur.execute('create table if not exists bulka ()')
+                cur.close()
+            finally:
+                con.close()
 
 
     def create_extension(self):
@@ -167,11 +173,13 @@ class MtmClient(object):
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
-            con.autocommit = True
-            cur = con.cursor()
-            cur.execute('create extension if not exists multimaster')
-            cur.close()
-            con.close()
+            try:
+                con.autocommit = True
+                cur = con.cursor()
+                cur.execute('create extension if not exists multimaster')
+                cur.close()
+            finally:
+                con.close()
 
         connstr = " "
         for i in range(len(self.dsns)-1):
@@ -180,12 +188,14 @@ class MtmClient(object):
         		connstr = connstr + ", "
 
         conn = psycopg2.connect(self.dsns[0])
-        cur = conn.cursor()
-        cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
-            ("dbname=regression user=pg host=192.168.253.1", connstr))
-        conn.commit()
-        cur.close()
-        conn.close()
+        try:
+            cur = conn.cursor()
+            cur.execute("select mtm.init_cluster($$%s$$, $${%s}$$);" %
+                        ("dbname=regression user=pg host=192.168.253.1", connstr))
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
 
     def is_data_identic(self):
         hashes = set()
@@ -193,20 +203,22 @@ class MtmClient(object):
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
-            cur = con.cursor()
-            cur.execute("""
+            try:
+                cur = con.cursor()
+                cur.execute("""
                 select
-                    md5('(' || string_agg(uid::text || ', ' || amount::text , '),(') || ')')
+                  md5('(' || string_agg(uid::text || ', ' || amount::text , '),(') || ')')
                 from
-                    (select * from bank_test order by uid) t;""")
-            hashes.add(cur.fetchone()[0])
+                  (select * from bank_test order by uid) t;""")
+                hashes.add(cur.fetchone()[0])
 
-            cur.execute("""
+                cur.execute("""
                 select md5(string_agg(id, ','))
                 from (select id from insert_test order by id) t;""")
-            hashes2.add(cur.fetchone()[0])
-            cur.close()
-            con.close()
+                hashes2.add(cur.fetchone()[0])
+                cur.close()
+            finally:
+                con.close()
 
         print("bank_test hashes: {}".format(hashes))
         print("insert_test hashes: {}".format(hashes2))
@@ -216,26 +228,31 @@ class MtmClient(object):
         n_prepared = 0
 
         for dsn in self.dsns:
-            con = psycopg2.connect(dsn)
-            cur = con.cursor()
-            cur.execute("select count(*) from pg_prepared_xacts;")
-            n_prepared += int(cur.fetchone()[0])
-            if n_prepared != 0:
-                print("{} prepared xacts on node {}".format(n_prepared, dsn))
-            cur.close()
-            con.close()
+            con = psycopg2.connect(dsn + " application_name=mtm_admin")
+            try:
+                cur = con.cursor()
+                cur.execute("select count(*) from pg_prepared_xacts;")
+                n_prepared += int(cur.fetchone()[0])
+                if n_prepared != 0:
+                    print("{} prepared xacts on node {}".format(n_prepared, dsn))
+                cur.close()
+            finally:
+                con.close()
 
         print("total num of prepared xacts on all nodes: %d" % (n_prepared))
         return (n_prepared)
 
     def list_prepared(self, node_id):
         con = psycopg2.connect(self.dsns[node_id] + " application_name=mtm_admin")
-        cur = con.cursor()
-        cur.execute('select * from pg_prepared_xacts order by prepared;')
-        for pxact in cur.fetchall():
-            for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
-                print(pxact[i], end="\t")
-            print("\n")
+        try:
+            cur = con.cursor()
+            cur.execute('select * from pg_prepared_xacts order by prepared;')
+            for pxact in cur.fetchall():
+                for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
+                    print(pxact[i], end="\t")
+                print("\n")
+        finally:
+            con.close()
         print("----\n")
 
     def insert_counts(self):
@@ -243,11 +260,13 @@ class MtmClient(object):
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
-            cur = con.cursor()
-            cur.execute("select count(*) from insert_test;")
-            counts.append(int(cur.fetchone()[0]))
-            cur.close()
-            con.close()
+            try:
+                cur = con.cursor()
+                cur.execute("select count(*) from insert_test;")
+                counts.append(int(cur.fetchone()[0]))
+                cur.close()
+            finally:
+                con.close()
 
         return counts
 
