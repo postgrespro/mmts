@@ -140,11 +140,11 @@ class TestHelper(object):
         # helps to bail out earlier, making the investigation easier
         # TODO: control this via arg
         # if isinstance(failure, SingleNodePartition) or isinstance(failure, SingleNodePartitionReject):
-            # for n in range(3):
-                # if n == node_wait_for_commit:
-                    # self.assertNoCommits([aggs_failure[n]])
-                # else:
-                    # self.assertCommits([aggs_failure[n]])
+        for n in range(3):
+            if n == node_wait_for_commit:
+                self.assertNoCommits([aggs_failure[n]])
+            else:
+                self.assertCommits([aggs_failure[n]])
 
         time.sleep(wait)
         failure.stop()
