@@ -14,6 +14,7 @@ import logging
 import re
 import pprint
 import uuid
+import traceback
 
 class MtmTxAggregate(object):
 
@@ -293,14 +294,14 @@ class MtmClient(object):
 
     @asyncio.coroutine
     def exec_tx(self, tx_block, node_id, aggname_prefix, conn_i):
-        # aggname = "%i_%s_%i" % (aggname_prefix, conn_i)
+        conn_name = "node_{}_{}_{}".format(node_id + 1, aggname_prefix, conn_i)
 
         if aggname_prefix not in self.aggregates[node_id]:
             self.aggregates[node_id][aggname_prefix] = []
 
         agg = MtmTxAggregate()
         self.aggregates[node_id][aggname_prefix].append(agg)
-        dsn = self.dsns[node_id]
+        dsn = self.dsns[node_id] + " application_name={}".format(conn_name)
 
         conn = cur = False
 
@@ -308,12 +309,18 @@ class MtmClient(object):
             agg.start_tx()
 
             try:
+                # I've failed to find this in the docs, but testing shows
+                # whenever connection fails it gets closed automatically (as
+                # well as associated cursors), so there is no need to close
+                # conn/cursor in exception handler: just reconnect if it is
+                # dead.
                 if (not conn) or conn.closed:
                         # enable_hstore tries to perform select from database
                         # which in case of select's failure will lead to exception
                         # and stale connection to the database
+                        print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
                         conn = yield from aiopg.connect(dsn, enable_hstore=False, timeout=1)
-                        print('Connected %s, %d' % (aggname_prefix, conn_i + 1) )
+                        print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
 
                 if (not cur) or cur.closed:
                         # big timeout here is important because on timeout
@@ -321,6 +328,10 @@ class MtmClient(object):
                         # tries to create blocking connection to postgres and
                         # blocks evloop
                         cur = yield from conn.cursor(timeout=3600)
+
+                        yield from cur.execute("select pg_backend_pid()")
+                        bpid = yield from cur.fetchone()
+                        print('{} pid is {}'.format(conn_name, bpid[0]))
 
                 # ROLLBACK tx after previous exception.
                 # Doing this here instead of except handler to stay inside try
@@ -333,6 +344,8 @@ class MtmClient(object):
                 agg.finish_tx('commit')
 
             except psycopg2.Error as e:
+                if 'transfer' in conn_name:
+                    print("{} {} got psycopg2 exception: {}".format(datetime.datetime.utcnow(), conn_name, e))
                 msg = str(e).strip()
                 agg.finish_tx(msg)
                 # Give evloop some free time.
