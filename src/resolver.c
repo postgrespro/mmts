@@ -135,6 +135,135 @@ ResolveForRefereeWinner(int n_all_nodes)
  *
  *****************************************************************************/
 
+typedef struct verdict
+{
+	char gid[GIDSIZE];
+	bool commit;
+} verdict;
+
+/* gid_t is system type... */
+typedef char pgid_t[GIDSIZE];
+
+/*
+ * Called periodically. Iterate over gtxes and
+ * - finish xact immediately if we can (e.g. it is our xact which never got
+ *   precommitted with backend gone dead)
+ * - determine whether we still need to actually resolve something,
+ *   returns true, if so
+ * - remove gtx_proposals entry if we have both the entry and PREPARE record.
+ *   This should be incredibly rare situation where applier wrote PREPARE but
+ *   failed to cleaup the entry immeidately after; see PREPARE handling for
+ *   the details.
+ */
+static bool
+finish_ready(void)
+{
+	bool job_pending = false;
+	HASH_SEQ_STATUS hash_seq;
+	GlobalTx   *gtx;
+	/*
+	 * Calling FinishPreparedTransaction under lwlock is probably not a good
+	 * idea, so let's collect xacts here and finish them after release.
+	 */
+	verdict *ready_xacts = palloc(sizeof(verdict) * max_prepared_xacts);
+	int n_ready_xacts = 0;
+	/* gids for which we must remove gtx_proposals entry */
+	pgid_t *in_table_rm_pending = palloc(sizeof(pgid_t) * max_prepared_xacts);
+	int n_in_table_rm_pending = 0;
+	int i;
+	int coordinator;
+
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		if (gtx->prepared && gtx->in_table)
+		{
+			Assert(n_in_table_rm_pending < max_prepared_xacts);
+			strcpy(in_table_rm_pending[n_in_table_rm_pending], gtx->gid);
+			n_in_table_rm_pending++;
+			continue;
+		}
+
+		/* don't intervene if backend is still working on xact */
+		if (!gtx->orphaned)
+			continue;
+
+		coordinator = MtmGidParseNodeId(gtx->gid);
+		/*
+		 * Actually, currently gtx can't live long in GTXCommitted or
+		 * GTXAborted state; it is set only after finishing prepare, which
+		 * makes GlobalTxRelease to rm shmem entry. However, this is easy and
+		 * might be useful if we ever start recording AP in gtx_proposals for
+		 * performance reasons as GlobalTxRelease explains.
+		 */
+		if (gtx->state.status == GTXCommitted ||
+			gtx->state.status == GTXAborted ||
+			/*
+			 * Directly aborting own xacts which never got precommitted is not
+			 * required (we could resolve them as usual as well), but this is
+			 * a useful performance optimization as scanning WAL during
+			 * resolution long. This is definitely safe as backend has already
+			 * orphaned xact, and since it wasn't precommitted on the
+			 * coordinator it can't be precommitted anywhere -- any resolution
+			 * attempt will result in abort. However, note that once xact got
+			 * precommitted this is no longer true and direct abort even of my
+			 * own xacts is not safe.
+			 */
+			(gtx->prepared &&
+			 coordinator == Mtm->my_node_id &&
+			 gtx->state.status == GTXInvalid))
+		{
+			Assert(n_ready_xacts < max_prepared_xacts);
+			strcpy(ready_xacts[n_ready_xacts].gid, gtx->gid);
+			if (gtx->state.status == GTXCommitted)
+				ready_xacts[n_ready_xacts].commit = true;
+			else
+				ready_xacts[n_ready_xacts].commit = false;
+			n_ready_xacts++;
+			if (gtx->state.status == GTXInvalid)
+				mtm_log(MtmTxTrace, "my orphaned transaction %s will be directly aborted as it was never was precommitted", gtx->gid);
+			continue;
+		}
+
+		/* so we have orphaned xact needing resolution */
+		job_pending = true;
+	}
+	LWLockRelease(gtx_shared->lock);
+
+	/* finish ready xacts */
+	for (i = 0; i < n_ready_xacts; i++)
+	{
+		gtx = GlobalTxAcquire(ready_xacts[i].gid, false, NULL);
+		if (!gtx)
+			continue;
+
+		StartTransactionCommand();
+		FinishPreparedTransaction(gtx->gid, ready_xacts[i].commit, false);
+		CommitTransactionCommand();
+		gtx->state.status = ready_xacts[i].commit ? GTXCommitted : GTXAborted;
+		mtm_log(MtmTxFinish, "TXFINISH: %s %s directly",
+				gtx->gid, ready_xacts[i].commit ? "committed" : "aborted");
+		GlobalTxRelease(gtx);
+	}
+
+	/* clear obsolete gtx_proposals entries */
+	for (i = 0; i < n_in_table_rm_pending; i++)
+	{
+		gtx = GlobalTxAcquire(in_table_rm_pending[i], false, NULL);
+		if (!gtx)
+			continue;
+
+		GlobalTxDeleteFromTable(gtx->gid);
+		gtx->in_table = false;
+		GlobalTxRelease(gtx);
+	}
+
+	pfree(ready_xacts);
+	pfree(in_table_rm_pending);
+	return job_pending;
+}
+
 static void
 scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 {
@@ -170,47 +299,9 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 {
 	HASH_SEQ_STATUS hash_seq;
 	GlobalTx   *gtx;
-	bool		have_orphaned = false;
 	GlobalTxTerm new_term;
 
-	/* Is there any orphaned transactions? */
-	LWLockAcquire(gtx_shared->lock, LW_SHARED);
-	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
-	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
-	{
-		if (gtx->orphaned)
-			have_orphaned = true;
-
-		/*
-		 * TODO: currently it is possible that on the moment of P apply xact
-		 * will already be known to be aborted (via gtx_proposals resolution)
-		 * -- we finish it here. It would probably be nice to move the
-		 * finalization to P apply (normally) and GlobalTxLoadAll (if receiver
-		 * fails before doing this) -- than we could get rid of 'remove' flag
-		 * of GlobalTxRelease.
-		 * BTW, doing this under lock is really not nice, but this should
-		 * be very rare.
-		 */
-		if ((gtx->state.status == GTXCommitted ||
-			 gtx->state.status == GTXAborted) &&
-			gtx->prepared &&
-			gtx->acquired_by == InvalidBackendId)
-		{
-			FinishPreparedTransaction(gtx->gid,
-									  gtx->state.status == GTXCommitted,
-									  false);
-			mtm_log(MtmTxFinish, "TXFINISH: %s %s", gtx->gid,
-					gtx->state.status == GTXCommitted ? "committed" : "aborted");
-			hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, NULL);
-		}
-	}
-	LWLockRelease(gtx_shared->lock);
-
-	/* Just rest if there is no transactions to resolve */
-	if (!have_orphaned)
-		return;
-
-	mtm_log(ResolverState, "Orphaned transactions detected");
+	mtm_log(ResolverState, "orphaned transactions detected");
 
 	/*
 	 * Generate next term.
@@ -266,6 +357,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 		if (gtx->orphaned && gtx->acquired_by == InvalidBackendId &&
 			/* not much sense to resove xact if we don't have PREPARE */
 			gtx->prepared &&
+			!gtx->in_table &&
 			gtx->state.status != GTXCommitted && gtx->state.status != GTXAborted &&
 			/*
 			 * monitor could already vote in the short gap after
@@ -388,7 +480,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		return;
 	if (gtx->state.status == GTXAborted || gtx->state.status == GTXCommitted)
 	{
-		GlobalTxRelease(gtx, false);
+		GlobalTxRelease(gtx);
 		return;
 	}
 	/* we resolve only prepared xacts */
@@ -411,7 +503,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			FinishPreparedTransaction(gtx->gid, true, false);
 			gtx->state.status = GTXCommitted;
 			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gtx->gid);
-			GlobalTxRelease(gtx, true);
+			GlobalTxRelease(gtx);
 			return;
 		}
 		else if (msg->state.status == GTXAborted)
@@ -419,7 +511,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			FinishPreparedTransaction(gtx->gid, false, false);
 			gtx->state.status = GTXAborted;
 			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gtx->gid);
-			GlobalTxRelease(gtx, true);
+			GlobalTxRelease(gtx);
 			return;
 		}
 		else if (quorum(mtm_cfg, gtx->phase1_acks))
@@ -515,7 +607,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		/* If GTXInvalid, node refused to accept the ballot */
 		if (!(msg->status == GTXPreAborted || msg->status == GTXPreCommitted))
 		{
-			GlobalTxRelease(gtx, false);
+			GlobalTxRelease(gtx);
 			return;
 		}
 
@@ -537,8 +629,9 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 									  false);
 			mtm_log(MtmTxFinish, "TXFINISH: %s %s via quorum of 2a acks", msg->gid,
 					msg->status == GTXPreCommitted ? "committed" : "aborted");
-			gtx->state.status = msg->status;
-			GlobalTxRelease(gtx, true);
+			gtx->state.status = msg->status == GTXPreCommitted ?
+				GTXCommitted : GTXAborted;
+			GlobalTxRelease(gtx);
 
 			request_msg = (MtmTxRequest) {
 				T_MtmTxRequest,
@@ -552,7 +645,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		}
 	}
 
-	GlobalTxRelease(gtx, false);
+	GlobalTxRelease(gtx);
 }
 
 static void
@@ -641,11 +734,18 @@ ResolverMain(Datum main_arg)
 		/* Scatter requests for unresolved transactions */
 		if (send_requests)
 		{
+			bool job_pending;
+
 			/* vacuum obsolete in table proposals periodically */
 			GlobalTxGCInTableProposals();
-			StartTransactionCommand();
-			scatter_status_requests(mtm_cfg);
-			CommitTransactionCommand();
+			job_pending = finish_ready();
+
+			if (job_pending)
+			{
+				StartTransactionCommand();
+				scatter_status_requests(mtm_cfg);
+				CommitTransactionCommand();
+			}
 			send_requests = false;
 		}
 

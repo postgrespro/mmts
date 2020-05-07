@@ -432,7 +432,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 						ReorderBufferTXN *txn, XLogRecPtr lsn)
 {
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
-	uint8		event = *txn->state_3pc ? PGLOGICAL_PREPARE_PHASE2A : PGLOGICAL_PREPARE;
+	uint8		event = txn->state_3pc_change ? PGLOGICAL_PREPARE_PHASE2A : PGLOGICAL_PREPARE;
 
 	/* Ensure that we reset DDLInProgress */
 	Assert(!DDLInProgress);
@@ -442,7 +442,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	 * what the coordinator uses; 1a as well as later 2a are sent by resolver
 	 * directly via dmq and wal-logged only for persistency.
 	 */
-	if (txn->state_3pc[0] != '\0')
+	if (txn->state_3pc_change)
 	{
 		GlobalTxStatus status;
 		GlobalTxTerm prop, acc;
@@ -475,6 +475,13 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 
 	pq_sendstring(out, txn->gid);
+	/*
+	 * Non-empty state_3pc in PREPARE might be only if node participated in
+	 * resolving before getting P. There is no need to send it; normally
+	 * prepares are streamed without state at all meaning initial proposal
+	 * term and invalid state. Resolver will take care of, well, resolving via
+	 * dmq if the need arises.
+	 */
 	if (event == PGLOGICAL_PREPARE_PHASE2A)
 		pq_sendstring(out, txn->state_3pc);
 

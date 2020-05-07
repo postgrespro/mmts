@@ -981,7 +981,6 @@ process_remote_commit(StringInfo in,
 		case PGLOGICAL_PREPARE_PHASE2A:
 			{
 				const char *state_3pc;
-				GlobalTx   *gtx;
 				GlobalTxStatus msg_status;
 				GlobalTxTerm _msg_prop, msg_term;
 				GlobalTxStatus reply_status = GTXInvalid;
@@ -998,8 +997,8 @@ process_remote_commit(StringInfo in,
 				 */
 				Assert(msg_status == GTXPreCommitted);
 
-				gtx = GlobalTxAcquire(gid, false, NULL);
-				if (!gtx)
+				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
+				if (!rwctx->gtx)
 				{
 					/*
 					 * Xact was already finished. Still reply to coordinator
@@ -1014,10 +1013,10 @@ process_remote_commit(StringInfo in,
 				 * give vote iff we actually have PREPARE, final outcome is
 				 * not known yet and paxos rules allow it.
 				 */
-				if (gtx->prepared &&
-					gtx->state.status != GTXCommitted &&
-					gtx->state.status != GTXAborted &&
-					term_cmp(msg_term, gtx->state.proposal) >= 0)
+				if (rwctx->gtx->prepared &&
+					rwctx->gtx->state.status != GTXCommitted &&
+					rwctx->gtx->state.status != GTXAborted &&
+					term_cmp(msg_term, rwctx->gtx->state.proposal) >= 0)
 				{
 					bool		done = false;
 					char	   *sstate;
@@ -1031,9 +1030,9 @@ process_remote_commit(StringInfo in,
 
 					CommitTransactionCommand();
 					MemoryContextSwitchTo(MtmApplyContext);
-					gtx->state.proposal = msg_term;
-					gtx->state.accepted = msg_term;
-					gtx->state.status = msg_status;
+					rwctx->gtx->state.proposal = msg_term;
+					rwctx->gtx->state.accepted = msg_term;
+					rwctx->gtx->state.status = msg_status;
 					reply_status = msg_status;
 					reply_acc = msg_term;
 
@@ -1046,7 +1045,8 @@ process_remote_commit(StringInfo in,
 					mtm_send_2a_reply(gid, reply_status,
 									  reply_acc, origin_node);
 
-				GlobalTxRelease(gtx, false);
+				GlobalTxRelease(rwctx->gtx);
+				rwctx->gtx = NULL;
 				break;
 			}
 		case PGLOGICAL_COMMIT:
@@ -1059,10 +1059,11 @@ process_remote_commit(StringInfo in,
 				ListCell   *cur_item,
 						   *prev_item;
 				TransactionId xid = GetCurrentTransactionIdIfAny();
-				GlobalTx   *gtx;
 				uint64 prepare_gen_num;
 				bool latch_set = false;
 				bool gtx_created;
+				char   *sstate;
+
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == current_gtid->my_xid);
@@ -1154,7 +1155,7 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
-				gtx = GlobalTxAcquire(gid, true, &gtx_created);
+				rwctx->gtx = GlobalTxAcquire(gid, true, &gtx_created);
 
 				/*
 				 * TODO: we could check 'proposal' (aka nextBal in The
@@ -1165,73 +1166,60 @@ process_remote_commit(StringInfo in,
 				 * xact status'.
 				 */
 
-				PrepareTransactionBlock(gid);
+				/*
+				 * Be careful not to lose vote we could have given/obtained
+				 * while xact lived as gtx_proposals entry.
+				 *
+				 * So we need to 1) write state_3pc, if any, into PREPARE 2)
+				 * purge gtx_proposals entry ASAP -- otherwise, we might
+				 * proceed, commit/abort xact, crash-reboot and use old stale
+				 * state from table (we could have given new votes since state
+				 * migrated to PREPARE). This is problematic as we can't both
+				 * write PREPARE and delete from table atomically. Purging
+				 * gtx_proposals here might fail (it really shouldn't, but we
+				 * can't rely on that), so we achieve 2) by maintaining
+				 * separate in_table flag and forbidding to finish xact while
+				 * it has both in-table entry and prepare record. Resolver
+				 * worker periodically searches for such xacts and removes
+				 * gtx_entries for them.
+				 *
+				 */
+				sstate = NULL;
+				if (!gtx_created)
+				{
+					sstate = serialize_gtx_state(rwctx->gtx->state.status,
+												 rwctx->gtx->state.proposal,
+												 rwctx->gtx->state.accepted);
+					mtm_log(MtmApplyTrace,
+							"migrating transaction %s state %s to PREPARE",
+							gid, sstate);
+				}
+				PrepareTransactionBlockWithState3PC(gid, sstate);
 				AllowTempIn2PC = true;
 				/* PREPARE itself */
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(MtmApplyContext);
-				if (!gtx_created)
-				{
-					/* START_CRIT_SECTION(); /\* see notes several lines below *\/ */
-				}
 				ReleasePB();
-				gtx->prepared = true; /* now we have WAL record */
-				gtx->coordinator_end_lsn = origin_lsn;
+				rwctx->gtx->prepared = true; /* now we have WAL record */
+				rwctx->gtx->coordinator_end_lsn = replorigin_session_origin_lsn;
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 
-				/*
-				 * Be careful not to lose vote (or even final outcome) we
-				 * could have given/obtained while xact lived as gtx_proposals
-				 * entry.
-				 *
-				 * So we need to 1) update state_3pc for PREPARE 2) purge
-				 * gtx_proposals entry -- otherwise, we might proceed,
-				 * commit/abort xact, crash-reboot and use old stale state
-				 * from table (we could have given new votes since state
-				 * migrated to PREPARE). Hence the crit section, terribly ugly
-				 * -- we can't continue to work normally if we fail here.  On
-				 * reboot, GlobalTxLoadAll will redo both 1 and 2.
-				 *
-				 * TODO: 1) could be removed altogether by allowing to pass
-				 * state_3pc to PrepareTransactionBlock. 2) is harder, but
-				 * probably we could replace whole instance panic with
-				 * mtm-specific part restart by killing monitor.
-				 */
 				if (!gtx_created)
 				{
-					char   *sstate;
-					bool	done;
+					Assert(rwctx->gtx->in_table);
 
-					sstate = serialize_gtx_state(gtx->state.status,
-												 gtx->state.proposal,
-												 gtx->state.accepted);
-					mtm_log(MtmApplyTrace,
-							"migrating transaction %s state %s to PREPARE",
-							gid, sstate);
 					/* prevent logging the same origin_lsn twice */
 					MtmEndSession(42, true);
-					StartTransactionCommand();
-					done = SetPreparedTransactionState(gid, sstate, false);
-					CommitTransactionCommand();
-					/*
-					 * seems enough to convince compiler var is used
-					 * without asserts
-					 */
-					if (!done)
-						Assert(false);
-
 					GlobalTxDeleteFromTable(gid);
+					rwctx->gtx->in_table = false;
 
-					/* END_CRIT_SECTION(); */
-
-					/*
-					 * xact might be known to be CP|AP so we could finish it
-					 * here, but there is no need to, resolver will do the
-					 * job.
-					 */
+					/* c.f. GlobalTxRelease why we can't have final states here */
+					Assert(rwctx->gtx->state.status != GTXCommitted &&
+						   rwctx->gtx->state.status != GTXAborted);
 				}
 
-				GlobalTxRelease(gtx, false);
+				GlobalTxRelease(rwctx->gtx);
+				rwctx->gtx = NULL;
 
 				MemoryContextSwitchTo(MtmApplyContext);
 
@@ -1290,25 +1278,34 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_COMMIT_PREPARED:
 			{
-				GlobalTx   *gtx;
-
 				Assert(!query_cancel_allowed);
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
-				gtx = GlobalTxAcquire(gid, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
 
 				/* normal path: we have PREPARE, finish it */
-				if (gtx && gtx->prepared)
+				if (rwctx->gtx && rwctx->gtx->prepared)
 				{
+					/*
+					 * c.f. PREPARE handling why finishing xact while
+					 * gtx_proposals entry exists is unsafe
+					 */
+					if (rwctx->gtx->in_table)
+					{
+						ereport(ERROR,
+								(errcode(ERRCODE_INTERNAL_ERROR),
+								 MTM_ERRMSG("can't apply COMMIT PREPARED of transaction %s as its gtx_proposals entry is not deleted yet", gid)));
+					}
+
 					StartTransactionCommand();
 					MtmBeginSession(origin_node);
 
 					FinishPreparedTransaction(gid, true, false);
 					CommitTransactionCommand();
-					gtx->state.status = GTXCommitted;
-					GlobalTxRelease(gtx, true);
-					gtx = NULL;
+					rwctx->gtx->state.status = GTXCommitted;
+					GlobalTxRelease(rwctx->gtx);
+					rwctx->gtx = NULL;
 					MtmEndSession(origin_node, true);
 					mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
 				}
@@ -1371,7 +1368,7 @@ process_remote_commit(StringInfo in,
 				 * instead of PREPARE, but the check above hasn't thrown us
 				 * out, so we still managed to get CP out of order somehow.
 				 */
-				Assert(gtx == NULL);
+				Assert(rwctx->gtx == NULL);
 
 				/* restore ctx after CommitTransaction */
 				MemoryContextSwitchTo(MtmApplyContext);
@@ -1385,8 +1382,6 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_ABORT_PREPARED:
 			{
-				GlobalTx   *gtx;
-
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
 				/*
@@ -1397,16 +1392,30 @@ process_remote_commit(StringInfo in,
 				 * because if there was commit, we must have already received
 				 * it and the answer doesn't matter.
 				 */
-				gtx = GlobalTxAcquire(gid, false, NULL);
-				if (!gtx || !gtx->prepared)
+				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
+				if (!rwctx->gtx || !rwctx->gtx->prepared)
 				{
 					/*
 					 * We have in-table state for this xact. We could update
 					 * it with 'abort', but again, there is no need to.
 					 */
-					if (gtx)
-						GlobalTxRelease(gtx, false);
+					if (rwctx->gtx)
+					{
+						GlobalTxRelease(rwctx->gtx);
+						rwctx->gtx = NULL;
+					}
 					break;
+				}
+
+				/*
+				 * c.f. PREPARE handling why finishing xact while
+				 * gtx_proposals entry exists is unsafe
+				 */
+				if (rwctx->gtx->in_table)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_INTERNAL_ERROR),
+							 MTM_ERRMSG("can't apply ABORT PREPARED of transaction %s as its gtx_proposals entry is not deleted yet", gid)));
 				}
 
 				MtmBeginSession(origin_node);
@@ -1414,8 +1423,9 @@ process_remote_commit(StringInfo in,
 
 				FinishPreparedTransaction(gid, false, false);
 				CommitTransactionCommand();
-				gtx->state.status = GTXAborted;
-				GlobalTxRelease(gtx, true);
+				rwctx->gtx->state.status = GTXAborted;
+				GlobalTxRelease(rwctx->gtx);
+				rwctx->gtx = NULL;
 
 				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
 				MemoryContextSwitchTo(MtmApplyContext);
@@ -2014,6 +2024,11 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		EmitErrorReport();
 		FlushErrorState();
 		ReleasePB();
+		if (rwctx->gtx != NULL)
+		{
+			GlobalTxRelease(rwctx->gtx);
+			rwctx->gtx = NULL;
+		}
 		MtmEndSession(42, false);
 
 		MtmDDLResetApplyState();

@@ -2771,6 +2771,7 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 				GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
 									gtx->state.status,
 									msg->term, gtx->state.accepted);
+				gtx->in_table = true;
 			}
 			gtx->state.proposal = msg->term;
 			mtm_log(MtmTxTrace, "TXTRACE: processed 1a, set state %s", GlobalTxToString(gtx));
@@ -2843,6 +2844,11 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 			coordinator = MtmGidParseNodeId(gtx->gid);
 			sp = SyncpointGetLatest(coordinator);
 
+			/*
+			 * It is important we do this check with gtx locked: thus we
+			 * prevent GlobalTxGCInTableProposals from deleting entry even if
+			 * sp was already eaten until we are done with it.
+			 */
 			if (msg->coordinator_end_lsn <= sp.origin_lsn)
 			{
 				resp.state.status = GTXAborted;
@@ -2859,6 +2865,7 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 				GlobalTxSaveInTable(gtx->gid, msg->coordinator_end_lsn,
 									GTXInvalid,
 									msg->term, InvalidGTxTerm);
+				gtx->in_table = true;
 				gtx->coordinator_end_lsn = msg->coordinator_end_lsn;
 				gtx->state.proposal = msg->term;
 				resp.state = (GTxState) {
@@ -2876,7 +2883,7 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 			MtmMesageToString((MtmMessage *) &resp));
 	dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
 
-	GlobalTxRelease(gtx, false);
+	GlobalTxRelease(gtx);
 }
 
 /* reply to 2a of paxos */
@@ -2945,6 +2952,7 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		}
 		else
 		{
+			Assert(gtx->in_table);
 			GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
 								new_status, msg->term, msg->term);
 		}
@@ -2966,7 +2974,7 @@ reply:
 					packed_msg->len);
 
 	if (gtx)
-		GlobalTxRelease(gtx, false);
+		GlobalTxRelease(gtx);
 }
 
 /*
@@ -3017,11 +3025,15 @@ check_status_requests(MtmConfig *mtm_cfg)
 				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
 
 				gtx = GlobalTxAcquire(msg->gid, false, NULL);
-				/* finish iff we have PREPARE */
-				if (!gtx || !gtx->prepared)
+				/*
+				 * finish iff 1) we have PREPARE 2) but we don't have in_table
+				 * entry -- c.f. PREPARE handling why finishing xact while
+				 * gtx_proposals entry exists is unsafe
+				 */
+				if ((!gtx || !gtx->prepared) || (gtx->in_table))
 				{
 					if (gtx)
-						GlobalTxRelease(gtx, false);
+						GlobalTxRelease(gtx);
 					continue;
 				}
 
@@ -3034,8 +3046,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(oldcontext);
 
-				gtx->state.status = msg->type;
-				GlobalTxRelease(gtx, true);
+				gtx->state.status = msg->type == MTReq_Commit ?
+					GTXCommitted : GTXAborted;
+				GlobalTxRelease(gtx);
 			}
 		}
 		else if (raw_msg->tag == T_MtmLastTermRequest)

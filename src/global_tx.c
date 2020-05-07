@@ -239,6 +239,7 @@ GlobalTxAcquire(const char *gid, bool create, bool *is_new)
 				gtx->state.proposal = InitialGTxTerm;
 				gtx->state.accepted = InvalidGTxTerm;
 				gtx->prepared = false;
+				gtx->in_table = false;
 				gtx->orphaned = false;
 				gtx->resolver_stage = GTRS_AwaitStatus;
 				memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
@@ -267,8 +268,9 @@ GlobalTxAcquire(const char *gid, bool create, bool *is_new)
 	}
 
 	LWLockRelease(gtx_shared->lock);
-
 	my_locked_gtx = gtx;
+	if (gtx)
+		mtm_log(LOG, "acquired gtx %s, MyBackendId=%d", gtx->gid, MyBackendId);
 	return gtx;
 }
 
@@ -285,17 +287,9 @@ GlobalTx *GetMyGlobalTx(void)
  * finished via CP|AP are removed here; shmem mirrors of obsolete
  * gtx_proposals entries are cleaned up in GlobalTxGCInTableProposals.
  *
- * We also automatically remove shmem entry if gtx is not prepared and there
- * is no voting state -- no xact and no data, essentially. This is used by
- *  - monitor 1a handling who after GlobalTxAcquire might decide it won't vote
- *    (too old xact)
- *  - apply COMMIT_PREPARED handling -- if insertion into gtx_proposals
- *    table fails (no real reasons for that, but who knows), we should
- *    cleanup the entry.
- *  - coordinator, if PREPARE on it failed.
  */
 void
-GlobalTxRelease(GlobalTx *gtx, bool remove)
+GlobalTxRelease(GlobalTx *gtx)
 {
 	bool		found;
 
@@ -304,8 +298,27 @@ GlobalTxRelease(GlobalTx *gtx, bool remove)
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
 	gtx->acquired_by = InvalidBackendId;
 
+	/*
+	 * Note that currently we don't register final states (CP|AP) for in table
+	 * xacts; after in table -> prepare migration they will be finished by our
+	 * resolver or neightbour's CP|AP record. This simplifies things a bit,
+	 * allowing to have 'xact is committed|aborted => delete gtx on release'
+	 * logic. However, resolving generally is quite expensive (as digging in
+	 * WAL is long), so if testing would show this is a problem, we could add
+	 * yet another flag 'finalized' to GlobalTx, set it after
+	 * FinishPreparedTransaction and remove such finalized entries here.
+	 *
+	 * We also automatically remove shmem entry if gtx is not prepared and
+	 * there is no voting state -- no xact and no data, essentially. This is
+	 * used by
+	 * - monitor 1a handling who after GlobalTxAcquire might decide it
+	 *   won't vote (too old xact)
+	 * - coordinator, if PREPARE on it failed.
+	 */
+
 	/* status GTXInvalid can be caused by an error during PREPARE */
-	if (remove ||
+	if ((gtx->state.status == GTXCommitted) ||
+		(gtx->state.status == GTXAborted) ||
 		(!gtx->prepared &&
 		 (term_cmp(gtx->state.proposal, InitialGTxTerm) == 0) &&
 		 gtx->state.status == GTXInvalid))
@@ -317,7 +330,7 @@ GlobalTxRelease(GlobalTx *gtx, bool remove)
 		mtm_log(ResolverTasks, "Transaction %s is orphaned", gtx->gid);
 	}
 
-	/* mtm_log(LOG, "released gtx %s by %d", gtx->gid, MyBackendId); */
+	mtm_log(LOG, "released gtx %s by %d", gtx->gid, MyBackendId);
 	LWLockRelease(gtx_shared->lock);
 
 	my_locked_gtx = NULL;
@@ -356,6 +369,7 @@ GlobalTxLoadAll()
 		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status,
 						&gtx->state.proposal, &gtx->state.accepted);
 		gtx->prepared = true;
+		gtx->in_table = false;
 		gtx->orphaned = true;
 		gtx->resolver_stage = GTRS_AwaitStatus;
 		memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
@@ -406,43 +420,22 @@ GlobalTxLoadAll()
 			parse_gtx_state(sstate, &gtx->state.status,
 							&gtx->state.proposal, &gtx->state.accepted);
 			gtx->prepared = false;
+			gtx->in_table = true;
 			gtx->orphaned = true;
 			gtx->acquired_by = InvalidBackendId;
 			gtx->resolver_stage = GTRS_AwaitStatus;
 			memset(gtx->phase1_acks, 0, sizeof(gtx->phase1_acks));
 			memset(gtx->phase2_acks, 0, sizeof(gtx->phase2_acks));
 		}
-		/*
-		 * ... but if there is PREPARE in WAL without voting state at all but
-		 * gtx_proposals has an entry with one, it must mean we have unluckily
-		 * crashed after applying PREPARE but before migrating in table state
-		 * to state_3pc. Do the migration now then. See PGLOGICAL_PREPARE
-		 * handling in apply for what this is hacking around.
-		 *
-		 * XXX: in this case we must purge gtx_proposals entry right away
-		 * (before starting resolving/applying); otherwise (very unluckily) we
-		 * might commit/abort the xact, then crash, get up, load obsolete in
-		 * table state (we might have changed it since voting state migrated
-		 * to state_3pc) and use it in resolving with other nodes, effectively
-		 * forgetting our votes.
-		 */
-		else if (term_cmp(gtx->state.proposal, (GlobalTxTerm) {1, 0}) == 0)
+		else
 		{
-			GTxState in_table_state;
-
-			parse_gtx_state(sstate, &in_table_state.status,
-							&in_table_state.proposal, &in_table_state.accepted);
-			if (term_cmp(in_table_state.proposal, (GlobalTxTerm) {1, 0}) != 0)
-			{
-				/* for now let's imagine this can't happen */
-				/* Assert(false); */ /* no, it can */
-				SetPreparedTransactionState(gid,
-											serialize_gtx_state(
-												in_table_state.status,
-												in_table_state.proposal,
-												in_table_state.accepted),
-											false);
-			}
+			/*
+			 * We have both in table entry and PREPARE record; it must mean we
+			 * have unluckily crashed/errored after applying PREPARE but
+			 * before deleting in table entry. Resolver periodically takes
+			 * care to delete such entries.
+			 */
+			gtx->in_table = true;
 		}
 	}
 
@@ -547,48 +540,53 @@ GlobalTxDeleteFromTable(const char *gid)
 
 	if (!inside_tx)
 		CommitTransactionCommand();
+	mtm_log(MtmTxTrace, "transaction %s entry removed from gtx_proposals", gid);
 }
+
+typedef char pgid_t[GIDSIZE];
 
 /*
  * This should be called sometimes as we might get resolve request before
  * PREPARE, save in table proposal and then, if xact is resolved to abort,
  * PREPARE might have never been received (aborted 2PCs are not decoded and it
- * might not apply anyway). Moreover, if several nodes independently resolved
- * xact to CP, first outcome will finish our xact and the following one will
- * be recorded in table, as there is no quick|easy way to check whether we
- * already applied xact (see PGLOGICAL_COMMIT_PREPARED handling). Such hanged
- * in table entries are vacuumed here.
+ * might not apply anyway). Such hanged in table entries are vacuumed here.
  *
  * We can safely delete entry once syncpoint machinery says that PREPARE LSN
  * was eaten. If it was applied successfully, voting state migrated to
  * state_3pc and will live there until CP|AP. Otherwise, this is definitely
  * abort, and we will refuse to vote normally for the xact -- see monitor
  * actions.
- *
- * If we fail/got killed mid the way that's fine, the whole xact is rolled
- * back, with some of shmem entries probably already deleted. Will retry next
- * time.
  */
 void
 GlobalTxGCInTableProposals(void)
 {
 	int rc;
 	int i;
-
-	return; /* TODO rework */
+	/* don't bother with dynamic memory, there should be very few entries ... */
+	pgid_t gids[300];
+	int n_gids = 0;
 
 	StartTransactionCommand();
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	rc = SPI_execute("delete from " MTM_GTX_PROPOSALS "p using mtm.latest_syncpoints s "
-					 "where p.node_id = s.node_id and "
-					 "p.prepare_origin_lsn <= s.origin_lsn "
-					 "returning gid",
+	/*
+	 * It seems that direct bulk DELETE here with the following repeated
+	 * deletion from shmem would be simpler, but it has (incredibly unlikely)
+	 * deadlock danger: while handling resolve requests 1) gtx is locked 2)
+	 * upsert into gtx_proposals is done, but here it would be reversed. So go
+	 * inefficient and ugly path of selecting and then removing entries
+	 * one-by-one.
+	 */
+	rc = SPI_execute("select p.gid from " MTM_GTX_PROPOSALS " p, "
+					 "mtm.latest_syncpoints s where "
+					 "substring(p.gid from 'MTM-(\\d+)-')::int = s.node_id and "
+					 "mtm.pg_lsn_to_bigint(p.prepare_origin_lsn) <= s.origin_lsn "
+					 "limit 300",
 					 false, 0);
-	if (rc < 0 || rc != SPI_OK_DELETE_RETURNING)
-		mtm_log(ERROR, "Failed to delete obsolete global_tx proposals");
+	if (rc < 0 || rc != SPI_OK_SELECT)
+		mtm_log(ERROR, "Failed to select stale global_tx proposals");
 
 	/* and repeat the deletion for shmem */
 	for (i = 0; i < SPI_processed; i++)
@@ -597,23 +595,47 @@ GlobalTxGCInTableProposals(void)
 		HeapTuple	tup = SPI_tuptable->vals[i];
 		char		*gid = SPI_getvalue(tup, tupdesc, 1);
 
-		GlobalTxAcquire(gid, false, NULL);
-		LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
-		/*
-		 * Concurrent PREPARE apply purges in table entry immediately after,
-		 * well, apply, so we can't here accidently remove gtx mirroring
-		 * prepared xact.
-		 */
-		hash_search(gtx_shared->gid2gtx, gid, HASH_REMOVE, NULL);
-		LWLockRelease(gtx_shared->lock);
-		my_locked_gtx = NULL;
+		strcpy(gids[n_gids], gid);
+		n_gids++;
 	}
-
 
 	PopActiveSnapshot();
 	if (SPI_finish() != SPI_OK_FINISH)
 		mtm_log(ERROR, "could not finish SPI");
 	CommitTransactionCommand();
+
+	for (i = 0; i < n_gids; i++)
+	{
+		GlobalTx	*gtx;
+		char *gid = gids[i];
+
+		mtm_log(MtmTxTrace, "removing stale global_tx entry for xact %s", gid);
+		GlobalTxDeleteFromTable(gid);
+
+		gtx = GlobalTxAcquire(gid, false, NULL);
+		if (!gtx)
+			continue;
+
+		gtx->in_table = false;
+		LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
+		/*
+		 * Concurrent PREPARE will attempt to purge in table entry immediately
+		 * after, well, apply, but in the unlikely scenario of it failing we
+		 * should be careful not to delete prepared entry.
+		 */
+		if (!gtx->prepared)
+		{
+			hash_search(gtx_shared->gid2gtx, gid, HASH_REMOVE, NULL);
+			LWLockRelease(gtx_shared->lock);
+			my_locked_gtx = NULL;
+		}
+		else
+		{
+			LWLockRelease(gtx_shared->lock);
+			GlobalTxRelease(gtx);
+		}
+
+	}
 }
 
 /*

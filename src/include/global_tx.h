@@ -50,7 +50,7 @@ typedef struct
 	GlobalTxStatus	status; /* prevDec in terms of The Part-Time Paliament */
 } GTxState;
 
-typedef struct
+typedef struct GlobalTx
 {
 	char		gid[GIDSIZE];
 	/*
@@ -79,10 +79,18 @@ typedef struct
 	 * of them (T2 in the example above), but it has never made its way fully.
 	 *
 	 * Current implementation has its pain points (issues of migrating voting
-	 * state from gtx_proposals to PREPARE is very unpleasant), but OTOH it
+	 * state from gtx_proposals to PREPARE are very unpleasant), but OTOH it
 	 * provides total separation between recovery and resolving (paxos) logic.
 	 */
 	bool		prepared;
+	/*
+	 * True if entry in gtx_proposals exists. You might think gtx.prepared ==
+	 * !gtx.in_table, and generally this is so, but not always: we can't
+	 * migrate existing in table state to PREPARE and remove in table entry
+	 * atomically -- c.f. PREPARE handling in apply. The flag helps to clear
+	 * this mess.
+	 */
+	bool		in_table;
 
 	/* resolver things */
 	bool		orphaned;	/* Indication for resolver that current tx needs
@@ -110,7 +118,7 @@ void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
 GlobalTx *GlobalTxAcquire(const char *gid, bool create, bool *is_new);
 GlobalTx *GetMyGlobalTx(void);
-void GlobalTxRelease(GlobalTx *gtx, bool remove);
+void GlobalTxRelease(GlobalTx *gtx);
 void GlobalTxAtExit(int code, Datum arg);
 void GlobalTxLoadAll(void);
 char *serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop,

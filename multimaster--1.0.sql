@@ -180,6 +180,9 @@ CREATE TABLE mtm.config(
     value jsonb
 );
 
+-- This is a clever trick, but it leaks (generally unsafe, as bigint is signed)
+-- lsn -> bigint convertion to the whole system. A function below does the same
+-- without adding the cast. We'd better get rid of both...
 CREATE CAST (pg_lsn AS bigint) WITHOUT FUNCTION;
 
 -- XXX: we need some kind of migration here
@@ -197,6 +200,15 @@ CREATE VIEW mtm.latest_syncpoints AS
     SELECT DISTINCT ON (node_id) node_id, origin_lsn, local_lsn
     FROM mtm.syncpoints
     ORDER BY node_id, origin_lsn DESC;
+
+-- TODO: use pg_lsn everywhere instead of this
+CREATE FUNCTION mtm.pg_lsn_to_bigint(lsn pg_lsn) RETURNS bigint AS $$
+  SELECT (('x' || lpad('1', 16, '0'))::bit(64) << 32)::bigint * -- 2^32
+         ('x' || lpad(split_part(lsn::text, '/', 1), 16, '0'))::bit(64)::bigint +
+         ('x' || lpad(split_part(lsn::text, '/', 2), 16, '0'))::bit(64)::bigint;
+
+$$
+LANGUAGE sql;
 
 CREATE TABLE mtm.gtx_proposals(
     gid text primary key not null,

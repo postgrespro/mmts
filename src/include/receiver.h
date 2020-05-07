@@ -12,6 +12,9 @@ typedef enum
 
 extern char const *const MtmReplicationModeMnem[];
 
+/* forward decl to avoid including global_tx.h */
+struct GlobalTx;
+
 /*
  * Part of MtmReceiverContext used by both main receiver and parallel workers.
  * Exposed for bgwpool/apply needs.
@@ -20,6 +23,8 @@ typedef struct
 {
 	int					sender_node_id;
 	MtmReplicationMode	mode;
+	/* allows to release gtx on ERROR in apply */
+	struct GlobalTx		*gtx;
 } MtmReceiverWorkerContext;
 
 extern BackgroundWorkerHandle *MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid);

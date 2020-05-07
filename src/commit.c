@@ -195,7 +195,7 @@ mtm_commit_cleanup(int status, Datum arg)
 			mtm_commit_state.gtx->orphaned = true;
 		}
 		if (mtm_commit_state.gtx != NULL)
-			GlobalTxRelease(mtm_commit_state.gtx, false);
+			GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
 		ResolverWake();
 	}
@@ -303,6 +303,9 @@ MtmBeginTransaction()
  * by resolver.
  * (in theory we could get rid of it if we remembered generation history for
  *  some time, but we don't currently)
+ *
+ * Beware that GlobalTxGCInTableProposals parses gid from SQL.
+ *
  * TODO: add version and kinda backwards compatibility.
  */
 void
@@ -617,7 +620,7 @@ MtmTwoPhaseCommit(void)
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);
 		mtm_commit_state.gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "TXFINISH: %s committed", mtm_commit_state.gid);
-		GlobalTxRelease(mtm_commit_state.gtx, true);
+		GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
 
 		// /* XXX: make this conditional */
