@@ -274,6 +274,9 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 		int			node_id = mtm_cfg->nodes[i].node_id;
 		DmqDestinationId dest_id;
 
+		if (!BIT_CHECK(cmask, node_id - 1))
+			continue;
+
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[node_id - 1].dmq_dest_id;
 		LWLockRelease(Mtm->lock);
@@ -283,8 +286,7 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 		 */
 		Assert(dest_id >= 0);
 
-		if (BIT_CHECK(cmask, node_id - 1))
-			dmq_push_buffer(dest_id, stream_name, msg->data, msg->len);
+		dmq_push_buffer(dest_id, stream_name, msg->data, msg->len);
 	}
 }
 
