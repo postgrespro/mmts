@@ -134,7 +134,11 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 						&term_prop->ballot, &term_prop->node_id,
 						&term_acc->ballot, &term_acc->node_id);
 
-		Assert(n_parsed == 4);
+		if (n_parsed != 4)
+		{
+			Assert(false);
+			mtm_log(PANIC, "wrong state_3pc format: %s", state);
+		}
 	}
 }
 

@@ -300,9 +300,11 @@ void
 pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
 						 XLogRecPtr wal_end_ptr)
 {
+#ifdef USE_ASSERT_CHECKING
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 
 	Assert(hooks_data->is_recovery);
+#endif
 	/* sending CAUGHT-UP */
 	pq_sendbyte(out, 'Z');
 }

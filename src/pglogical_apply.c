@@ -563,7 +563,11 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		/* forwarded, parse and save as is */
 		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
 					&origin_lsn, &trim_lsn);
-		Assert(rc == 3);
+		if (rc != 3)
+		{
+			Assert(false);
+			mtm_log(PANIC, "wrong syncpoint message format");
+		}
 
 		/* skip our own syncpoints */
 		if (origin_node == Mtm->my_node_id)
@@ -1026,7 +1030,8 @@ process_remote_commit(StringInfo in,
 
 					sstate = serialize_gtx_state(msg_status, msg_term, msg_term);
 					done = SetPreparedTransactionState(gid, sstate, false);
-					Assert(done);
+					if (!done)
+						Assert(false);
 
 					CommitTransactionCommand();
 					MemoryContextSwitchTo(MtmApplyContext);
@@ -1490,7 +1495,8 @@ process_remote_insert(StringInfo s, Relation rel)
 		{
 			int			action = pq_getmsgbyte(s);
 
-			Assert(action == 'I');
+			if (action != 'I')
+				Assert(false);
 			read_tuple_parts(s, rel, &new_tuple);
 			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
 															  new_tuple.values, new_tuple.isnull);

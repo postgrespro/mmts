@@ -194,9 +194,6 @@ static int	MtmRefereeGetWinner(void);
 static bool MtmRefereeClearWinner(void);
 static int	MtmRefereeReadSaved(void);
 
-static void MtmEnableNode(int node_id);
-static void MtmDisableNode(int node_id);
-
 /* serialization functions */
 static void MtmStateSave(void);
 static void MtmStateLoad(void);

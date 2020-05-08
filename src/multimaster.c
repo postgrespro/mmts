@@ -1945,6 +1945,7 @@ MtmMessageUnpack(StringInfo s)
 
 		default:
 			Assert(false);
+			return NULL; /* keep the compiler quiet */
 	}
 
 	return anymsg;

@@ -364,7 +364,13 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 			break;
 	}
 
-	Assert(sender_node_id == rctx->w.sender_node_id);
+	/* sorta assert keeping the compiler quiet */
+	if (sender_node_id != rctx->w.sender_node_id)
+	{
+		Assert(false);
+		mtm_log(PANIC, "sender node id is %d but must be %d",
+				sender_node_id, rctx->w.sender_node_id);
+	}
 	tx_lsn = origin_node == rctx->w.sender_node_id ? end_lsn : origin_lsn;
 
 	if (tx_lsn <= spvector[origin_node - 1].origin_lsn)
