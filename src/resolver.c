@@ -33,6 +33,7 @@
 
 static bool config_valid;
 static MtmConfig *mtm_cfg = NULL;
+static bool		send_requests;
 
 static void handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg);
 
@@ -74,7 +75,19 @@ ResolverWake()
 	resolver_pid = Mtm->resolver_pid;
 	LWLockRelease(Mtm->lock);
 	if (resolver_pid)
-		kill(resolver_pid, SIGUSR1);
+		kill(resolver_pid, SIGHUP);
+}
+
+/* resolver never rereads PG config, but it currently doesn't need to */
+static void
+ResolverSigHupHandler(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+
+	send_requests = true;
+	SetLatch(MyLatch);
+
+	errno = save_errno;
 }
 
 void
@@ -681,12 +694,11 @@ sigUsr1Handler(SIGNAL_ARGS)
 void
 ResolverMain(Datum main_arg)
 {
-	bool		send_requests = true;
 	Oid			db_id,
 				user_id;
 
 	/* init this worker */
-	pqsignal(SIGHUP, PostgresSigHupHandler);
+	pqsignal(SIGHUP, ResolverSigHupHandler);
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGUSR1, sigUsr1Handler);
 
@@ -712,6 +724,8 @@ ResolverMain(Datum main_arg)
 	LWLockRelease(Mtm->lock);
 
 	mtm_log(ResolverState, "Resolver started");
+
+	send_requests = true;
 
 	for (;;)
 	{
@@ -761,7 +775,7 @@ ResolverMain(Datum main_arg)
 					   PG_WAIT_TIMEOUT);
 
 		/* re-try to send requests if there are some unresolved transactions */
-		/* XXX ars: better to set it whenever backend wakes us */
+		/* XXX ars: set it whenever any 3 seconds passed, not 3 idle seconds? */
 		if (rc & WL_TIMEOUT)
 			send_requests = true;
 
