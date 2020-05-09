@@ -303,12 +303,6 @@ scatter(MtmConfig *mtm_cfg, nodemask_t cmask, char *stream_name, StringInfo msg)
 	}
 }
 
-static bool
-last_term_gather_hook(MtmMessage *msg, Datum arg)
-{
-	return msg->tag == T_MtmLastTermResponse;
-}
-
 static void
 scatter_status_requests(MtmConfig *mtm_cfg)
 {
@@ -321,47 +315,20 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	/*
 	 * Generate next term.
 	 * Picking at least max local proposal term + 1 guarantees we never try
-	 * the same term twice. A round of collecting others' max terms ought
-	 * to help to conduct it successfully.
+	 * the same term twice.
+	 *
+	 * We ignore knowledge about neighbours terms here, but, well, even if
+	 * terms are radically different (and it is unobvious how this could
+	 * happen) -- fine, than node with the highest term would succeed in xact
+	 * resolution and tell us the outcome.
 	 */
-	{
-		MtmMessage	msg = {T_MtmLastTermRequest};
-		uint64		connected;
-		MtmLastTermResponse *acks[MTM_MAX_NODES];
-		int			n_acks;
-		int			i;
-		int		   sconn_cnt[DMQ_N_MASK_POS];
-
-		/* local max proposal */
-		new_term = GlobalTxGetMaxProposal();
-
-		/* ask peers about their last term */
-		connected = MtmGetConnectedMask(false);
-		dmq_get_sendconn_cnt(connected, sconn_cnt);
-		scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &msg));
-
-		/* .. and get all responses */
-		gather(connected,
-			   (MtmMessage **) acks, NULL, &n_acks,
-			   last_term_gather_hook, 0,
-			   sconn_cnt, MtmInvalidGenNum);
-
-		for (i = 0; i < n_acks; i++)
-		{
-			Assert(acks[i]->tag == T_MtmLastTermResponse);
-			if (term_cmp(new_term, acks[i]->term) < 0)
-				new_term = acks[i]->term;
-		}
-
-		/* And generate next term */
-		new_term.ballot += 1;
-		new_term.node_id = mtm_cfg->my_node_id;
-	}
-
+	new_term = GlobalTxGetMaxProposal();
+	new_term.ballot += 1;
+	new_term.node_id = mtm_cfg->my_node_id;
 	mtm_log(ResolverState, "New term is (%d,%d)", new_term.ballot, new_term.node_id);
 
 	/*
-	 * Stamp all orphaned transactions with a new proposal and send status
+	 * Stamp all orphaned transactions with the new proposal and send status
 	 * requests.
 	 */
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);

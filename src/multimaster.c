@@ -100,8 +100,6 @@ char const *const MtmMessageTagMnem[] =
 	"Mtm2AResponse",
 	"MtmTxRequest",
 	"MtmTxStatusResponse",
-	"MtmLastTermRequest",
-	"MtmLastTermResponse",
 	"MtmHeartbeat",
 	"MtmGenVoteRequest",
 	"MtmGenVoteResponse"
@@ -1752,19 +1750,6 @@ MtmMessagePack(MtmMessage *anymsg)
 			break;
 		}
 
-		case T_MtmLastTermRequest:
-			/* tag-only message */
-			break;
-
-		case T_MtmLastTermResponse:
-		{
-			MtmLastTermResponse   *msg = (MtmLastTermResponse *) anymsg;
-
-			pq_sendint32(s, msg->term.ballot);
-			pq_sendint32(s, msg->term.node_id);
-			break;
-		}
-
 		case T_MtmHeartbeat:
 		{
 			MtmHeartbeat *msg = (MtmHeartbeat *) anymsg;
@@ -1873,28 +1858,6 @@ MtmMessageUnpack(StringInfo s)
 			msg->state.accepted.ballot = pq_getmsgint(s, 4);
 			msg->state.accepted.node_id = pq_getmsgint(s, 4);
 			msg->gid = pq_getmsgrawstring(s);
-
-			anymsg = (MtmMessage *) msg;
-			break;
-		}
-
-		case T_MtmLastTermRequest:
-		{
-			MtmMessage   *msg = palloc0(sizeof(MtmMessage));
-
-			/* tag-only message */
-			msg->tag = msg_tag;
-			anymsg = msg;
-			break;
-		}
-
-		case T_MtmLastTermResponse:
-		{
-			MtmLastTermResponse   *msg = palloc0(sizeof(MtmLastTermResponse));
-
-			msg->tag = msg_tag;
-			msg->term.ballot = pq_getmsgint(s, 4);
-			msg->term.node_id = pq_getmsgint(s, 4);
 
 			anymsg = (MtmMessage *) msg;
 			break;
@@ -2013,18 +1976,6 @@ MtmMesageToString(MtmMessage *anymsg)
 			appendStringInfo(&si, ", \"proposal_ballot\": [%d, %d]", msg->state.proposal.ballot, msg->state.proposal.node_id);
 			appendStringInfo(&si, ", \"accepted_ballot\": [%d, %d]", msg->state.accepted.ballot, msg->state.accepted.node_id);
 			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
-			break;
-		}
-
-		case T_MtmLastTermRequest:
-			/* tag-only message */
-			break;
-
-		case T_MtmLastTermResponse:
-		{
-			MtmLastTermResponse   *msg = (MtmLastTermResponse *) anymsg;
-
-			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
 			break;
 		}
 

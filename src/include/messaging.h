@@ -20,8 +20,6 @@ typedef enum
 	T_Mtm2AResponse,
 	T_MtmTxRequest,
 	T_MtmTxStatusResponse,
-	T_MtmLastTermRequest,
-	T_MtmLastTermResponse,
 	T_MtmHeartbeat,
 	T_MtmGenVoteRequest,
 	T_MtmGenVoteResponse

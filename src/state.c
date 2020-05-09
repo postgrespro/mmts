@@ -3048,18 +3048,6 @@ check_status_requests(MtmConfig *mtm_cfg)
 				GlobalTxRelease(gtx);
 			}
 		}
-		else if (raw_msg->tag == T_MtmLastTermRequest)
-		{
-			GlobalTxTerm max_proposal = GlobalTxGetMaxProposal();
-			StringInfo	packed_msg;
-			MtmLastTermResponse resp = {
-				T_MtmLastTermResponse,
-				max_proposal
-			};
-
-			packed_msg = MtmMessagePack((MtmMessage *) &resp);
-			dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
-		}
 		else if (raw_msg->tag == T_MtmGenVoteRequest)
 		{
 			HandleGenVoteRequest(mtm_cfg, (MtmGenVoteRequest *) raw_msg,
