@@ -115,14 +115,14 @@ class TestHelper(object):
 
         self.client.bgrun()
 
-    def performRandomFailure(self, node, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
+    def performRandomFailure(self, node, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
         FailureClass = random.choice(ONE_NODE_FAILURES)
         failure = FailureClass(node)
 
         print('Simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
-        return self.performFailure(failure, wait, node_wait_for_commit, node_wait_for_online, stop_load)
+        return self.performFailure(failure, wait, node_wait_for_commit, node_wait_for_online, stop_load, nodes_assert_commit_during_failure)
 
-    def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False):
+    def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
 
         time.sleep(TEST_WARMING_TIME)
 
@@ -138,13 +138,8 @@ class TestHelper(object):
         print('Getting aggs during failure at ',datetime.datetime.utcnow())
         aggs_failure = self.client.get_aggregates()
         # helps to bail out earlier, making the investigation easier
-        # TODO: control this via arg
-        # if isinstance(failure, SingleNodePartition) or isinstance(failure, SingleNodePartitionReject):
-        for n in range(3):
-            if n == node_wait_for_commit:
-                self.assertNoCommits([aggs_failure[n]])
-            else:
-                self.assertCommits([aggs_failure[n]])
+        for n in nodes_assert_commit_during_failure:
+            self.assertCommits([aggs_failure[n]])
 
         time.sleep(wait)
         failure.stop()

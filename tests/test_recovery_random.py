@@ -106,8 +106,12 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             node_number = random.choice(range(1, 4))
             port = 15431 + node_number
 
-            aggs_failure, aggs = self.performRandomFailure(f'node{node_number}', node_wait_for_commit=node_number - 1,
-                node_wait_for_online=f"dbname=regression user=postgres host={NODE_HOST} port={port}", stop_load=True)
+            nodes_assert_commit_during_failure = [n for n in range(3) if n != node_number - 1]
+            aggs_failure, aggs = self.performRandomFailure(
+                f'node{node_number}', node_wait_for_commit=node_number - 1,
+                node_wait_for_online=f"dbname=regression user=postgres host={NODE_HOST} port={port}",
+                stop_load=True,
+                nodes_assert_commit_during_failure=nodes_assert_commit_during_failure)
 
             for n in range(3):
                 if n == node_number - 1:
