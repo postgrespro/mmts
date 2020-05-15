@@ -318,7 +318,7 @@ class MtmClient(object):
                         # enable_hstore tries to perform select from database
                         # which in case of select's failure will lead to exception
                         # and stale connection to the database
-                        print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
+                        # print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
                         conn = yield from aiopg.connect(dsn, enable_hstore=False, timeout=1)
                         print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
 
@@ -329,9 +329,9 @@ class MtmClient(object):
                         # blocks evloop
                         cur = yield from conn.cursor(timeout=3600)
 
-                        yield from cur.execute("select pg_backend_pid()")
-                        bpid = yield from cur.fetchone()
-                        print('{} pid is {}'.format(conn_name, bpid[0]))
+                        # yield from cur.execute("select pg_backend_pid()")
+                        # bpid = yield from cur.fetchone()
+                        # print('{} pid is {}'.format(conn_name, bpid[0]))
 
                 # ROLLBACK tx after previous exception.
                 # Doing this here instead of except handler to stay inside try
@@ -344,8 +344,8 @@ class MtmClient(object):
                 agg.finish_tx('commit')
 
             except psycopg2.Error as e:
-                if 'transfer' in conn_name:
-                    print("{} {} got psycopg2 exception: {}".format(datetime.datetime.utcnow(), conn_name, e))
+                # if 'transfer' in conn_name:
+                    # print("{} {} got psycopg2 exception: {}".format(datetime.datetime.utcnow(), conn_name, e))
                 msg = str(e).strip()
                 agg.finish_tx(msg)
                 # Give evloop some free time.
