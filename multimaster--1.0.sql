@@ -166,15 +166,9 @@ CREATE TABLE mtm.local_tables(
     primary key(rel_schema, rel_name)
 ) WITH (user_catalog_table=true);
 
-CREATE TABLE mtm.referee_decision(
-    key text primary key not null,
-    node_id int
-);
-
 -- possible tuples:
 --   'basebackup' : source node_id and end lsn of basebackup
 --   XXX: move my_node_id here?
---   XXX: move referee_decision here?
 CREATE TABLE mtm.config(
     key text primary key not null,
     value jsonb

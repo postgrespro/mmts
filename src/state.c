@@ -161,6 +161,12 @@ struct MtmState
 	slock_t catchup_lock;
 
 	/*
+	 * Attempt to clear the referee grant until it succeeds.
+	 * This could be bool except the paranoia in RefereeClearGrant.
+	 */
+	uint64 referee_grant_turn_in_pending;
+
+	/*
 	 * making current code compilable while I haven't fixed up things
 	 */
 	LWLock	   *lock;
@@ -190,10 +196,6 @@ static void AcquirePBByHolder(void);
 
 static nodemask_t MtmGetConnectivityClique(nodemask_t *connected_mask_with_me);
 
-static int	MtmRefereeGetWinner(void);
-static bool MtmRefereeClearWinner(void);
-static int	MtmRefereeReadSaved(void);
-
 /* serialization functions */
 static void MtmStateSave(void);
 static void MtmStateLoad(void);
@@ -206,9 +208,6 @@ PG_FUNCTION_INFO_V1(mtm_state_create);
 
 static bool pb_preparers_incremented = false;
 static bool pb_holders_incremented = false;
-#if 0 /* referee support */
-static bool mtm_state_initialized;
-#endif
 
 static bool config_valid = false;
 
@@ -449,9 +448,11 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	if (!BIT_CHECK(gen.members, Mtm->my_node_id - 1) ||
 
 		/*
-		 * .. or gen doesn't have quorum by design
+		 * .. or gen doesn't have quorum by design, nor this is a referee
+		 * granted gen where quorum is not required
 		 */
-		!Quorum(popcount(gen.configured), popcount(gen.members)) ||
+		(!Quorum(popcount(gen.configured), popcount(gen.members)) &&
+		 !IS_REFEREE_GEN(gen.members, gen.configured)) ||
 		/*
 		 * .. or we have voted for greater last_vote.num, which means we've
 		 * promised that the highest gen among gens with num < last_vote.num
@@ -604,6 +605,20 @@ MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
    MtmStateSave();
 
    MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
+   if (IS_REFEREE_ENABLED() && popcount(ps_gen.configured) == 2)
+   {
+	   /*
+		* In referee mode we may switch to online by applying P.S. only in
+		* full generation; referee winner doesn't need recovery and switches
+		* to online directly in MtmConsiderGenSwitch in both referee gen and
+		* the following full gen.
+		*/
+	   Assert(popcount(ps_gen.members) == 2);
+	   /*
+		* Now that both nodes are online we can clear the grant.
+		*/
+	   mtm_state->referee_grant_turn_in_pending = ps_gen.num;
+   }
    mtm_log(MtmStateSwitch, "[STATE] switched to online in generation num=" UINT64_FORMAT ", members=%s, donors=%s by applying ParallelSafe logged at %X/%X",
 				ps_gen.num,
 				maskToString(ps_gen.members),
@@ -981,14 +996,22 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 * declare we don't know to recover from whom if we aren't. The latter
 	 * really doesn't changes anything signficant but useful for monitoring.
 	 *
-	 * Campaigning also has little sense the calculated clique doesn't contain
-	 * us. This might happen as we obtain others connectivity masks from dmq
-	 * heartbeats, so mask existence means dmq receiver is certainly live, but
-	 * dmq sender is not necessarily.
+	 * Campaigning also has little sense if the calculated clique doesn't
+	 * contain us. This might happen as we obtain others connectivity masks
+	 * from dmq heartbeats, so mask existence means dmq receiver is certainly
+	 * live, but dmq sender is not necessarily.
 	 *
+	 * However, proceed balloting if referee mode is enabled and we are online
+	 * (i.e. election of referee granted gen is not blocked by our need to
+	 * recover) regardless of connectivity -- the possiblity of being online
+	 * without majority (second node) is the whole point of referee.
+	 * TODO: it would be nice to have heartbeats with referee to avoid winding
+	 * generation numbers in vain if we know here that referee is unavailable.
+	 * It would also be useful for monitoring.
 	 */
-	if (!MtmQuorum(mtm_cfg, popcount(clique)) ||
-		!BIT_CHECK(clique, Mtm->my_node_id - 1))
+	if ((!MtmQuorum(mtm_cfg, popcount(clique)) ||
+		 !BIT_CHECK(clique, Mtm->my_node_id - 1)) &&
+		!(IS_REFEREE_ENABLED() && MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE))
 	{
 		/*
 		 * Don't change receive_mode though when we are in recovery/online as
@@ -1079,10 +1102,12 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 
 	/*
 	 * The only purpose of minority gen is to declare "I'm caught up."
-	 * Electing it meaningless if we are already there.
+	 * Electing it meaningless if we are already there -- unless we are in
+	 * referee mode and thus this is a single member referee gen.
 	 */
-	if (!MtmQuorum(mtm_cfg, popcount(candidate_gen->members)) &&
-		BIT_CHECK(mtm_state->current_gen_members, Mtm->my_node_id - 1))
+	if ((!MtmQuorum(mtm_cfg, popcount(candidate_gen->members)) &&
+		 BIT_CHECK(mtm_state->current_gen_members, Mtm->my_node_id - 1)) &&
+		!IS_REFEREE_ENABLED())
 	{
 		mtm_log(MtmStateDebug, "not balloting for minority gen with candidates=%s because I'm already there",
 				maskToString(candidate_gen->members));
@@ -1152,8 +1177,8 @@ CampaignerGatherHook(MtmMessage *anymsg, Datum arg)
 }
 
 /*
- * Having voted myself, now request others, i.e. the clique (it definitely
- * forms majority).
+ * Having voted myself, now request others, i.e. the clique (must have already
+ * checked it forms majority).
  */
 static void
 CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
@@ -1278,6 +1303,179 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 	LWLockRelease(mtm_state->gen_lock);
 }
 
+/* get referee vote for me in given generation */
+static void
+CampaignReferee(MtmGeneration candidate_gen)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+	char		sql[128];
+	nodemask_t donors = 0;
+
+	/*
+	 * TODO: hanging the entire monitor is definitely not nice in case
+	 * e.g. the packets are being dropped. Should add TCP timeouts or
+	 * something here (as well as in another connection to referee).
+	 */
+	conn = PQconnectdb(MtmRefereeConnStr);
+	if (PQstatus(conn) != CONNECTION_OK)
+	{
+		mtm_log(WARNING, "couldn't connect to referee to request the grant: %s",
+				PQerrorMessage(conn));
+		PQfinish(conn);
+		mtm_state->campaigner_on_tour = false;
+		return;
+	}
+
+	Assert(Mtm->my_node_id == first_set_bit(candidate_gen.members) + 1);
+	sprintf(sql, "select referee.request_grant(%d, " UINT64_FORMAT ")",
+			Mtm->my_node_id, candidate_gen.num);
+	res = PQexec(conn, sql);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		mtm_log(WARNING, "'%s' failed: %s", sql, PQresultErrorMessage(res));
+		PQclear(res);
+		PQfinish(conn);
+		mtm_state->campaigner_on_tour = false;
+		/*
+		 * Though the query errored out, we could already managed to acquire
+		 * the grant (imagine network failure after commit). And if second
+		 * node just blinked and we won't attempt to get the grant again in
+		 * the nearest future, leaving it acquired is quite bad (it would
+		 * prevent election of second node). So remember to try clearing it.
+		 *
+		 * It is ever set to MtmInvalidGenNum by campaigner itself, so ok to
+		 * do without locks.
+		 */
+		mtm_state->referee_grant_turn_in_pending = pg_atomic_read_u64(
+			&mtm_state->current_gen_num);
+		return;
+	}
+	/*
+	 * The result is meaningless (function would error out on conflict), but
+	 * it is expected to return single row of null function result.
+	 */
+	if (PQntuples(res) != 1 || PQnfields(res) != 1)
+	{
+		mtm_log(WARNING, "'%s' returned unexpected result (ntuples=%d, nfields=%d, val=%s)",
+				sql, PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
+		PQclear(res);
+		PQfinish(conn);
+		mtm_state->campaigner_on_tour = false;
+		return;
+	}
+
+	/* ok, we got the grant */
+	PQclear(res);
+	PQfinish(conn);
+	mtm_log(MtmStateSwitch, "got referee grant in generation num=" UINT64_FORMAT,
+			candidate_gen.num);
+
+	/* I am the only donor in my referee-granted generation */
+	BIT_SET(donors, Mtm->my_node_id - 1);
+	MtmConsiderGenSwitch(candidate_gen, donors);
+	mtm_state->campaigner_on_tour = false;
+}
+
+/*
+ * Turn in the referee grant. There are two conditions for doing this:
+ * 1) (normal): we have switched into full generation with both nodes and
+ *    both are recovered (online) in it. Then any grant with gen num < this
+ *    full safely can (and should) be cleared.
+ * 2) this node potentially managed to acquire the grant but it is not going
+ *    to use it -- c.f. failure in CampaignReferee. Such hanged grant can be
+ *    safely deleted with 'node_id = me and gen_num <= last_vote' clause:
+ *    if I am currently in full generation, I definitely won't ever get into
+ *    my referee granted generation with <= last_vote gen num.
+ */
+static void
+RefereeClearGrant(void)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+	uint64 full_online_gen_num;
+	uint64 my_last_vote_num;
+	int i;
+	char		sql[128];
+
+	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+	LWLockAcquire(mtm_state->vote_lock, LW_SHARED);
+	/*
+	 * can't clear the grant if I am not online in full (two nodes) gen
+	 */
+	if (popcount(mtm_state->current_gen_members) != 2 ||
+		MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
+	{
+		mtm_log(MtmStateDebug, "not clearing referee flag as I am not online in full gen: current_gen_members=%s, StatusInGen=%s",
+				maskToString(mtm_state->current_gen_members),
+				MtmStatusInGenMnem[MtmGetCurrentStatusInGen()]);
+		mtm_state->referee_grant_turn_in_pending = MtmInvalidGenNum;
+		LWLockRelease(mtm_state->vote_lock);
+		LWLockRelease(mtm_state->gen_lock);
+		return;
+	}
+
+	/* can clear the grant only when second node recovers */
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (BIT_CHECK(mtm_state->current_gen_members, i) &&
+			i + 1 != Mtm->my_node_id &&
+			(pg_atomic_read_u64(&mtm_state->others_last_online_in[i]) <
+			 mtm_state->last_online_in))
+		{
+			mtm_log(MtmStateDebug, "not clearing referee grant as node %d is not online in current generation (num=" UINT64_FORMAT ") yet",
+					i + 1, pg_atomic_read_u64(&mtm_state->current_gen_num));
+			LWLockRelease(mtm_state->vote_lock);
+			LWLockRelease(mtm_state->gen_lock);
+			return;
+		}
+	}
+
+	full_online_gen_num = pg_atomic_read_u64(&mtm_state->current_gen_num);
+	my_last_vote_num = mtm_state->last_vote.num;
+	LWLockRelease(mtm_state->vote_lock);
+	LWLockRelease(mtm_state->gen_lock);
+
+	/* ok, clear the grant */
+	conn = PQconnectdb(MtmRefereeConnStr);
+	if (PQstatus(conn) != CONNECTION_OK)
+	{
+		mtm_log(WARNING, "couldn't connect to referee to clear the grant: %s",
+				PQerrorMessage(conn));
+		PQfinish(conn);
+		return;
+	}
+
+	sprintf(sql, "delete from referee.decision where gen_num < " UINT64_FORMAT
+			" or (node_id = %d and gen_num <= " UINT64_FORMAT ")",
+			full_online_gen_num, Mtm->my_node_id, my_last_vote_num);
+	res = PQexec(conn, sql);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+	{
+		mtm_log(WARNING, "'%s' failed: %s", sql, PQresultErrorMessage(res));
+		PQclear(res);
+		PQfinish(conn);
+		return;
+	}
+	if (atoi(PQcmdTuples(res)) > 0)
+		mtm_log(MtmStateDebug, "grant cleared");
+	/* done */
+	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+	/*
+	 * It is next to impossible, but if between deletion and this point a
+	 * couple of gen switches happened, we might accidently reset
+	 * referee_grant_turn_in_pending of newer gen and thus never clear the
+	 * grant; to avoid this, check the gen num in which clear request was
+	 * created.
+	 *
+	 */
+	if (mtm_state->referee_grant_turn_in_pending <= full_online_gen_num)
+		mtm_state->referee_grant_turn_in_pending = MtmInvalidGenNum;
+	LWLockRelease(mtm_state->gen_lock);
+	PQclear(res);
+	PQfinish(conn);
+}
+
 void
 CampaignerMain(Datum main_arg)
 {
@@ -1333,6 +1531,14 @@ CampaignerMain(Datum main_arg)
 		drandom_seed[2] = (unsigned short) (iseed >> 32);
 	}
 
+	/*
+	 * After reboot we can't reliably say whether turn in is required, attempt
+	 * it in case there is a need.
+	 */
+	if (IS_REFEREE_ENABLED())
+		mtm_state->referee_grant_turn_in_pending = pg_atomic_read_u64(
+			&mtm_state->current_gen_num);
+
 	for (;;)
 	{
 		int			rc;
@@ -1348,9 +1554,25 @@ CampaignerMain(Datum main_arg)
 		/* do the job */
 		if (CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in))
 		{
-			CampaignTour(campaigner_ctx, &mtm_cfg, candidate_gen, cohort,
-						 my_last_online_in);
+			if (!IS_REFEREE_GEN(candidate_gen.members, candidate_gen.configured))
+			{
+				/* normal case, poll neighbours */
+				CampaignTour(campaigner_ctx, &mtm_cfg, candidate_gen, cohort,
+							 my_last_online_in);
+			}
+			else
+			{
+				/*
+				 * we are in referee mode and this gen requires only referee
+				 * permission for election; request it
+				 */
+				CampaignReferee(candidate_gen);
+			}
 		}
+
+		if (IS_REFEREE_ENABLED() &&
+			mtm_state->referee_grant_turn_in_pending != MtmInvalidGenNum)
+			RefereeClearGrant();
 
 		/*
 		 * Generally there is no need to have short timeout as we are wakened
@@ -1800,325 +2022,6 @@ MtmGetConnectivityClique(nodemask_t *connected_mask_with_me)
 	return clique;
 }
 
-void
-MtmRefreshClusterStatus()
-{
-#if 0 /* generations doesn't work with referee for now */
-	/*
-	 * Check for referee decision when only half of nodes are visible. Do not
-	 * hold lock here, but recheck later wheter mask changed.
-	 */
-	if (MtmRefereeConnStr && *MtmRefereeConnStr && !mtm_state->referee_winner_id &&
-		popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask) / 2)
-	{
-		int			winner_node_id = MtmRefereeGetWinner();
-
-		/*
-		 * We also can have old value. Do that only from single mtm-monitor
-		 * process
-		 */
-		if (winner_node_id <= 0 && !mtm_state_initialized)
-		{
-			winner_node_id = MtmRefereeReadSaved();
-			mtm_state_initialized = true;
-		}
-
-		if (winner_node_id > 0)
-		{
-			mtm_state->referee_winner_id = winner_node_id;
-			if (BIT_CHECK(mtm_state->connected_mask, winner_node_id - 1))
-			{
-				/*
-				 * By the time we enter this block we can already see other
-				 * nodes. So recheck old conditions under lock.
-				 */
-				LWLockAcquire(mtm_state->lock, LW_EXCLUSIVE);
-				if (popcount(mtm_state->connected_mask) == popcount(mtm_state->configured_mask) / 2 &&
-					BIT_CHECK(mtm_state->connected_mask, winner_node_id - 1))
-				{
-					mtm_log(MtmStateMessage, "[STATE] Referee allowed to proceed with half of the nodes (winner_id = %d)",
-							winner_node_id);
-					mtm_state->referee_grant = true;
-					if (popcount(mtm_state->connected_mask) == 1)
-					{
-						/* MtmPollStatusOfPreparedTransactions(true); */
-						ResolveForRefereeWinner(popcount(mtm_state->configured_mask));
-					}
-					mtm_state->recovered = true;
-					MtmEnableNode(Mtm->my_node_id);
-					MtmCheckState();
-				}
-				LWLockRelease(mtm_state->lock);
-			}
-		}
-	}
-
-	/*
-	 * Clear winner if we again have all nodes recovered. We should clean old
-	 * value based on disabledNodeMask instead of SELF_CONNECTIVITY_MASK
-	 * because we can clean old value before failed node starts it recovery
-	 * and that node can get refereeGrant before start of walsender, so it
-	 * start in recovered mode.
-	 */
-	if (MtmRefereeConnStr && *MtmRefereeConnStr && mtm_state->referee_winner_id &&
-		popcount(mtm_state->enabled_mask) == popcount(mtm_state->configured_mask) &&
-		MtmGetCurrentStatus(false, false) == MTM_ONLINE)	/* restrict this actions only
-															 * to major -> online
-															 * transition */
-	{
-		if (MtmRefereeClearWinner())
-		{
-			mtm_state->referee_winner_id = 0;
-			mtm_state->referee_grant = false;
-			mtm_log(MtmStateMessage, "[STATE] Cleaning old referee decision");
-		}
-	}
-
-	return;
-#endif
-}
-
-/*
- * Referee caches decision in mtm.referee_decision
- */
-static bool
-MtmRefereeHasLocalTable()
-{
-	RangeVar   *rv;
-	Oid			rel_oid;
-	static bool _has_local_tables;
-	bool		txstarted = false;
-
-	/* memoized */
-	if (_has_local_tables)
-		return true;
-
-	if (!IsTransactionState())
-	{
-		txstarted = true;
-		StartTransactionCommand();
-	}
-
-	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, "referee_decision", -1);
-	rel_oid = RangeVarGetRelid(rv, NoLock, true);
-
-	if (txstarted)
-		CommitTransactionCommand();
-
-	if (OidIsValid(rel_oid))
-	{
-		_has_local_tables = true;
-		return true;
-	}
-	else
-		return false;
-}
-
-static int
-MtmRefereeReadSaved(void)
-{
-	int			winner = -1;
-	int			rc;
-	bool		txstarted = false;
-
-	if (!MtmRefereeHasLocalTable())
-		return -1;
-
-	/* Save result locally */
-	if (!IsTransactionState())
-	{
-		txstarted = true;
-		StartTransactionCommand();
-	}
-	SPI_connect();
-	PushActiveSnapshot(GetTransactionSnapshot());
-	rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
-	if (rc != SPI_OK_SELECT)
-	{
-		mtm_log(WARNING, "Failed to load referee decision");
-	}
-	else if (SPI_processed > 0)
-	{
-		bool		isnull;
-
-		winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
-		Assert(SPI_processed == 1);
-		Assert(!isnull);
-	}
-	else
-	{
-		/* no saved decision found */
-		Assert(SPI_processed == 0);
-	}
-	SPI_finish();
-	PopActiveSnapshot();
-	if (txstarted)
-		CommitTransactionCommand();
-
-	mtm_log(MtmStateMessage, "Read saved referee decision, winner=%d.", winner);
-	return winner;
-}
-
-static int
-MtmRefereeGetWinner(void)
-{
-	PGconn	   *conn;
-	PGresult   *res;
-	char		sql[128];
-	int			winner_node_id;
-	int			old_winner = -1;
-	int			rc;
-
-	conn = PQconnectdb(MtmRefereeConnStr);
-	if (PQstatus(conn) != CONNECTION_OK)
-	{
-		mtm_log(WARNING, "Could not connect to referee");
-		PQfinish(conn);
-		return -1;
-	}
-
-	sprintf(sql, "select referee.get_winner(%d)", Mtm->my_node_id);
-	res = PQexec(conn, sql);
-	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
-		PQntuples(res) != 1 ||
-		PQnfields(res) != 1)
-	{
-		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.get_winner()",
-				PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
-		PQclear(res);
-		PQfinish(conn);
-		return -1;
-	}
-
-	winner_node_id = atoi(PQgetvalue(res, 0, 0));
-
-	if (winner_node_id < 1 || winner_node_id > MTM_MAX_NODES)
-	{
-		mtm_log(WARNING,
-				"Referee responded with node_id=%d, it's out of our node range",
-				winner_node_id);
-		PQclear(res);
-		PQfinish(conn);
-		return -1;
-	}
-
-	/* Ok, we finally got it! */
-	PQclear(res);
-	PQfinish(conn);
-
-	/* Save result locally */
-	if (MtmRefereeHasLocalTable())
-	{
-		StartTransactionCommand();
-		SPI_connect();
-		PushActiveSnapshot(GetTransactionSnapshot());
-		/* Check old value if any */
-		rc = SPI_execute("select node_id from mtm.referee_decision where key = 'winner';", true, 0);
-		if (rc != SPI_OK_SELECT)
-		{
-			mtm_log(WARNING, "Failed to load previous referee decision");
-		}
-		else if (SPI_processed > 0)
-		{
-			bool		isnull;
-
-			old_winner = DatumGetInt32(SPI_getbinval(SPI_tuptable->vals[0], SPI_tuptable->tupdesc, 1, &isnull));
-			Assert(SPI_processed == 1);
-			Assert(!isnull);
-		}
-		else
-		{
-			/* no saved decision found */
-			Assert(SPI_processed == 0);
-		}
-		/* Update actual key */
-		sprintf(sql,
-				"insert into mtm.referee_decision values ('winner', %d) on conflict(key) do nothing;",
-				winner_node_id);
-		rc = SPI_execute(sql, false, 0);
-		SPI_finish();
-		if (rc < 0)
-			mtm_log(WARNING, "Failed to save referee decision, but proceeding anyway");
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-
-		if (old_winner > 0 && old_winner != winner_node_id)
-			mtm_log(MtmStateMessage, "WARNING Overriding old referee decision (%d) with new one (%d)", old_winner, winner_node_id);
-	}
-
-	mtm_log(MtmStateMessage, "Got referee response, winner node_id=%d.", winner_node_id);
-	return winner_node_id;
-}
-
-static bool
-MtmRefereeClearWinner(void)
-{
-	PGconn	   *conn;
-	PGresult   *res;
-	char	   *response;
-	int			rc;
-
-	/*
-	 * Delete result locally first.
-	 *
-	 * If we delete decision from referee but fail to delete local cached that
-	 * will be pretty bad -- on the next reboot we can read stale referee
-	 * decision and on next failure end up with two masters. So just delete
-	 * local cache first.
-	 */
-	if (MtmRefereeHasLocalTable())
-	{
-		StartTransactionCommand();
-		SPI_connect();
-		PushActiveSnapshot(GetTransactionSnapshot());
-		rc = SPI_execute("delete from mtm.referee_decision where key = 'winner'", false, 0);
-		SPI_finish();
-		PopActiveSnapshot();
-		CommitTransactionCommand();
-		if (rc < 0)
-		{
-			mtm_log(WARNING, "Failed to clean referee decision");
-			return false;
-		}
-	}
-
-
-	conn = PQconnectdb(MtmRefereeConnStr);
-	if (PQstatus(conn) != CONNECTION_OK)
-	{
-		mtm_log(WARNING, "Could not connect to referee");
-		PQfinish(conn);
-		return false;
-	}
-
-	res = PQexec(conn, "select referee.clean()");
-	if (PQresultStatus(res) != PGRES_TUPLES_OK ||
-		PQntuples(res) != 1 ||
-		PQnfields(res) != 1)
-	{
-		mtm_log(WARNING, "Refusing unexpected result (r=%d, n=%d, w=%d, k=%s) from referee.clean().",
-				PQresultStatus(res), PQntuples(res), PQnfields(res), PQgetvalue(res, 0, 0));
-		PQclear(res);
-		PQfinish(conn);
-		return false;
-	}
-
-	response = PQgetvalue(res, 0, 0);
-
-	if (strncmp(response, "t", 1) != 0)
-	{
-		mtm_log(WARNING, "Wrong response from referee.clean(): '%s'", response);
-		PQclear(res);
-		PQfinish(conn);
-		return false;
-	}
-
-	/* Ok, we finally got it! */
-	mtm_log(MtmStateMessage, "Got referee clear response '%s'", response);
-	PQclear(res);
-	PQfinish(conn);
-	return true;
-}
 
 /*
  * -----------------------------------
@@ -3372,8 +3275,15 @@ MtmMonitor(Datum arg)
 		MtmSleep(USECS_PER_SEC);
 		mtm_cfg = MtmLoadConfig();
 	}
+	/* check config sanity */
 	if (mtm_cfg->my_node_id == MtmInvalidNodeId)
 		elog(ERROR, "multimaster is not configured");
+	if (mtm_cfg->n_nodes > 1 && IS_REFEREE_ENABLED())
+		ereport(ERROR,
+				(errmsg("referee mode supports only 2 nodes, but %d configured",
+					mtm_cfg->n_nodes + 1),
+				 errhint("Unset multimaster.referee_connstring config value or reinitialize cluster with 2 nodes")));
+
 	/*
 	 * XXX to handle reinits gracefully, before (re)initting mtm we should
 	 * kill monitor, who should on exit wait for all bgws deaths. Thus bgws

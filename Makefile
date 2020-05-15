@@ -25,7 +25,7 @@ endif
 
 .PHONY: all
 
-EXTRA_INSTALL=contrib/pg_pathman
+EXTRA_INSTALL=contrib/pg_pathman contrib/referee
 
 all: multimaster.so
 
@@ -47,12 +47,12 @@ start: temp-install
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
 		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
-		perl run.pl --start
+		perl run.pl --action=start $(RUN_OPTS)
 
 stop:
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
-		perl run.pl --stop
+		perl run.pl --action=stop $(RUN_OPTS)
 
 run-pg-regress: submake-regress
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \

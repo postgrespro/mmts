@@ -216,6 +216,7 @@ extern int	MtmTransSpillThreshold;
 extern int	MtmHeartbeatSendTimeout;
 extern int	MtmHeartbeatRecvTimeout;
 extern char *MtmRefereeConnStr;
+#define IS_REFEREE_ENABLED() (MtmRefereeConnStr && *MtmRefereeConnStr)
 extern int	MtmMaxWorkers;
 extern bool MtmBreakConnection;
 

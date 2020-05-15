@@ -10,7 +10,7 @@ use Socket;
 
 sub new
 {
-	my ($class, $n_nodes) = @_;
+	my ($class, $n_nodes, $referee) = @_;
 	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
 
 	$PostgresNode::test_pghost = "127.0.0.1";
@@ -19,6 +19,10 @@ sub new
 		nodes => \@nodes,
 		recv_timeout => 6
 	};
+	if (defined $referee && $referee)
+	{
+		$self->{referee} = get_new_node("referee")
+	}
 
 	bless $self, $class;
 	return $self;
@@ -31,6 +35,15 @@ sub init
 
 	# use port range different to ordinary TAP tests
 	$PostgresNode::last_port_assigned = int(rand() * 16384) + 32767;
+
+	if (defined $self->{referee})
+	{
+		$self->{referee}->init();
+		$self->{referee}->append_conf('postgresql.conf', q{
+									  unix_socket_directories = ''
+									  listen_addresses = '127.0.0.1'
+									  });
+	}
 
 	foreach my $node (@$nodes)
 	{
@@ -53,6 +66,16 @@ sub init
 			multimaster.heartbeat_send_timeout = 100
 			multimaster.heartbeat_recv_timeout = 5000
 		});
+
+		if (defined $self->{referee})
+		{
+			my $rport = $self->{referee}->port;
+			my $rhost = $self->{referee}->host;
+			# referee dbname is hardcoded as postgres for simplicity
+			$node->append_conf('postgresql.conf', qq(
+				multimaster.referee_connstring = 'dbname=postgres host=$rhost port=$rport'
+));
+		}
 
 		if (defined $conf_opts)
 		{
@@ -86,6 +109,11 @@ sub create_mm
 		{
 			$node->{dbname} = 'postgres';
 		}
+	}
+
+	if (defined $self->{referee})
+	{
+		$self->{referee}->safe_psql('postgres', 'create extension referee');
 	}
 
 	foreach (0..$#{$self->{nodes}})
@@ -127,9 +155,6 @@ sub create_mm
 		$_->connstr($_->{dbname})
 	} @{$self->{nodes}};
 
-	my $ports = join ', ', map { $_->{_port}} @{$self->{nodes}};
-	note( "Starting cluster with ports: $ports");
-
 	my $node1 = $self->{nodes}->[0];
 	my $peer_connstrs = join ',', @peers;
 	$node1->safe_psql($node1->{dbname}, "create extension multimaster;");
@@ -143,7 +168,16 @@ sub create_mm
 sub start
 {
 	my ($self) = @_;
+	my $ports = join ', ', map { $_->{_port}} @{$self->{nodes}};
+	note( "starting cluster on ports: $ports");
 	$_->start() foreach @{$self->{nodes}};
+	if (defined $self->{referee})
+	{
+		my $rport = $self->{referee}->port;
+		note("starting referee on port $rport");
+		$self->{referee}->start();
+	}
+
 }
 
 sub stop

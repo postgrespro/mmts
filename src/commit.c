@@ -50,7 +50,6 @@ MtmCurrentTrans MtmTx;
 /* holds state defining cleanup actions in case of failure during commit */
 static struct MtmCommitState
 {
-	MtmGeneration gen;
 	char stream_name[DMQ_NAME_MAXLEN];
 	bool subscribed;
 	char gid[GIDSIZE];
@@ -387,6 +386,7 @@ MtmTwoPhaseCommit(void)
 	int			i;
 	int 		nvotes;
 	nodemask_t	success_cohort;
+	MtmGeneration xact_gen;
 
 	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
 		return false;
@@ -433,10 +433,10 @@ MtmTwoPhaseCommit(void)
 							MtmNodeStatusMnem[MtmGetCurrentStatus(true, false)])));
 		}
 
-		mtm_commit_state.gen = MtmGetCurrentGen(true);
+		xact_gen = MtmGetCurrentGen(true);
 		xid = GetTopTransactionId();
 		MtmGenerateGid(mtm_commit_state.gid, mtm_cfg->my_node_id, xid,
-					   mtm_commit_state.gen.num, mtm_commit_state.gen.configured);
+					   xact_gen.num, xact_gen.configured);
 		sprintf(mtm_commit_state.stream_name, "xid" XID_FMT, xid);
 		dmq_stream_subscribe(mtm_commit_state.stream_name);
 		mtm_commit_state.subscribed = true;
@@ -484,12 +484,12 @@ MtmTwoPhaseCommit(void)
 		 * switch requires abort of all currently preparing xacts. It is not
 		 * clear whether related complications worth the benefits though.
 		 */
-		cohort = mtm_commit_state.gen.members;
+		cohort = xact_gen.members;
 		BIT_CLEAR(cohort, mtm_cfg->my_node_id - 1);
 		ret = gather(cohort,
 					 (MtmMessage **) p_messages, NULL, &n_messages,
 					 PrepareGatherHook, TransactionIdGetDatum(xid),
-					 NULL, mtm_commit_state.gen.num);
+					 NULL, xact_gen.num);
 
 		/*
 		 * The goal here is to check that every gen member applied the
@@ -504,8 +504,8 @@ MtmTwoPhaseCommit(void)
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("[multimaster] failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
-							mtm_commit_state.gen.num,
-							maskToString(mtm_commit_state.gen.members),
+							xact_gen.num,
+							maskToString(xact_gen.members),
 							new_gen.num,
 							maskToString(new_gen.members))));
 		}
@@ -557,13 +557,20 @@ MtmTwoPhaseCommit(void)
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", mtm_commit_state.gid);
 
 		/*
+		 * Just skip precommit tour if I am online in my referee gen,
+		 * i.e. working alone. We actually could do direct commits without 2PC
+		 * as an optimization...
+		 */
+		if (IS_REFEREE_GEN(xact_gen.members, xact_gen.configured))
+			goto precommit_tour_done;
+		/*
 		 * Here (paxos 2a/2b) we need only majority of acks, probably it'd be
 		 * useful to teach gather return once quorum of good msgs collected.
 		 */
 		ret = gather(cohort,
 					 (MtmMessage **) twoa_messages, NULL, &n_messages,
 					 Paxos2AGatherHook, PointerGetDatum(mtm_commit_state.gid),
-					 NULL, mtm_commit_state.gen.num);
+					 NULL, xact_gen.num);
 
 		/* check ballots in answers */
 		nvotes = 1; /* myself */
@@ -587,7 +594,7 @@ MtmTwoPhaseCommit(void)
 							   twoa_messages[i]->accepted_term.ballot,
 							   twoa_messages[i]->accepted_term.node_id)));
 		}
-		if (!Quorum(popcount(mtm_commit_state.gen.configured), nvotes))
+		if (!Quorum(popcount(xact_gen.configured), nvotes))
 		{
 			nodemask_t failed_cohort;
 
@@ -598,8 +605,8 @@ MtmTwoPhaseCommit(void)
 						(errcode(ERRCODE_INTERNAL_ERROR),
 						 errmsg("[multimaster] failed to collect precommit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 								mtm_commit_state.gid,
-								mtm_commit_state.gen.num,
-								maskToString(mtm_commit_state.gen.members),
+								xact_gen.num,
+								maskToString(xact_gen.members),
 								new_gen.num,
 								maskToString(new_gen.members))));
 			}
@@ -615,6 +622,7 @@ MtmTwoPhaseCommit(void)
 							maskToString(failed_cohort))));
 		}
 
+precommit_tour_done:
 		/* we have majority precommits, commit */
 		StartTransactionCommand();
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);

@@ -37,6 +37,18 @@ typedef struct MtmGeneration
 #define MtmInvalidGenNum 0
 #define EQUAL_GENS(g1, g2) \
 	((g1).num == (g2).num && (g1).members == (g2).members && (g1).configured == (g2).configured)
+/*
+ * Referee is enabled only with 2 nodes and single member gen is ever proposed
+ * as referee one (requiring referee vote and allowing to be online this
+ * single node), so instead of separate flag use this check.
+ *
+ * First condition is important as single node cluster shouldn't access
+ * referee; also, with > 2 nodes there is at least theoretical possibility of
+ * electing single-node generation after two consecutive minority gen
+ * elections.
+ */
+#define IS_REFEREE_GEN(members, configured) \
+	(popcount(configured) == 2 && popcount(members) == 1)
 
 typedef enum
 {

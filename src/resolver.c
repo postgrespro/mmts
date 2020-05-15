@@ -90,57 +90,12 @@ ResolverSigHupHandler(SIGNAL_ARGS)
 	errno = save_errno;
 }
 
-void
-ResolveForRefereeWinner(int n_all_nodes)
+static void
+resolver_at_exit(int status, Datum arg)
 {
-	HASH_SEQ_STATUS hash_seq;
-	GlobalTx   *gtx;
-	bool		try_again = true;
-
-	mtm_log(LOG, "ResolveForRefereeWinner");
-
-	while (try_again)
-	{
-		try_again = false;
-
-		LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
-		hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
-		while ((gtx = hash_seq_search(&hash_seq)) != NULL)
-		{
-			GlobalTxStatus state = gtx->state.status;
-			bool		found;
-
-			if (!gtx->orphaned || gtx->acquired_by != 0)
-			{
-				try_again = true;
-				continue;
-			}
-
-			if (state == GTXInvalid)
-			{
-				FinishPreparedTransaction(gtx->gid, false, true);
-				mtm_log(ResolverTx, "TXFINISH: %s aborted", gtx->gid);
-				hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
-				Assert(found);
-			}
-			else if (state == GTXPreCommitted)
-			{
-				FinishPreparedTransaction(gtx->gid, true, true);
-				mtm_log(ResolverTx, "TXFINISH: %s committed", gtx->gid);
-				hash_search(gtx_shared->gid2gtx, gtx->gid, HASH_REMOVE, &found);
-				Assert(found);
-			}
-			else
-			{
-				Assert(false);
-			}
-		}
-		LWLockRelease(gtx_shared->lock);
-
-		if (try_again)
-			MtmSleep(USECS_PER_SEC / 10);
-	}
+	ReleasePB();
 }
+
 
 /*****************************************************************************
  *
@@ -148,14 +103,96 @@ ResolveForRefereeWinner(int n_all_nodes)
  *
  *****************************************************************************/
 
+/* gid_t is system type... */
+typedef char pgid_t[GIDSIZE];
+
+static void
+ResolveForRefereeWinner(void)
+{
+	MtmGeneration curr_gen;
+	HASH_SEQ_STATUS hash_seq;
+	GlobalTx   *gtx;
+	/*
+	 * Calling FinishPreparedTransaction under lwlock is probably not a good
+	 * idea (as well as waiting inside GlobalTxAcquire), so let's collect
+	 * xacts here and finish them after release.
+	 */
+	pgid_t *gids;
+	int n_gids = 0;
+	int i;
+
+	/*
+	 * Once both nodes switched into ONLINE in full (two nodes) generation
+	 * direct resolution is not allowed anymore as grant might be cleared and
+	 * consequently re-acquired by another node at any time. To enforce this,
+	 * do the job under generation lock.
+	 */
+	AcquirePBByPreparer();
+
+	curr_gen = MtmGetCurrentGen(true);
+	/*
+	 * can resolve directly only if I am in my referee granted generation
+	 */
+	if (!IS_REFEREE_GEN(curr_gen.members, curr_gen.configured) ||
+		MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
+	{
+		ReleasePB();
+		return;
+	}
+
+	mtm_log(ResolverState, "ResolveForRefereeWinner");
+	gids = palloc(sizeof(pgid_t) * max_prepared_xacts);
+
+	LWLockAcquire(gtx_shared->lock, LW_SHARED);
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		/* skip not orphaned xacts, will pick them up next time */
+		if (!gtx->orphaned)
+			continue;
+
+		Assert(n_gids < max_prepared_xacts);
+		strcpy(gids[n_gids], gtx->gid);
+		n_gids++;
+	}
+	LWLockRelease(gtx_shared->lock);
+
+	for (i = 0; i < n_gids; i++)
+	{
+		bool commit;
+
+		gtx = GlobalTxAcquire(gids[i], false, NULL);
+		if (!gtx)
+			continue;
+
+		/*
+		 * - If referee winner doesn't have PC, it means other node might abort
+		 *   (if it is coordinator) or do nothing (it can't go beyond PC|PA
+		 *   without our vote), so we abort.
+		 * - If referee winner has PC, other node might only commit (if it
+		 *   got our PC) or do nothing, so we commit.
+		 */
+		commit = gtx->state.status == GTXPreCommitted;
+
+		StartTransactionCommand();
+		FinishPreparedTransaction(gtx->gid, commit, false);
+		CommitTransactionCommand();
+		gtx->state.status = commit ? GTXCommitted : GTXAborted;
+		mtm_log(MtmTxFinish, "TXFINISH: %s %s as referee winner",
+				gtx->gid, commit ? "committed" : "aborted");
+		GlobalTxRelease(gtx);
+	}
+
+	ReleasePB();
+	pfree(gids);
+	return;
+}
+
 typedef struct verdict
 {
 	char gid[GIDSIZE];
 	bool commit;
 } verdict;
-
-/* gid_t is system type... */
-typedef char pgid_t[GIDSIZE];
 
 /*
  * Called periodically. Iterate over gtxes and
@@ -684,6 +721,7 @@ ResolverMain(Datum main_arg)
 								  subscription_change_cb,
 								  (Datum) 0);
 
+	on_shmem_exit(resolver_at_exit, (Datum) 0);
 	dmq_stream_subscribe("txresp");
 
 	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
@@ -719,6 +757,8 @@ ResolverMain(Datum main_arg)
 		{
 			bool job_pending;
 
+			if (IS_REFEREE_ENABLED())
+				ResolveForRefereeWinner();
 			/* vacuum obsolete in table proposals periodically */
 			GlobalTxGCInTableProposals();
 			job_pending = finish_ready();
