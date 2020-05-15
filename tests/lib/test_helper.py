@@ -10,7 +10,7 @@ from .bank_client import keep_trying
 
 TEST_WARMING_TIME = 3
 TEST_DURATION = 10
-TEST_MAX_RECOVERY_TIME = 600
+TEST_MAX_RECOVERY_TIME = 1200
 TEST_RECOVERY_TIME = 5
 TEST_SETUP_TIME = 20
 TEST_STOP_DELAY = 5
@@ -53,7 +53,12 @@ class TestHelper(object):
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
                 return
-            self.client.list_prepared(node_id)
+            # failing here while we are waiting for commit is of course ok,
+            # e.g. the database might be starting up
+            try:
+                self.client.list_prepared(node_id)
+            except psycopg2.Error as e:
+                pass
             time.sleep(5)
             total_sleep += 5
 
@@ -75,7 +80,7 @@ class TestHelper(object):
                 print("{} is online!".format(dsn))
                 return
             except Exception as e:
-                print('Waiting for {} to get online:'.format(dsn), str(e))
+                print('{} waiting for {} to get online: {}'.format(datetime.datetime.utcnow(), dsn, str(e)))
                 time.sleep(5)
                 total_sleep += 5
             finally:
@@ -83,7 +88,7 @@ class TestHelper(object):
                     con.close()
 
         # Max recovery time was exceeded
-        raise AssertionError('awaitOnline on {} exceeded timeout {}'.format(dsn, TEST_MAX_RECOVERY_TIME))
+        raise AssertionError('awaitOnline on {} exceeded timeout {}s'.format(dsn, TEST_MAX_RECOVERY_TIME))
 
     def AssertNoPrepares(self):
         n_prepared = self.client.n_prepared_tx()

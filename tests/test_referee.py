@@ -39,17 +39,12 @@ class RefereeTest(unittest.TestCase, TestHelper):
         print('tearDown')
         cls.client.stop()
 
-        if not cls.client.is_data_identic():
-            raise AssertionError('Different data on nodes')
+        # ohoh
+        th = TestHelper()
+        th.client = cls.client
+        th.assertDataSync()
+        cls.client.stop()
 
-        if cls.client.no_prepared_tx() != 0:
-            raise AssertionError('There are some uncommitted tx')
-
-        counts = cls.client.insert_counts()
-        if counts[0] != counts[1]:
-            raise AssertionError('Different number of tuples on nodes: %d / %d' % (counts[0], counts[1]) )
-
-        # XXX: check nodes data identity here
         # subprocess.check_call(['docker-compose','down'])
 
     def setUp(self):
@@ -99,6 +94,9 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertIsolation(aggs)
 
 
+    # cut one node from neighbour and referee, ensure neighbour works as winner,
+    # repair network, wait until isolated node gets online, repeat with another
+    # node.
     def test_double_failure_referee(self):
         print('### test_double_failure_referee ###')
 
@@ -121,6 +119,11 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertIsolation(aggs)
 
 
+    # - get node 1 down, ensure 2 works as winner
+    # - restart 2, ensure it continue working as winner
+    # - stop 2, start 1, ensure nothing working as winner is down
+    # - start 2, ensure referee grant is cleared
+    # it intersects with both test_winner_restart and test_consequent_shutdown...
     def test_saved_referee_decision(self):
         print('### test_saved_referee_decision ###')
         docker_api = docker.from_env()
@@ -200,6 +203,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertEqual(decisions_count, 0)
 
 
+    # test that winner continues working after restart
     def test_winner_restart(self):
         print('### test_winner_restart ###')
 
@@ -233,6 +237,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.client.bgrun()
         time.sleep(3)
 
+    # test that winner continues working after crash-recover
     def test_winner_crash(self):
         print('### test_winner_crash ###')
 
@@ -266,6 +271,11 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.client.bgrun()
         time.sleep(3)
 
+    # - get down node 1, ensure 2 works as winner
+    # - get down node 2, ensure nothing is working
+    # - get 1 up, ensure it can't work as winner is offline
+    # - get 2 up, ensure both nodes work now
+    # - get referee up, ensure grant is cleared
     def test_consequent_shutdown(self):
         print('### test_consequent_shutdown ###')
         docker_api = docker.from_env()
@@ -348,4 +358,3 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
 if __name__ == '__main__':
     unittest.main()
-
