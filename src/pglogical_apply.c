@@ -1001,7 +1001,7 @@ process_remote_commit(StringInfo in,
 				 */
 				Assert(msg_status == GTXPreCommitted);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false);
 				if (!rwctx->gtx)
 				{
 					/*
@@ -1014,13 +1014,9 @@ process_remote_commit(StringInfo in,
 				}
 
 				/*
-				 * give vote iff we actually have PREPARE, final outcome is
-				 * not known yet and paxos rules allow it.
+				 * give vote iff paxos rules allow it.
 				 */
-				if (rwctx->gtx->prepared &&
-					rwctx->gtx->state.status != GTXCommitted &&
-					rwctx->gtx->state.status != GTXAborted &&
-					term_cmp(msg_term, rwctx->gtx->state.proposal) >= 0)
+				if (term_cmp(msg_term, rwctx->gtx->state.proposal) >= 0)
 				{
 					bool		done = false;
 					char	   *sstate;
@@ -1066,9 +1062,6 @@ process_remote_commit(StringInfo in,
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				uint64 prepare_gen_num;
 				bool latch_set = false;
-				bool gtx_created;
-				char   *sstate;
-
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == current_gtid->my_xid);
@@ -1160,68 +1153,21 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
-				rwctx->gtx = GlobalTxAcquire(gid, true, &gtx_created);
-
+				rwctx->gtx = GlobalTxAcquire(gid, true);
 				/*
-				 * TODO: we could check 'proposal' (aka nextBal in The
-				 * Part-Time Parliament) term here: if it is not {1, 0}, we
-				 * already started concurrent resolving to abort xact, and it
-				 * might be better to tell coordinator to abort immediately
-				 * while he can rather than risk exiting later with 'unclear
-				 * xact status'.
+				 * it must be brand new gtx, we don't do anything before P
 				 */
+				Assert(!rwctx->gtx->prepared);
+				Assert(term_cmp(rwctx->gtx->state.proposal, InitialGTxTerm) == 0);
 
-				/*
-				 * Be careful not to lose vote we could have given/obtained
-				 * while xact lived as gtx_proposals entry.
-				 *
-				 * So we need to 1) write state_3pc, if any, into PREPARE 2)
-				 * purge gtx_proposals entry ASAP -- otherwise, we might
-				 * proceed, commit/abort xact, crash-reboot and use old stale
-				 * state from table (we could have given new votes since state
-				 * migrated to PREPARE). This is problematic as we can't both
-				 * write PREPARE and delete from table atomically. Purging
-				 * gtx_proposals here might fail (it really shouldn't, but we
-				 * can't rely on that), so we achieve 2) by maintaining
-				 * separate in_table flag and forbidding to finish xact while
-				 * it has both in-table entry and prepare record. Resolver
-				 * worker periodically searches for such xacts and removes
-				 * gtx_entries for them.
-				 *
-				 */
-				sstate = NULL;
-				if (!gtx_created)
-				{
-					sstate = serialize_gtx_state(rwctx->gtx->state.status,
-												 rwctx->gtx->state.proposal,
-												 rwctx->gtx->state.accepted);
-					mtm_log(MtmApplyTrace,
-							"migrating transaction %s state %s to PREPARE",
-							gid, sstate);
-				}
-				PrepareTransactionBlockWithState3PC(gid, sstate);
+				PrepareTransactionBlock(gid);
 				AllowTempIn2PC = true;
 				/* PREPARE itself */
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(MtmApplyContext);
 				ReleasePB();
 				rwctx->gtx->prepared = true; /* now we have WAL record */
-				rwctx->gtx->coordinator_end_lsn = replorigin_session_origin_lsn;
 				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
-
-				if (!gtx_created)
-				{
-					Assert(rwctx->gtx->in_table);
-
-					/* prevent logging the same origin_lsn twice */
-					MtmEndSession(42, true);
-					GlobalTxDeleteFromTable(gid);
-					rwctx->gtx->in_table = false;
-
-					/* c.f. GlobalTxRelease why we can't have final states here */
-					Assert(rwctx->gtx->state.status != GTXCommitted &&
-						   rwctx->gtx->state.status != GTXAborted);
-				}
 
 				GlobalTxRelease(rwctx->gtx);
 				rwctx->gtx = NULL;
@@ -1276,8 +1222,9 @@ process_remote_commit(StringInfo in,
 				MtmEndSession(origin_node, true);
 
 				mtm_log(MtmApplyTrace,
-						"Prepare transaction %s event=%d origin=(%d, " LSN_FMT ")", gid, event,
-						origin_node, origin_node == rwctx->sender_node_id ? end_lsn : origin_lsn);
+						"Prepare transaction %s event=%d origin=(%d, " LSN_FMT ")",
+						gid, event, origin_node,
+						origin_node == rwctx->sender_node_id ? end_lsn : origin_lsn);
 
 				break;
 			}
@@ -1287,22 +1234,11 @@ process_remote_commit(StringInfo in,
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false);
 
 				/* normal path: we have PREPARE, finish it */
-				if (rwctx->gtx && rwctx->gtx->prepared)
+				if (rwctx->gtx)
 				{
-					/*
-					 * c.f. PREPARE handling why finishing xact while
-					 * gtx_proposals entry exists is unsafe
-					 */
-					if (rwctx->gtx->in_table)
-					{
-						ereport(ERROR,
-								(errcode(ERRCODE_INTERNAL_ERROR),
-								 MTM_ERRMSG("can't apply COMMIT PREPARED of transaction %s as its gtx_proposals entry is not deleted yet", gid)));
-					}
-
 					StartTransactionCommand();
 					MtmBeginSession(origin_node);
 
@@ -1327,9 +1263,13 @@ process_remote_commit(StringInfo in,
 				 * 4) A also acks CP from B.
 				 * 5) C gets and acks P from A or B, so B purges WAL with P
 				 *    and CP.
-				 * 6) Now C having nothing but P asks B to resolve, who don't
-				 *    have any state for the xact anymore; together they
-				 *    resolve to aborted.
+				 * 6) BC is the new generation.
+				 * 7) Now C having nothing but P asks B to resolve, who
+				 *    doesn't have any state for the xact anymore; so it is
+				 *    like 'ho, I don't have such gtx, this is an xact from
+				 *    an older gen than I am online in and I don't see CP in
+				 *    WAL, so if there was CP it must had already been
+				 *    streamed => reply with direct ABORT'
 				 *
 				 * this (extremely unlikely but at least theoretically) is
 				 * possible. Luckily there is an easy way to detect such
@@ -1341,10 +1281,10 @@ process_remote_commit(StringInfo in,
 				 * generations; or we are ONLINE in higher gen, which means we
 				 * already got all committable prepares of this one.
 				 *
-				 * Alternatively we could persist CP outcome in gtx_proposals
-				 * table before acking it, but that would bloat the table (and
-				 * shmem), and it is not clear how to obtain PREPARE's end_lsn
-				 * here to know when we can purge the entry.
+				 * Alternatively we could persist CP outcome somewhere, but
+				 * that's much more cumbersome and it is not clear how to
+				 * obtain PREPARE's end_lsn here to know when we can purge the
+				 * entry.
 				 */
 				else if (rwctx->mode == REPLMODE_NORMAL)
 				{
@@ -1352,7 +1292,7 @@ process_remote_commit(StringInfo in,
 
 					/*
 					 * Could wait until we switch into it, but bailing out
-					 * here seems like incredibly rare situtation.
+					 * here seems like incredibly rare situation.
 					 */
 					if (unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
 					{
@@ -1362,18 +1302,12 @@ process_remote_commit(StringInfo in,
 											gid, prepare_gen_num, MtmGetCurrentGenNum())));
 					}
 
-					if (unlikely((rwctx->mode != MtmGetReceiverMode(rwctx->sender_node_id))))
+					if (unlikely((rwctx->mode !=
+								  MtmGetReceiverMode(rwctx->sender_node_id))))
 					{
 						proc_exit(0);
 					}
 				}
-
-				/*
-				 * Having gtx here means we have in-table state for this xact
-				 * instead of PREPARE, but the check above hasn't thrown us
-				 * out, so we still managed to get CP out of order somehow.
-				 */
-				Assert(rwctx->gtx == NULL);
 
 				/* restore ctx after CommitTransaction */
 				MemoryContextSwitchTo(MtmApplyContext);
@@ -1391,37 +1325,15 @@ process_remote_commit(StringInfo in,
 
 				/*
 				 * Unlike CP handling, there is no need to persist
-				 * out-of-order abort in gtx_proposals table: if we ask node
-				 * about status of xact for which it had purged WAL with
-				 * finalization record, she'd reply with direct abort --
-				 * because if there was commit, we must have already received
-				 * it and the answer doesn't matter.
+				 * out-of-order abort anywhere: if we ask node about status of
+				 * xact for which it had purged WAL with finalization record,
+				 * she'd reply with direct abort -- because if there was
+				 * commit, we must have already received it and the answer
+				 * doesn't matter.
 				 */
-				rwctx->gtx = GlobalTxAcquire(gid, false, NULL);
-				if (!rwctx->gtx || !rwctx->gtx->prepared)
-				{
-					/*
-					 * We have in-table state for this xact. We could update
-					 * it with 'abort', but again, there is no need to.
-					 */
-					if (rwctx->gtx)
-					{
-						GlobalTxRelease(rwctx->gtx);
-						rwctx->gtx = NULL;
-					}
+				rwctx->gtx = GlobalTxAcquire(gid, false);
+				if (!rwctx->gtx)
 					break;
-				}
-
-				/*
-				 * c.f. PREPARE handling why finishing xact while
-				 * gtx_proposals entry exists is unsafe
-				 */
-				if (rwctx->gtx->in_table)
-				{
-					ereport(ERROR,
-							(errcode(ERRCODE_INTERNAL_ERROR),
-							 MTM_ERRMSG("can't apply ABORT PREPARED of transaction %s as its gtx_proposals entry is not deleted yet", gid)));
-				}
 
 				MtmBeginSession(origin_node);
 				StartTransactionCommand();

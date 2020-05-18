@@ -143,8 +143,7 @@ mtm_commit_cleanup(int status, Datum arg)
 		Assert(GetMyGlobalTx() != NULL || on_exit);
 		if (GetMyGlobalTx() == NULL)
 			mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid,
-												   false,
-												   NULL);
+												   false);
 		/*
 		 * If we managed to prepare the xact, tell resolver to deal with it
 		 */
@@ -445,7 +444,7 @@ MtmTwoPhaseCommit(void)
 
 		/* prepare transaction on our node */
 
-		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true, NULL);
+		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true);
 		Assert(mtm_commit_state.gtx->state.status == GTXInvalid);
 		/*
 		 * PREPARE doesn't happen here; ret 0 just means we were already in
@@ -463,11 +462,10 @@ MtmTwoPhaseCommit(void)
 		ReleasePB(); /* don't hold generation switch anymore */
 		mtm_commit_state.gtx->prepared = true;
 		/* end_lsn of PREPARE */
-		mtm_commit_state.gtx->coordinator_end_lsn = XactLastCommitEnd;
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
 				mtm_commit_state.gid,
-				(uint32) (mtm_commit_state.gtx->coordinator_end_lsn >> 32),
-				(uint32) mtm_commit_state.gtx->coordinator_end_lsn);
+				(uint32) (XactLastCommitEnd >> 32),
+				(uint32) (XactLastCommitEnd));
 
 		/*
 		 * By definition of generations, we must collect PREPARE ack from

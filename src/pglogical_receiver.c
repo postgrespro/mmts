@@ -932,8 +932,8 @@ pglogical_receiver_main(Datum main_arg)
 							/*
 							 * Don't apply xact if our filter says we already
 							 * did so. Drop it if this is ABORT as well --
-							 * this means PREPARE at sender was aborted during
-							 * in the middle of decoding.
+							 * this means PREPARE at sender was aborted in the
+							 * middle of decoding.
 							 */
 							if ((!MtmFilterTransaction(stmt, msg_len, spvector,
 													   filter_map, rctx) &&

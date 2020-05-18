@@ -204,17 +204,6 @@ CREATE FUNCTION mtm.pg_lsn_to_bigint(lsn pg_lsn) RETURNS bigint AS $$
 $$
 LANGUAGE sql;
 
-CREATE TABLE mtm.gtx_proposals(
-    gid text primary key not null,
-    -- defines the horizon after which record is not needed and can be deleted
-    -- gtx_proposals contains only neighbours xacts, so this is truly origin_lsn
-    -- origin node (coordinator) is encoded in gid
-    prepare_origin_lsn pg_lsn,
-    state text not null
-);
-/* proposals tables are private to nodes, don't stream them  */
-INSERT INTO mtm.local_tables VALUES('mtm', 'gtx_proposals');
-
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$
 DECLARE

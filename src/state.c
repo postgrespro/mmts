@@ -1101,18 +1101,26 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	BIT_SET(candidate_gen->members, Mtm->my_node_id - 1);
 
 	/*
-	 * The only purpose of minority gen is to declare "I'm caught up."
-	 * Electing it meaningless if we are already there -- unless we are in
-	 * referee mode and thus this is a single member referee gen.
+	 * Note that candidate members might be minority when live majority clique
+	 * happens to contain nodes which wasn't present in latest gen and thus
+	 * are probably in deep recovery -- they are intentionally not included in
+	 * candidates. We still ballot in this case, even if I am member of
+	 * current gen and thus don't need new gen to declare "I'm caught up". The
+	 * is needed to ensure transaction resolution liveness: it assumes any
+	 * stable live connecitivity clique forming majority eventually elects
+	 * generation with its members (unless previous was already the same)
+	 * regardless of recovery progress; c.f. handle_1a for details.
+	 *
+	 * This might seem to have a downside though: in case of short flip
+	 * flopping like
+	 * - AB working normally, C if offline and in deep recovery
+	 * - AC becomes the clique for a short time, generation with the only
+	 *   member A is elected by AC
+	 * - AB now the clique again and B is forced into recovery as it skipped
+	 *   generation.
+	 * However, recovery of B in this case would be very short as there are
+	 * no committed transactions it misses.
 	 */
-	if ((!MtmQuorum(mtm_cfg, popcount(candidate_gen->members)) &&
-		 BIT_CHECK(mtm_state->current_gen_members, Mtm->my_node_id - 1)) &&
-		!IS_REFEREE_ENABLED())
-	{
-		mtm_log(MtmStateDebug, "not balloting for minority gen with candidates=%s because I'm already there",
-				maskToString(candidate_gen->members));
-		goto no_interesting_candidates;
-	}
 
 	/*
 	 * The only reason to revote for gen with the same members is
@@ -2604,11 +2612,52 @@ MtmMonitorStart(Oid db_id, Oid user_id)
 		elog(ERROR, "Failed to start monitor worker");
 }
 
+/*
+ * Workhorse for handle_1a when PREPARE exists: change its state and fill
+ * resp appropriately.
+ */
+static void
+handle_1a_gtx(MtmTxRequest *msg, GlobalTx *gtx, MtmTxStatusResponse *resp)
+{
+	/*
+	 * Check whether paxos 1a handling rules allow us to
+	 * process xact.
+	 */
+	if (term_cmp(msg->term, gtx->state.proposal) > 0)
+	{
+		bool		done;
+		char	   *sstate;
+		MemoryContext oldcontext = CurrentMemoryContext;
+
+		sstate = serialize_gtx_state(gtx->state.status,
+									 msg->term,
+									 gtx->state.accepted);
+		StartTransactionCommand();
+		done = SetPreparedTransactionState(gtx->gid, sstate,
+										   false);
+		CommitTransactionCommand();
+		MemoryContextSwitchTo(oldcontext);
+
+		if (!done)
+			Assert(false);
+		gtx->state.proposal = msg->term;
+		mtm_log(MtmTxTrace, "TXTRACE: processed 1a, set state %s", GlobalTxToString(gtx));
+
+		resp->state = (GTxState) {
+			.proposal = gtx->state.proposal,
+			.accepted = gtx->state.accepted,
+			.status = gtx->state.status
+		};
+	}
+}
+
 /* Reply to 1A of paxos */
 static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 {
 	GlobalTx   *gtx;
-	bool		gtx_created;
+	uint64		last_online_in;
+	char	   *state_3pc;
+	bool		prepare_seen;
 	StringInfo	packed_msg;
 	/*
 	 * We always respond something -- it will be useful if we ever switch to
@@ -2627,163 +2676,113 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		.gid = msg->gid
 	};
 
-	gtx = GlobalTxAcquire(msg->gid, true, &gtx_created);
-	Assert(gtx != NULL);
-
-	if (!gtx_created) /* already have some state */
+	/* fast check before digging WAL */
+	gtx = GlobalTxAcquire(msg->gid, false);
+	if (gtx != NULL)
 	{
-		/* known to be committed|aborted */
-		if (gtx->state.status == GTXCommitted ||
-			gtx->state.status == GTXAborted)
-		{
-			resp.state.status = gtx->state.status;
-		}
-		/*
-		 * Check whether paxos 1a handling rules allow us to
-		 * process it.
-		 */
-		else if (term_cmp(msg->term, gtx->state.proposal) > 0)
-		{
-			/*
-			 * voting state might be in PREPARE as well as in
-			 * gtx_proposals
-			 */
-			if (gtx->prepared)
-			{
-				bool		done;
-				char	   *sstate;
-				MemoryContext oldcontext = CurrentMemoryContext;
-
-				sstate = serialize_gtx_state(gtx->state.status,
-												 msg->term,
-											 gtx->state.accepted);
-				StartTransactionCommand();
-				done = SetPreparedTransactionState(gtx->gid, sstate,
-												   false);
-				CommitTransactionCommand();
-				MemoryContextSwitchTo(oldcontext);
-
-				if (!done)
-					Assert(false);
-			}
-			else
-			{
-				GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
-									gtx->state.status,
-									msg->term, gtx->state.accepted);
-				gtx->in_table = true;
-			}
-			gtx->state.proposal = msg->term;
-			mtm_log(MtmTxTrace, "TXTRACE: processed 1a, set state %s", GlobalTxToString(gtx));
-
-			resp.state = (GTxState) {
-				.proposal = gtx->state.proposal,
-				.accepted = gtx->state.accepted,
-				.status = gtx->state.status
-			};
-		}
+		handle_1a_gtx(msg, gtx, &resp);
+		GlobalTxRelease(gtx);
+		goto reply_1a;
 	}
-	else /* there is no live gtx */
-	{
-		/* probably we already committed xact, check out wal */
-		char *state_3pc = GetLoggedPreparedXactState(gtx->gid);
 
-		if (strcmp(state_3pc, "committed") == 0)
+	/*
+	 * We don't have PREPARED xact; time to dig in WAL, probably we've already
+	 * committed|aborted it. But before doing this remember last_online_in to
+	 * reply with direct ABORT for transactions which can't ever be committed
+	 * -- this prevents recovery deadlocks as explained below
+	 */
+	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+	last_online_in = mtm_state->last_online_in;
+	LWLockRelease(mtm_state->gen_lock);
+
+	state_3pc = GetLoggedPreparedXactState(msg->gid, &prepare_seen);
+	if (strcmp(state_3pc, "committed") == 0)
+	{
+		resp.state.status = GTXCommitted;
+	}
+	else if (strcmp(state_3pc, "aborted") == 0)
+	{
+		resp.state.status = GTXAborted;
+	}
+	else
+	{
+		uint64 xact_gen_num;
+
+		/*
+		 * So there is no gtx and no CP|AP. Probably we've never seen xact yet
+		 * (prepare not applied), or we could have already finished (or
+		 * perhaps skipped, if this is abort) it and purged WAL. We can't just
+		 * ignore request in this case because resolving and recovery might
+		 * thus deadlock each other, at least with >= 5 nodes. e.g.
+		 * - 1 prepares T1 on 1, 2, 3
+		 * - 4 prepares conflicting T2 on 4, 5
+		 * - Everyone fails, and only 2, 3, 5 go up. They can't recover
+		 *   without resolving at least one of xacts first because T1 and T2
+		 *   conflict; and 'my orphaned xact which never got PRECOMMITted can
+		 *   be aborted directly' doesn't help here as no T1 neigher T2
+		 *   authored by live nodes.
+		 *
+		 * To mitigate this, previously infrastructure was developed to vote
+		 * for xacts before getting PREPARE (state was stored in special local
+		 * table). That worked, but was very cumbersome and ugly, especially
+		 * in the face of batch WAL scan. Here is a better idea: we can use
+		 * generations to abort one of xacts conflicting in the example above.
+		 * Namely, we can reply with direct abort iff
+		 * 1) such P can't appear anymore (we are online in later generation)
+		 * 2) we don't have CP|AP in WAL (if there had been CP previously,
+		 *    we must have already streamed it and thus our answer doesn't
+		 *    matter)
+		 * 3) P doesn't exist currently and there is no P in WAL
+		 *
+		 * Informal liveness rationale, i.e. why all xacts will be eventually
+		 * resolved in this way: assume we have live majority. It will elect
+		 * generation n containing all its members. Why any generation <n xact
+		 * will be eventually resolved? See, one of the nodes will be donor in
+		 * n. It has all committable <n xacts. Any other (conflicting or not)
+		 * <n xact will be aborted by this donor. Any other node in this
+		 * majority will eventually get all these committable xacts, 1) as
+		 * said above, all other <n xacts are aborted 2) xacts of n can't be
+		 * prepared before getting all prepares of n. After that, resolving
+		 * proceeds normally as majority has PREPAREs.
+		 *
+		 */
+
+		/* xact obviously could appear after fast path check */
+		gtx = GlobalTxAcquire(msg->gid, false);
+		if (gtx != NULL)
 		{
-			resp.state.status = GTXCommitted;
+			handle_1a_gtx(msg, gtx, &resp);
+			GlobalTxRelease(gtx);
+			goto reply_1a;
 		}
-		else if (strcmp(state_3pc, "aborted") == 0)
+
+		xact_gen_num = MtmGidParseGenNum(msg->gid);
+		/*
+		 * prepare_seen check is needed as xact could have been quickly
+		 * finished after WAL reading but before GlobalTxAcquire above. We
+		 * could re-scan WAL again in this case, but it is simpler to just
+		 * ignore it currently and resolve on the next request.
+		 */
+		if (!prepare_seen &&
+			last_online_in > xact_gen_num)
 		{
 			resp.state.status = GTXAborted;
+			mtm_log(StatusRequest, "replying direct abort %s as my last_online_in=" UINT64_FORMAT ", its gen_num=" UINT64_FORMAT " and there is no data for it",
+					msg->gid,
+					last_online_in,
+					xact_gen_num);
 		}
 		else
-		{
-			int coordinator;
-			Syncpoint sp;
-
-			Assert(strcmp(state_3pc, "notfound") == 0);
-
-			/*
-			 * So there is no gtx and no CP|AP. Probably we've never seen xact
-			 * yet (prepare not applied -- c.f. GlobalTx why we still need to
-			 * vote in this sutiation), or we could have already finished (or
-			 * perhaps skipped, if this is abort) it and purged WAL.
-			 *
-			 * We can't just vote unconditionally here because of the double
-			 * voting risk: we must be sure we've never voted previously. The
-			 * red line is syncpoint to origin (coordinator) node saying that
-			 * PREPARE is definitely eaten; gtx_proposals entry (if any
-			 * existed) is guaranteed to be kept until this happens. After
-			 * that point, we reply with ABORT because if there was COMMIT,
-			 * failure to find CP in WAL means it was already streamed to
-			 * everyone, so our answer doesn't matter. OTOH, we might never
-			 * get P (and thus AP) for aborted xact, so the necessity to
-			 * answer with abort here is not something impossible.
-			 *
-			 * If you wonder about the schedules where double voting is the
-			 * trouble, here is one:
-			 * - nodes ABCDE
-			 * - A makes xact with gen ABE and writes PC on itself,
-			 *	 PC on E and P on B.
-			 * - BCD resolve xact to abort, with C and D not
-			 *	 having P.
-			 * - C and D apply A's syncpoint behind P. A reasonable
-			 *	 question is how they can do
-			 *	 that without applying P itself. Heh, we have B
-			 *	 who already aborted xact. So they recover from B,
-			 *	 but P is not streamed from it. Now in-table state
-			 *	 (aborted) for xact is vacuumed on C and D.
-			 * - If C and D agree to join voting with E who PC,
-			 *	 they will incorrectly resolve to CP now.
-			 *
-			 * Similar effect exists for case when xact was actually prepared:
-			 * D and C could get P itself, resolve in with B to abort stream
-			 * AP to E before E even got P. Again, CD must be sure not to join
-			 * the voting after AP in wal was purged.
-			 */
-			coordinator = MtmGidParseNodeId(gtx->gid);
-			sp = SyncpointGetLatest(coordinator);
-
-			/*
-			 * It is important we do this check with gtx locked: thus we
-			 * prevent GlobalTxGCInTableProposals from deleting entry even if
-			 * sp was already eaten until we are done with it.
-			 */
-			if (msg->coordinator_end_lsn <= sp.origin_lsn)
-			{
-				resp.state.status = GTXAborted;
-				mtm_log(StatusRequest, "old xact %s status requested, replying with abort: coordinator_end_lsn=%X/%X, latest syncpoint origin_lsn=%X/%X",
-						gtx->gid,
-						(uint32) (msg->coordinator_end_lsn >> 32),
-						(uint32) msg->coordinator_end_lsn,
-						(uint32) (sp.origin_lsn >> 32),
-						(uint32) sp.origin_lsn);
-			}
-			else
-			{
-				/* okay, vote through gtx_proposals */
-				GlobalTxSaveInTable(gtx->gid, msg->coordinator_end_lsn,
-									GTXInvalid,
-									msg->term, InvalidGTxTerm);
-				gtx->in_table = true;
-				gtx->coordinator_end_lsn = msg->coordinator_end_lsn;
-				gtx->state.proposal = msg->term;
-				resp.state = (GTxState) {
-					.proposal = gtx->state.proposal,
-					.accepted = gtx->state.accepted,
-					.status = gtx->state.status
-				};
-			}
-		}
+			mtm_log(StatusRequest, "can't participate in xact %s resolution: there is no PREPARE but it might appear in the future",
+					msg->gid);
 	}
 
+reply_1a:
 	packed_msg = MtmMessagePack((MtmMessage *) &resp);
 	mtm_log(StatusRequest, "replying to 1a from node %d with %s",
 			dest_node_id,
 			MtmMesageToString((MtmMessage *) &resp));
 	dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
-
-	GlobalTxRelease(gtx);
 }
 
 /* reply to 2a of paxos */
@@ -2805,16 +2804,12 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		msg->gid
 	};
 
-	gtx = GlobalTxAcquire(msg->gid, false, NULL);
+	gtx = GlobalTxAcquire(msg->gid, false);
 	/*
-	 * gtx is created if needed and finalized statuses are sent on 1a, no
-	 * need to bother with this here
+	 * finalized statuses are sent on 1a, no need to bother with this here
 	 */
-	if (!gtx ||
-		gtx->state.status == GTXAborted || gtx->state.status == GTXCommitted)
-	{
-		goto reply;
-	}
+	if (!gtx)
+		goto reply_2a;
 
 	/*
 	 * Some parts of various papers use proposal term here, some
@@ -2823,39 +2818,26 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 	if (term_cmp(msg->term, gtx->state.proposal) >= 0)
 	{
 		GlobalTxStatus new_status;
+		bool		done;
+		char	   *sstate;
+		MemoryContext oldcontext = CurrentMemoryContext;
 
 		new_status = msg->type == MTReq_Precommit ?
 			GTXPreCommitted : GTXPreAborted;
 
-		/*
-		 * voting state might be in PREPARE as well as in
-		 * gtx_proposals
-		 */
-		if (gtx->prepared)
-		{
-			bool		done;
-			char	   *sstate;
-			MemoryContext oldcontext = CurrentMemoryContext;
 
-			sstate = serialize_gtx_state(new_status,
-										 msg->term,
-										 msg->term);
-			StartTransactionCommand();
-			done = SetPreparedTransactionState(gtx->gid, sstate,
-											   false);
-			CommitTransactionCommand();
-			/* transaction knocked down old ctx*/
-			MemoryContextSwitchTo(oldcontext);
+		sstate = serialize_gtx_state(new_status,
+									 msg->term,
+									 msg->term);
+		StartTransactionCommand();
+		done = SetPreparedTransactionState(gtx->gid, sstate,
+										   false);
+		if (!done)
+			Assert(false);
+		CommitTransactionCommand();
+		/* transaction knocked down old ctx*/
+		MemoryContextSwitchTo(oldcontext);
 
-			if (!done)
-				Assert(false);
-		}
-		else
-		{
-			Assert(gtx->in_table);
-			GlobalTxSaveInTable(gtx->gid, gtx->coordinator_end_lsn,
-								new_status, msg->term, msg->term);
-		}
 		gtx->state.proposal = msg->term;
 		gtx->state.accepted = msg->term;
 		gtx->state.status = new_status;
@@ -2864,8 +2846,9 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		resp.status = gtx->state.status;
 		resp.accepted_term = msg->term;
 	}
+	GlobalTxRelease(gtx);
 
-reply:
+reply_2a:
 	mtm_log(StatusRequest, "replying to 2a from node %d with %s",
 			dest_node_id,
 			MtmMesageToString((MtmMessage *) &resp));
@@ -2873,8 +2856,6 @@ reply:
 	dmq_push_buffer(dest_id, "txresp", packed_msg->data,
 					packed_msg->len);
 
-	if (gtx)
-		GlobalTxRelease(gtx);
 }
 
 /*
@@ -2924,18 +2905,9 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
 
-				gtx = GlobalTxAcquire(msg->gid, false, NULL);
-				/*
-				 * finish iff 1) we have PREPARE 2) but we don't have in_table
-				 * entry -- c.f. PREPARE handling why finishing xact while
-				 * gtx_proposals entry exists is unsafe
-				 */
-				if ((!gtx || !gtx->prepared) || (gtx->in_table))
-				{
-					if (gtx)
-						GlobalTxRelease(gtx);
+				gtx = GlobalTxAcquire(msg->gid, false);
+				if (!gtx)
 					continue;
-				}
 
 				StartTransactionCommand();
 				FinishPreparedTransaction(gtx->gid,

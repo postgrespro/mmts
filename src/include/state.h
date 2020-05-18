@@ -22,6 +22,13 @@
  * remove anyone else) when campaigning for new generations; thus only node
  * itself decides when it is recovered enough to force others wait for it,
  * which simplifies reasoning who should be next gen members.
+ *
+ * Another reason for minority gens existence is usage of generations to
+ * directly abort transactions when we know they can't ever be prepared; this
+ * allows to participate in normal transaction resolution iff node has
+ * PREPARE. For that to work, we must be sure live connectivity clique forming
+ * majority eventually forms its generation regardless of recovery process.
+ * c.f. handle_1a for details.
  */
 typedef struct MtmGeneration
 {

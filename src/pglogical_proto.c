@@ -823,9 +823,9 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 	LWLockRelease(Mtm->lock);
 
 	mtm_log(ProtoTraceMode,
-			"walsender starts in %s mode to node %d",
-			hooks_data->is_recovery ? "recovery" : "normal",
-			hooks_data->receiver_node_id);
+			"walsender to node %d starts in %s mode",
+			hooks_data->receiver_node_id,
+			hooks_data->is_recovery ? "recovery" : "normal");
 }
 
 static void
@@ -840,7 +840,7 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs *args)
 	BIT_CLEAR(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
 	LWLockRelease(Mtm->lock);
 
-	mtm_log(ProtoTraceMode, "Walsender to node %d exiting",
+	mtm_log(ProtoTraceMode, "walsender to node %d exits",
 			hooks_data->receiver_node_id);
 	hooks_data->receiver_node_id = -1;
 }
@@ -849,6 +849,8 @@ MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs *args)
  * Filter transactions which should be replicated to other nodes.
  * This filter is applied at sender side (WAL sender).
  * Final filtering is also done at destination side by MtmFilterTransaction function.
+ *
+ * Returns true if xact is sent, contrary to the pg_decode_origin_filter, ooh.
  */
 static bool
 MtmReplicationTxnFilterHook(struct PGLogicalTxnFilterArgs *args)

@@ -53,46 +53,14 @@ typedef struct
 typedef struct GlobalTx
 {
 	char		gid[GIDSIZE];
-	/*
-	 * end_lsn of PREPARE record if this is my xact, origin_lsn if someone
-	 * else'. We carry it with resolving requests to avoid double voting for
-	 * the same xact.
-	 */
 	XLogRecPtr	coordinator_end_lsn;
 	BackendId	acquired_by;
 	/* paxos voting state for this xact */
 	GTxState	state;
-	/*
-	 * True if we have actually PREPAREd the transaction. We might be
-	 * requested to participate in resolving before PREPARE is applied; then
-	 * this is false and voting state is persisted in gtx_proposals table
-	 * instead of prepare's state_3pc.
-	 *
-	 * We must participate in resolving before PREPARE is eaten as otherwise
-	 * resolving and recovery might deadlock each other, at least with >= 5
-	 * nodes. e.g.
-	 * - 1 prepares T1 on 1, 2, 3
-	 * - 4 prepares conflicting T2 on 4, 5
-	 * - Everyone fails, and only 2, 3, 5 go up. They can't recover without
-	 *   xacts first because T1 and T2 conflict.
-	 * There was an idea of using generations to unconditionally abort one
-	 * of them (T2 in the example above), but it has never made its way fully.
-	 *
-	 * Current implementation has its pain points (issues of migrating voting
-	 * state from gtx_proposals to PREPARE are very unpleasant), but OTOH it
-	 * provides total separation between recovery and resolving (paxos) logic.
-	 */
+	/* transient thing used to rm shmem entry on error */
 	bool		prepared;
-	/*
-	 * True if entry in gtx_proposals exists. You might think gtx.prepared ==
-	 * !gtx.in_table, and generally this is so, but not always: we can't
-	 * migrate existing in table state to PREPARE and remove in table entry
-	 * atomically -- c.f. PREPARE handling in apply. The flag helps to clear
-	 * this mess.
-	 */
-	bool		in_table;
 
-	/* resolver things */
+	/* resolver corner */
 	bool		orphaned;	/* Indication for resolver that current tx needs
 							 * to be picked up. Comes from a failed backend or
 							 * a disabled node. */
@@ -116,7 +84,7 @@ extern gtx_shared_data *gtx_shared;
 
 void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
-GlobalTx *GlobalTxAcquire(const char *gid, bool create, bool *is_new);
+GlobalTx *GlobalTxAcquire(const char *gid, bool create);
 GlobalTx *GetMyGlobalTx(void);
 void GlobalTxRelease(GlobalTx *gtx);
 void GlobalTxAtExit(int code, Datum arg);
