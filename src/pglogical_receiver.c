@@ -146,6 +146,11 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 	replybuf[len] = 0;
 	len += 1;
 
+	/* it's a shame it can be 0/0 */
+	if (output_flushed_lsn != InvalidXLogRecPtr)
+		mtm_log(MtmReceiverFeedback, "acking flush of LSN %X/%X",
+				(uint32) (output_flushed_lsn >> 32),
+				(uint32) output_flushed_lsn);
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
 		ereport(LOG, (MTM_ERRMSG("%s: could not send feedback packet: %s",
@@ -877,8 +882,8 @@ pglogical_receiver_main(Datum main_arg)
 				hdr_len += 8;	/* sendTime */
 
 				/*
-				 * ereport(LOG, (MTM_ERRMSG("%s: receive message %c length
-				 * %d", MyBgworkerEntry->bgw_name, copybuf[hdr_len], rc - hdr_len)));
+				 * mtm_log(LOG, "receive message %c length %d",
+				 *		copybuf[hdr_len], rc - hdr_len);
 				 */
 
 				Assert(rc >= hdr_len);
