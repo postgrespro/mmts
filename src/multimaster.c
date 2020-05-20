@@ -134,6 +134,7 @@ int			MtmHeartbeatSendTimeout;
 int			MtmHeartbeatRecvTimeout;
 char	   *MtmRefereeConnStr;
 bool		MtmBreakConnection;
+bool		MtmWaitPeerCommits;
 
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
@@ -528,6 +529,21 @@ _PG_init(void)
 							 NULL,
 							 NULL
 		);
+
+
+	DefineCustomBoolVariable(
+							 "multimaster.wait_peer_commits",
+							 "Wait until peers confirm commit of the transaction before the command returns a \"success\" to the client.",
+							 NULL,
+							 &MtmWaitPeerCommits,
+							 true,
+							 PGC_USERSET,
+							 0,
+							 NULL,
+							 NULL,
+							 NULL
+		);
+
 
 	// MtmDeadlockDetectorInit(MTM_MAX_NODES);
 

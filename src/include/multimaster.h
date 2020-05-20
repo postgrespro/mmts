@@ -219,6 +219,7 @@ extern char *MtmRefereeConnStr;
 #define IS_REFEREE_ENABLED() (MtmRefereeConnStr && *MtmRefereeConnStr)
 extern int	MtmMaxWorkers;
 extern bool MtmBreakConnection;
+extern bool MtmWaitPeerCommits;
 
 extern void MtmSleep(int64 interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);

@@ -47,6 +47,7 @@ typedef struct
 /*
  * Response to 2A msg by apply worker or by monitor (during resolving).
  * This could be named just 2B, ha.
+ * It is also abused for COMMIT PREPARED ack (with .status = GTXCommitted).
  */
 typedef struct
 {

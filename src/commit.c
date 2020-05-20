@@ -384,7 +384,7 @@ MtmTwoPhaseCommit(void)
 	int			n_messages;
 	int			i;
 	int 		nvotes;
-	nodemask_t	success_cohort;
+	nodemask_t	pc_success_cohort;
 	MtmGeneration xact_gen;
 
 	if (!MtmTx.contains_ddl && !MtmTx.contains_dml)
@@ -572,7 +572,7 @@ MtmTwoPhaseCommit(void)
 
 		/* check ballots in answers */
 		nvotes = 1; /* myself */
-		success_cohort = 0;
+		pc_success_cohort = 0;
 		for (i = 0; i < n_messages; i++)
 		{
 			if (term_cmp(twoa_messages[i]->accepted_term,
@@ -580,7 +580,7 @@ MtmTwoPhaseCommit(void)
 				twoa_messages[i]->status == GTXPreCommitted)
 			{
 				nvotes++;
-				BIT_SET(success_cohort, twoa_messages[i]->node_id);
+				BIT_SET(pc_success_cohort, twoa_messages[i]->node_id - 1);
 				continue;
 			}
 			ereport(WARNING,
@@ -611,8 +611,10 @@ MtmTwoPhaseCommit(void)
 
 			failed_cohort = cohort;
 			for (i = 0; i < MTM_MAX_NODES; i++)
-				if (BIT_CHECK(success_cohort, i))
+			{
+				if (BIT_CHECK(pc_success_cohort, i))
 					BIT_CLEAR(failed_cohort, i);
+			}
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("[multimaster] failed to collect precommit acks or precommit transaction %s at nodes %s due to network error or non-first term",
@@ -629,9 +631,45 @@ precommit_tour_done:
 		GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
 
-		// /* XXX: make this conditional */
-		// gather(participants, (MtmMessage **) messages, NULL, &n_messages, false);
+		/*
+		 * Optionally wait for commit ack
+		 */
+		if (!MtmWaitPeerCommits)
+			goto commit_tour_done;
 
+		/* abusing both message type and gather hook is slightly dubious */
+		ret = gather(pc_success_cohort,
+					 (MtmMessage **) twoa_messages, NULL, &n_messages,
+					 Paxos2AGatherHook, PointerGetDatum(mtm_commit_state.gid),
+					 NULL, xact_gen.num);
+
+		if (!ret)
+		{
+			MtmGeneration new_gen = MtmGetCurrentGen(false);
+			ereport(WARNING,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("[multimaster] failed to collect commit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+							mtm_commit_state.gid,
+							xact_gen.num,
+							maskToString(xact_gen.members),
+							new_gen.num,
+							maskToString(new_gen.members))));
+		}
+		else if (n_messages != popcount(pc_success_cohort))
+		{
+			nodemask_t failed_cohort = pc_success_cohort;
+			for (i = 0; i < n_messages; i++)
+			{
+				BIT_CLEAR(failed_cohort, twoa_messages[i]->node_id - 1);
+			}
+			ereport(WARNING,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("[multimaster] failed to collect commit acks of transaction %s at nodes %s due to network error",
+							mtm_commit_state.gid,
+							maskToString(failed_cohort))));
+		}
+
+commit_tour_done:
 		dmq_stream_unsubscribe(mtm_commit_state.stream_name);
 		mtm_commit_state.subscribed = false;
 		mtm_log(MtmTxTrace, "%s unsubscribed for %s",

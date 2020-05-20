@@ -912,7 +912,7 @@ mtm_send_prepare_reply(TransactionId xid, int dst_node_id,
  * Send response to coordinator after paxos 2a msg.
  * The same stream name as in mtm_send_prepare_reply is used to make
  * coordinators life eaiser.
- * Xact finish can also be sent from here once we get it back.
+ * COMMIT PREPARED ack is also sent from here.
  */
 static void
 mtm_send_2a_reply(char *gid, GlobalTxStatus status,
@@ -1312,10 +1312,10 @@ process_remote_commit(StringInfo in,
 				/* restore ctx after CommitTransaction */
 				MemoryContextSwitchTo(MtmApplyContext);
 
-				// if (receiver_ctx->parallel_allowed)
-				// {
-				// 	mtm_send_gid_reply(gtx, origin_node);
-				// }
+				/* send CP ack */
+				if (rwctx->mode == REPLMODE_NORMAL)
+					mtm_send_2a_reply(gid, GTXCommitted,
+									  InvalidGTxTerm, origin_node);
 
 				break;
 			}
