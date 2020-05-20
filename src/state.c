@@ -2864,18 +2864,19 @@ reply_2a:
  * the mem context to get back into after commits.
  */
 static void
-check_status_requests(MtmConfig *mtm_cfg)
+check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 {
 	int8 sender_mask_pos;
 	StringInfoData packed_msg;
 	bool		wait;
 
-	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedMask(false), &wait))
+	if (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedMask(false), &wait))
 	{
 		MtmMessage *raw_msg = MtmMessageUnpack(&packed_msg);
 		int			sender_node_id;
 		int			dest_id;
 
+		*job_pending = true; /* probably there are more messages */
 		sender_node_id = sender_mask_pos + 1;
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
@@ -2907,7 +2908,7 @@ check_status_requests(MtmConfig *mtm_cfg)
 
 				gtx = GlobalTxAcquire(msg->gid, false);
 				if (!gtx)
-					continue;
+					return;
 
 				StartTransactionCommand();
 				FinishPreparedTransaction(gtx->gid,
@@ -2933,6 +2934,8 @@ check_status_requests(MtmConfig *mtm_cfg)
 			Assert(false);
 		}
 	}
+	else if (sender_mask_pos != -1)
+		*job_pending = true;
 }
 
 
@@ -3177,6 +3180,7 @@ MtmMonitor(Datum arg)
 	MemoryContext mon_loop_ctx = AllocSetContextCreate(TopMemoryContext,
 													   "MonitorContext",
 													   ALLOCSET_DEFAULT_SIZES);
+	bool	job_pending;
 
 	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
 
@@ -3345,6 +3349,7 @@ MtmMonitor(Datum arg)
 		int			i;
 		pid_t		pid;
 
+		job_pending = false;
 		CHECK_FOR_INTERRUPTS();
 
 		if (ConfigReloadPending)
@@ -3432,19 +3437,21 @@ MtmMonitor(Datum arg)
 		/* reset once per monitor loop, mainly for messages pack/unpack */
 		MemoryContextReset(mon_loop_ctx);
 		MemoryContextSwitchTo(mon_loop_ctx);
-		check_status_requests(mtm_cfg);
+		check_status_requests(mtm_cfg, &job_pending);
 		MemoryContextSwitchTo(TopMemoryContext);
 
-		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   1000, PG_WAIT_EXTENSION);
+		if (!job_pending)
+		{
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+						   1000, PG_WAIT_EXTENSION);
 
-		/* Emergency bailout if postmaster has died */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
+			/* Emergency bailout if postmaster has died */
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
 
-		if (rc & WL_LATCH_SET)
-			ResetLatch(MyLatch);
-
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+		}
 	}
 }
