@@ -173,8 +173,8 @@ mtm_commit_cleanup(int status, Datum arg)
 			 * As a sort of compromise, we could instead add the 'this is my
 			 * orphaned prepare => directly abort it' logic to resolver.
 			 */
-			if (term_cmp(mtm_commit_state.gtx->state.accepted,
-						 InvalidGTxTerm) == 0)
+			if ((term_cmp(mtm_commit_state.gtx->state.accepted,
+						  InvalidGTxTerm) == 0) && !MtmVolksWagenMode)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_INTERNAL_ERROR),
@@ -182,7 +182,7 @@ mtm_commit_cleanup(int status, Datum arg)
 								mtm_commit_state.gid)));
 
 			}
-			else
+			else if (!MtmVolksWagenMode)
 			{
 				ereport(WARNING,
 						(errcode(ERRCODE_TRANSACTION_RESOLUTION_UNKNOWN),
@@ -700,7 +700,8 @@ MtmExplicitPrepare(char *gid)
 	int			n_messages;
 	int			i;
 
-	elog(ERROR, "mtm doesn't support user 2PC");
+	EndTransactionBlock(false);
+	elog(ERROR, "multimaster doesn't support two-phase commit");
 
 	/*
 	 * GetTopTransactionId() will fail for aborted tx, but we still need to
@@ -774,7 +775,10 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 	PreventInTransactionBlock(isTopLevel,
 							  isCommit ? "COMMIT PREPARED" : "ROLLBACK PREPARED");
 
-	elog(ERROR, "mtm doesn't support user 2PC");
+	/* leave loophole for manual admin xact finalization */
+	if (strcmp(application_name, MULTIMASTER_ADMIN) == 0)
+		return;
+	elog(ERROR, "multimaster doesn't support two-phase commit");
 
 	if (isCommit)
 	{

@@ -36,8 +36,6 @@ submake-regress:
 ifndef MTM_ALL
 PROVE_TESTS=t/0000_precommit.pl t/000_regress.pl t/000_truncate.pl t/000_deadlock.pl t/001_basic_recovery.pl t/004_recovery.pl t/008_init.pl
 endif
-# regress tests are not fixed yet
-PROVE_TESTS=t/0000_precommit.pl t/000_truncate.pl t/000_deadlock.pl t/001_basic_recovery.pl t/004_recovery.pl t/008_init.pl
 check: temp-install submake-regress
 	$(prove_check)
 

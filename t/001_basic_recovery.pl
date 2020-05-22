@@ -1,5 +1,5 @@
 # Basic recovery: some inserts, get node down, some inserts, get node up, some
-# inserts.
+# inserts. There is no failures with concurrent load, so an easy variant.
 
 use strict;
 use warnings;

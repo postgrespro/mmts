@@ -66,7 +66,7 @@
 *** contrib/mmts/../../src/test/regress/expected/create_index.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/create_index.out	CENSORED
 ***************
-*** 2655,2685 ****
+*** 2618,2648 ****
   CREATE TABLE concur_heap (f1 text, f2 text);
   -- empty table
   CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
@@ -98,7 +98,7 @@
   COMMIT;
   -- But you can do a regular index build in a transaction
   BEGIN;
---- 2655,2687 ----
+--- 2618,2650 ----
   CREATE TABLE concur_heap (f1 text, f2 text);
   -- empty table
   CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
@@ -133,7 +133,7 @@
   -- But you can do a regular index build in a transaction
   BEGIN;
 ***************
-*** 2688,2695 ****
+*** 2651,2658 ****
   -- Failed builds are left invalid by VACUUM FULL, fixed by REINDEX
   VACUUM FULL concur_heap;
   REINDEX TABLE concur_heap;
@@ -142,9 +142,9 @@
   DELETE FROM concur_heap WHERE f1 = 'b';
   VACUUM FULL concur_heap;
   \d concur_heap
---- 2690,2695 ----
+--- 2653,2658 ----
 ***************
-*** 2699,2710 ****
+*** 2662,2673 ****
    f1     | text |           |          | 
    f2     | text |           |          | 
   Indexes:
@@ -157,9 +157,9 @@
       "std_index" btree (f2)
   
   REINDEX TABLE concur_heap;
---- 2699,2704 ----
+--- 2662,2667 ----
 ***************
-*** 2715,2726 ****
+*** 2678,2710 ****
    f1     | text |           |          | 
    f2     | text |           |          | 
   Indexes:
@@ -171,79 +171,59 @@
 -     "concur_index5" btree (f2) WHERE f1 = 'x'::text
       "std_index" btree (f2)
   
-  -- Temporary tables with concurrent builds and on-commit actions
---- 2709,2714 ----
-***************
-*** 2730,2736 ****
---- 2718,2726 ----
-    ON COMMIT PRESERVE ROWS;
-  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
-  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
-+ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
-  DROP INDEX CONCURRENTLY concur_temp_ind;
-+ ERROR:  index "concur_temp_ind" does not exist
-  DROP TABLE concur_temp;
-  -- ON COMMIT DROP
+  --
+  -- Try some concurrent index drops
+  --
+  DROP INDEX CONCURRENTLY "concur_index2";				-- works
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
+! NOTICE:  index "concur_index2" does not exist, skipping
+  -- failures
+  DROP INDEX CONCURRENTLY "concur_index2", "concur_index3";
+! ERROR:  DROP INDEX CONCURRENTLY does not support dropping multiple objects
   BEGIN;
-***************
-*** 2739,2757 ****
-  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
-  -- Fails when running in a transaction.
-  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
-! ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
-  COMMIT;
-  -- ON COMMIT DELETE ROWS
-  CREATE TEMP TABLE concur_temp (f1 int, f2 text)
-    ON COMMIT DELETE ROWS;
-  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
-  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
-  DROP INDEX CONCURRENTLY concur_temp_ind;
-  DROP TABLE concur_temp;
-  --
-  -- Try some concurrent index drops
-  --
-  DROP INDEX CONCURRENTLY "concur_index2";				-- works
-  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
-  NOTICE:  index "concur_index2" does not exist, skipping
-  -- failures
---- 2729,2750 ----
-  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
-  -- Fails when running in a transaction.
-  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
-! ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
-  COMMIT;
-  -- ON COMMIT DELETE ROWS
-  CREATE TEMP TABLE concur_temp (f1 int, f2 text)
-    ON COMMIT DELETE ROWS;
-  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
-  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
-+ ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
-  DROP INDEX CONCURRENTLY concur_temp_ind;
-+ ERROR:  index "concur_temp_ind" does not exist
-  DROP TABLE concur_temp;
-  --
-  -- Try some concurrent index drops
-  --
-  DROP INDEX CONCURRENTLY "concur_index2";				-- works
-+ ERROR:  index "concur_index2" does not exist
-  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
-  NOTICE:  index "concur_index2" does not exist, skipping
-  -- failures
-***************
-*** 2763,2772 ****
---- 2756,2770 ----
+  DROP INDEX CONCURRENTLY "concur_index5";
+! ERROR:  DROP INDEX CONCURRENTLY cannot run inside a transaction block
   ROLLBACK;
   -- successes
   DROP INDEX CONCURRENTLY IF EXISTS "concur_index3";
-+ NOTICE:  index "concur_index3" does not exist, skipping
   DROP INDEX CONCURRENTLY "concur_index4";
-+ ERROR:  index "concur_index4" does not exist
   DROP INDEX CONCURRENTLY "concur_index5";
-+ ERROR:  index "concur_index5" does not exist
   DROP INDEX CONCURRENTLY "concur_index1";
-+ ERROR:  index "concur_index1" does not exist
   DROP INDEX CONCURRENTLY "concur_heap_expr_idx";
-+ ERROR:  index "concur_heap_expr_idx" does not exist
+  \d concur_heap
+             Table "public.concur_heap"
+   Column | Type | Collation | Nullable | Default 
+--- 2672,2704 ----
+   f1     | text |           |          | 
+   f2     | text |           |          | 
+  Indexes:
+      "std_index" btree (f2)
+  
+  --
+  -- Try some concurrent index drops
+  --
+  DROP INDEX CONCURRENTLY "concur_index2";				-- works
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index2";		-- notice
+! ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  -- failures
+  DROP INDEX CONCURRENTLY "concur_index2", "concur_index3";
+! ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  BEGIN;
+  DROP INDEX CONCURRENTLY "concur_index5";
+! ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  ROLLBACK;
+  -- successes
+  DROP INDEX CONCURRENTLY IF EXISTS "concur_index3";
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY "concur_index4";
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY "concur_index5";
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY "concur_index1";
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
+  DROP INDEX CONCURRENTLY "concur_heap_expr_idx";
++ ERROR:  multimaster doesn't support DROP INDEX CONCURRENTLY
   \d concur_heap
              Table "public.concur_heap"
    Column | Type | Collation | Nullable | Default 
@@ -386,18 +366,8 @@
   pg_transform|t
 --- 157,162 ----
 ***************
-*** 175,180 ****
---- 178,184 ----
-  radix_text_tbl|t
-  ramp|f
-  real_city|f
-+ referee_decision|t
-  road|t
-  shighway|t
-  slow_emp4000|f
-***************
 *** 187,192 ****
---- 191,197 ----
+--- 190,196 ----
   sql_sizing_profiles|f
   stud_emp|f
   student|f
@@ -405,6 +375,254 @@
   tbl_include_box|t
   tbl_include_box_pk|f
   tbl_include_pk|t
+
+======================================================================
+
+*** contrib/mmts/../../src/test/regress/expected/prepared_xacts_1.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/prepared_xacts.out	CENSORED
+***************
+*** 18,25 ****
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo1';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 18,24 ----
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo1';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 34,40 ****
+  
+  -- Test ROLLBACK PREPARED
+  ROLLBACK PREPARED 'foo1';
+! ERROR:  prepared transaction with identifier "foo1" does not exist
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 33,39 ----
+  
+  -- Test ROLLBACK PREPARED
+  ROLLBACK PREPARED 'foo1';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 57,64 ****
+  (2 rows)
+  
+  PREPARE TRANSACTION 'foo2';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 56,62 ----
+  (2 rows)
+  
+  PREPARE TRANSACTION 'foo2';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 66,72 ****
+  (1 row)
+  
+  COMMIT PREPARED 'foo2';
+! ERROR:  prepared transaction with identifier "foo2" does not exist
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 64,70 ----
+  (1 row)
+  
+  COMMIT PREPARED 'foo2';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 83,90 ****
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo3';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+--- 81,87 ----
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo3';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+***************
+*** 94,101 ****
+  INSERT INTO pxtest1 VALUES ('fff');
+  -- This should fail, because the gid foo3 is already in use
+  PREPARE TRANSACTION 'foo3';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 91,97 ----
+  INSERT INTO pxtest1 VALUES ('fff');
+  -- This should fail, because the gid foo3 is already in use
+  PREPARE TRANSACTION 'foo3';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 103,109 ****
+  (1 row)
+  
+  ROLLBACK PREPARED 'foo3';
+! ERROR:  prepared transaction with identifier "foo3" does not exist
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+--- 99,105 ----
+  (1 row)
+  
+  ROLLBACK PREPARED 'foo3';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest1;
+   foobar 
+  --------
+***************
+*** 120,127 ****
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo4';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+--- 116,122 ----
+  (1 row)
+  
+  PREPARE TRANSACTION 'foo4';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+***************
+*** 137,151 ****
+  -- This should fail, because the two transactions have a write-skew anomaly
+  INSERT INTO pxtest1 VALUES ('fff');
+  PREPARE TRANSACTION 'foo5';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+  (0 rows)
+  
+  ROLLBACK PREPARED 'foo4';
+! ERROR:  prepared transaction with identifier "foo4" does not exist
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+--- 132,145 ----
+  -- This should fail, because the two transactions have a write-skew anomaly
+  INSERT INTO pxtest1 VALUES ('fff');
+  PREPARE TRANSACTION 'foo5';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+  (0 rows)
+  
+  ROLLBACK PREPARED 'foo4';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT gid FROM pg_prepared_xacts;
+   gid 
+  -----
+***************
+*** 163,170 ****
+    SAVEPOINT b;
+    INSERT INTO pxtest2 VALUES (3);
+  PREPARE TRANSACTION 'regress-one';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  CREATE TABLE pxtest3(fff int);
+  -- Test shared invalidation
+  BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+--- 157,163 ----
+    SAVEPOINT b;
+    INSERT INTO pxtest2 VALUES (3);
+  PREPARE TRANSACTION 'regress-one';
+! ERROR:  multimaster doesn't support two-phase commit
+  CREATE TABLE pxtest3(fff int);
+  -- Test shared invalidation
+  BEGIN TRANSACTION ISOLATION LEVEL SERIALIZABLE;
+***************
+*** 181,188 ****
+  (1 row)
+  
+  PREPARE TRANSACTION 'regress-two';
+! ERROR:  prepared transactions are disabled
+! HINT:  Set max_prepared_transactions to a nonzero value.
+  -- No such cursor
+  FETCH 1 FROM foo;
+  ERROR:  cursor "foo" does not exist
+--- 174,180 ----
+  (1 row)
+  
+  PREPARE TRANSACTION 'regress-two';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- No such cursor
+  FETCH 1 FROM foo;
+  ERROR:  cursor "foo" does not exist
+***************
+*** 215,221 ****
+  rollback;
+  -- Commit table creation
+  COMMIT PREPARED 'regress-one';
+! ERROR:  prepared transaction with identifier "regress-one" does not exist
+  \d pxtest2
+  SELECT * FROM pxtest2;
+  ERROR:  relation "pxtest2" does not exist
+--- 207,213 ----
+  rollback;
+  -- Commit table creation
+  COMMIT PREPARED 'regress-one';
+! ERROR:  multimaster doesn't support two-phase commit
+  \d pxtest2
+  SELECT * FROM pxtest2;
+  ERROR:  relation "pxtest2" does not exist
+***************
+*** 229,235 ****
+  
+  -- Commit table drop
+  COMMIT PREPARED 'regress-two';
+! ERROR:  prepared transaction with identifier "regress-two" does not exist
+  SELECT * FROM pxtest3;
+   fff 
+  -----
+--- 221,227 ----
+  
+  -- Commit table drop
+  COMMIT PREPARED 'regress-two';
+! ERROR:  multimaster doesn't support two-phase commit
+  SELECT * FROM pxtest3;
+   fff 
+  -----
 
 ======================================================================
 
@@ -551,6 +769,20 @@
       ih.thepath,
       interpt_pp(ih.thepath, r.thepath) AS exit
 ***************
+*** 1297,1302 ****
+--- 1306,1316 ----
+     FROM view_base_table
+    GROUP BY view_base_table.key
+   HAVING (length((view_base_table.data)::text) > 0);
++ latest_syncpoints| SELECT DISTINCT ON (syncpoints.node_id) syncpoints.node_id,
++     syncpoints.origin_lsn,
++     syncpoints.local_lsn
++    FROM mtm.syncpoints
++   ORDER BY syncpoints.node_id, syncpoints.origin_lsn DESC;
+  mvtest_tv| SELECT mvtest_t.type,
+      sum(mvtest_t.amt) AS totamt
+     FROM mvtest_t
+***************
 *** 1440,1458 ****
       p.parameter_types,
       p.from_sql
@@ -571,7 +803,7 @@
       (pg_class c
        JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
     WHERE (c.oid IN ( SELECT pg_get_publication_tables.relid
---- 1449,1477 ----
+--- 1454,1482 ----
       p.parameter_types,
       p.from_sql
      FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql);
@@ -610,7 +842,7 @@
     WHERE (l.objsubid = 0)
   UNION ALL
    SELECT l.objoid,
---- 1661,1667 ----
+--- 1666,1672 ----
       l.provider,
       l.label
      FROM (pg_seclabel l
@@ -627,7 +859,7 @@
   UNION ALL
    SELECT l.objoid,
       l.classoid,
---- 1673,1679 ----
+--- 1678,1684 ----
       l.provider,
       l.label
      FROM (pg_shseclabel l
@@ -644,7 +876,7 @@
        LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
   pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
       pg_stat_all_indexes.indexrelid,
---- 1926,1932 ----
+--- 1931,1937 ----
       st.last_msg_receipt_time,
       st.latest_end_lsn,
       st.latest_end_time
@@ -654,7 +886,7 @@
       pg_stat_all_indexes.indexrelid,
 ***************
 *** 2217,2222 ****
---- 2236,2252 ----
+--- 2241,2257 ----
        JOIN pg_attribute a ON (((c.oid = a.attrelid) AND (a.attnum = s.staattnum))))
        LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
     WHERE ((NOT a.attisdropped) AND has_column_privilege(c.oid, a.attnum, 'select'::text) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
@@ -674,7 +906,7 @@
       pg_get_userbyid(c.relowner) AS tableowner,
 ***************
 *** 2360,2365 ****
---- 2390,2403 ----
+--- 2395,2408 ----
              FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot)), ( SELECT pg_control_snapshot.recent_snapshot
              FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot))) snap_id(snap_id)
     WHERE pg_snapshot_exists(snap_id.snap_id);
@@ -741,6 +973,126 @@
   (1 row)
   
   -- fail - name already exists
+
+======================================================================
+
+*** contrib/mmts/../../src/test/regress/expected/temp_1.out	CENSORED
+--- contrib/mmts/../../src/test/regress/results/temp.out	CENSORED
+***************
+*** 326,357 ****
+  create function pg_temp.twophase_func() returns void as
+    $$ select '2pc_func'::text $$ language sql;
+  prepare transaction 'twophase_func';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
+  -- Function drop
+  create function pg_temp.twophase_func() returns void as
+    $$ select '2pc_func'::text $$ language sql;
+  begin;
+  drop function pg_temp.twophase_func();
+  prepare transaction 'twophase_func';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
+  -- Operator creation
+  begin;
+  create operator pg_temp.@@ (leftarg = int4, rightarg = int4, procedure = int4mi);
+  prepare transaction 'twophase_operator';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary objects
+  -- These generate errors about temporary tables.
+  begin;
+  create type pg_temp.twophase_type as (a int);
+  prepare transaction 'twophase_type';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  begin;
+  create view pg_temp.twophase_view as select 1;
+  prepare transaction 'twophase_view';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  begin;
+  create sequence pg_temp.twophase_seq;
+  prepare transaction 'twophase_sequence';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  -- Temporary tables cannot be used with two-phase commit.
+  create temp table twophase_tab (a int);
+  begin;
+--- 326,357 ----
+  create function pg_temp.twophase_func() returns void as
+    $$ select '2pc_func'::text $$ language sql;
+  prepare transaction 'twophase_func';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- Function drop
+  create function pg_temp.twophase_func() returns void as
+    $$ select '2pc_func'::text $$ language sql;
+  begin;
+  drop function pg_temp.twophase_func();
+  prepare transaction 'twophase_func';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- Operator creation
+  begin;
+  create operator pg_temp.@@ (leftarg = int4, rightarg = int4, procedure = int4mi);
+  prepare transaction 'twophase_operator';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- These generate errors about temporary tables.
+  begin;
+  create type pg_temp.twophase_type as (a int);
+  prepare transaction 'twophase_type';
+! ERROR:  multimaster doesn't support two-phase commit
+  begin;
+  create view pg_temp.twophase_view as select 1;
+  prepare transaction 'twophase_view';
+! ERROR:  multimaster doesn't support two-phase commit
+  begin;
+  create sequence pg_temp.twophase_seq;
+  prepare transaction 'twophase_sequence';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- Temporary tables cannot be used with two-phase commit.
+  create temp table twophase_tab (a int);
+  begin;
+***************
+*** 361,379 ****
+  (0 rows)
+  
+  prepare transaction 'twophase_tab';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  begin;
+  insert into twophase_tab values (1);
+  prepare transaction 'twophase_tab';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  begin;
+  lock twophase_tab in access exclusive mode;
+  prepare transaction 'twophase_tab';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  begin;
+  drop table twophase_tab;
+  prepare transaction 'twophase_tab';
+! ERROR:  cannot PREPARE a transaction that has operated on temporary tables
+  -- Corner case: current_schema may create a temporary schema if namespace
+  -- creation is pending, so check after that.  First reset the connection
+  -- to remove the temporary namespace, and make sure that non-parallel plans
+--- 361,379 ----
+  (0 rows)
+  
+  prepare transaction 'twophase_tab';
+! ERROR:  multimaster doesn't support two-phase commit
+  begin;
+  insert into twophase_tab values (1);
+  prepare transaction 'twophase_tab';
+! ERROR:  multimaster doesn't support two-phase commit
+  begin;
+  lock twophase_tab in access exclusive mode;
+  prepare transaction 'twophase_tab';
+! ERROR:  multimaster doesn't support two-phase commit
+  begin;
+  drop table twophase_tab;
+  prepare transaction 'twophase_tab';
+! ERROR:  multimaster doesn't support two-phase commit
+  -- Corner case: current_schema may create a temporary schema if namespace
+  -- creation is pending, so check after that.  First reset the connection
+  -- to remove the temporary namespace, and make sure that non-parallel plans
+***************
+*** 390,392 ****
+--- 390,393 ----
+  (1 row)
+  
+  PREPARE TRANSACTION 'twophase_search';
++ ERROR:  multimaster doesn't support two-phase commit
 
 ======================================================================
 
