@@ -14,6 +14,25 @@
 #define MAX_NAME_LEN 30
 #define MULTIMASTER_BGW_RESTART_TIMEOUT BGW_NEVER_RESTART	/* seconds */
 
+typedef struct
+{
+	int			value;			/* 0 - not used; 1 - transaction; 2 - sync
+								 * point */
+	int			prev;
+	int			next;
+} txlelem_t;
+
+typedef struct
+{
+	txlelem_t  *store;
+	int			tail;
+	int			head;
+	int			size;
+	int			nelems;
+	LWLock		lock;
+	ConditionVariable syncpoint_cv;
+	ConditionVariable transaction_cv;
+} txlist_t;
 
 /*
  * Shared data of BgwPool
@@ -40,9 +59,6 @@ typedef struct
 	size_t		tail;
 	size_t		size;			/* Size of queue aligned to INT word */
 
-	/* Worker state */
-	size_t		active;	 /* number of busy workers */
-	size_t		pending; /* number of pending jobs in the queue */
 	bool		producerBlocked;
 
 	char		poolName[MAX_NAME_LEN];
@@ -56,12 +72,21 @@ typedef struct
 	/* Handlers of workers at the pool */
 	BackgroundWorkerHandle **bgwhandles;
 	pid_t		receiver_pid;
+
+	txlist_t	txlist;
 } BgwPool;
 
 
 extern void BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id);
-extern void BgwPoolExecute(BgwPool *pool, void *work, int size, MtmReceiverWorkerContext *ctx);
+extern void BgwPoolExecute(BgwPool *pool, void *work, int size, MtmReceiverWorkerContext *rwctx);
 extern void BgwPoolShutdown(BgwPool *poolDesc);
 extern void BgwPoolCancel(BgwPool *pool);
+
+extern int	txl_store(txlist_t *txlist, int value);
+extern void txl_remove(txlist_t *txlist, int txlist_pos);
+extern void txl_wait_syncpoint(txlist_t *txlist, int txlist_pos);
+extern void txl_wait_sphead(txlist_t *txlist, int txlist_pos);
+extern void txl_wait_txhead(txlist_t *txlist, int txlist_pos);
+extern void txl_wakeup_workers(txlist_t *txlist);
 
 #endif

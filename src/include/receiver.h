@@ -10,6 +10,8 @@ typedef enum
 	REPLMODE_NORMAL		/* pull only sender changes, apply in parallel */
 } MtmReplicationMode;
 
+#define BGW_POOL_BY_NODE_ID(node_id) (&Mtm->pools[(node_id) - 1])
+
 extern char const *const MtmReplicationModeMnem[];
 
 /* forward decl to avoid including global_tx.h */
@@ -25,6 +27,10 @@ typedef struct
 	MtmReplicationMode	mode;
 	/* allows to release gtx on ERROR in apply */
 	struct GlobalTx		*gtx;
+	/*
+	 * For parallel workers: position of current job in txlist.
+	 */
+	int					txlist_pos;
 } MtmReceiverWorkerContext;
 
 extern BackgroundWorkerHandle *MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid);

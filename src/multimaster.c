@@ -348,6 +348,13 @@ MtmSharedShmemStartup()
 			Mtm->peers[i].walsender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
 			Mtm->peers[i].trim_lsn = InvalidXLogRecPtr;
+
+			/*
+			 * XXX Assume that MaxBackends is the same at each node of
+			 * multimaster
+			 */
+			Mtm->pools[i].txlist.store = ShmemAlloc(sizeof(txlelem_t) * MaxBackends);
+			Mtm->pools[i].txlist.size = MaxBackends;
 		}
 
 		Mtm->walreceivers_mask = 0;
@@ -620,7 +627,9 @@ MtmAllApplyWorkersFinished()
 			continue;
 		}
 
-		ntasks = Mtm->pools[i].active + Mtm->pools[i].pending;
+		LWLockAcquire(&Mtm->pools[i].txlist.lock, LW_SHARED);
+		ntasks = Mtm->pools[0].txlist.nelems;
+		LWLockRelease(&Mtm->pools[i].txlist.lock);
 		LWLockRelease(&Mtm->pools[i].lock);
 
 		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
@@ -1585,8 +1594,8 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
 		MemSet(nulls, 0, sizeof(nulls));
 
 		values[0] = Int32GetDatum(Mtm->pools[i].nWorkers);
-		values[1] = Int32GetDatum(Mtm->pools[i].active);
-		values[2] = Int32GetDatum(Mtm->pools[i].pending);
+		values[1] = Int32GetDatum(Mtm->pools[i].txlist.nelems);
+		values[2] = Int32GetDatum(Mtm->pools[i].txlist.size);
 		values[3] = Int32GetDatum(Mtm->pools[i].size);
 		values[4] = Int32GetDatum(Mtm->pools[i].head);
 		values[5] = Int32GetDatum(Mtm->pools[i].tail);

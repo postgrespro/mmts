@@ -25,8 +25,11 @@
 #include "state.h"
 #include "logger.h"
 
-
-#define MSGLEN(sz)	(INTALIGN(sz) + INTALIGN(sizeof(MtmReceiverWorkerContext)) + sizeof(int))
+/*
+ * Store the size of tx body, position of it in the tx list and transaction
+ * body in the shared work queue.
+ */
+#define MSGLEN(sz)	(2 * sizeof(int) + MAXALIGN(sz))
 
 bool		MtmIsPoolWorker;
 bool		MtmIsLogicalReceiver;
@@ -36,6 +39,7 @@ int			MtmMaxWorkers;
 static char *queue = NULL;
 
 void		BgwPoolDynamicWorkerMainLoop(Datum arg);
+static void txl_clear(txlist_t *txlist);
 
 
 /*
@@ -70,8 +74,6 @@ BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id)
 	poolDesc->producerBlocked = false;
 	poolDesc->head = 0;
 	poolDesc->tail = 0;
-	poolDesc->active = 0;
-	poolDesc->pending = 0;
 	poolDesc->size = size;
 	poolDesc->lastDynamicWorkerStartTime = 0;
 	ConditionVariableInit(&poolDesc->syncpoint_cv);
@@ -82,6 +84,13 @@ BgwPoolStart(int sender_node_id, char *poolName, Oid db_id, Oid user_id)
 	poolDesc->receiver_pid = MyProcPid;
 	LWLockInitialize(&poolDesc->lock, LWLockNewTrancheId());
 	LWLockRegisterTranche(poolDesc->lock.tranche, "BGWPOOL_LWLOCK");
+
+	LWLockInitialize(&poolDesc->txlist.lock, LWLockNewTrancheId());
+	LWLockRegisterTranche(poolDesc->txlist.lock.tranche, "TXLIST_LWLOCK");
+	txl_clear(&poolDesc->txlist);
+	ConditionVariableInit(&poolDesc->txlist.syncpoint_cv);
+	ConditionVariableInit(&poolDesc->txlist.transaction_cv);
+
 }
 
 /*
@@ -106,9 +115,6 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
 	receiver_mtm_cfg_valid = false;
 }
-
-#define isLastWorkApplied(pool)	((pool->pending + pool->active <= 0) && \
-									(pool->head == pool->tail))
 
 static void
 BgwPoolBeforeShmemExit(int status, Datum arg)
@@ -140,7 +146,6 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 {
 	int			size;
 	void	   *work;
-	int			payload = INTALIGN(sizeof(MtmReceiverWorkerContext));
 	MtmReceiverWorkerContext rwctx;
 	static PortalData fakePortal;
 	dsm_segment *seg;
@@ -148,6 +153,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	MemSet(&rwctx, '\0', sizeof(MtmReceiverWorkerContext));
 	rwctx.sender_node_id = poolDesc->sender_node_id;
 	rwctx.mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
+	rwctx.txlist_pos = -1;
 	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(poolDesc));
 	TM->DetectGlobalDeadLockArg = PointerGetDatum(&rwctx.mode);
 
@@ -176,11 +182,6 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	pqsignal(SIGQUIT, die);
 	pqsignal(SIGTERM, BgwShutdownHandler);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
-
-	/* XXX: probably we should add static variable that signalizes that */
-	/* we are between pool->active += 1 and pool->active -= 1, so if */
-	/* we face an ERROR outside of PG_TRY we can decrement pool->active */
-	/* from on_shem_exit_hook */
 
 	BackgroundWorkerUnblockSignals();
 	BackgroundWorkerInitializeConnectionByOid(poolDesc->db_id, poolDesc->user_id, 0);
@@ -229,19 +230,17 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 		size = *(int *) &queue[poolDesc->head];
 		Assert(size < poolDesc->size);
 		work = palloc(size);
-		poolDesc->pending -= 1;
-		poolDesc->active += 1;
 
 		if (poolDesc->head + MSGLEN(size) > poolDesc->size)
 		{
-			rwctx = *(MtmReceiverWorkerContext *) &queue;
-			memcpy(work, &queue[payload], size);
-			poolDesc->head = payload + INTALIGN(size);
+			rwctx.txlist_pos = *((int *) queue);
+			memcpy(work, &queue[sizeof(int)], size);
+			poolDesc->head = MSGLEN(size) - sizeof(int);
 		}
 		else
 		{
-			memcpy(&rwctx, &queue[poolDesc->head + sizeof(int)], payload);
-			memcpy(work, &queue[poolDesc->head + sizeof(int) + payload], size);
+			rwctx.txlist_pos = *((int *) &queue[poolDesc->head + sizeof(int)]);
+			memcpy(work, &queue[poolDesc->head + 2 * sizeof(int)], size);
 			poolDesc->head += MSGLEN(size);
 		}
 
@@ -269,14 +268,6 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 
 		MtmExecutor(work, size, &rwctx);
 		pfree(work);
-
-		LWLockAcquire(&poolDesc->lock, LW_EXCLUSIVE);
-		poolDesc->active -= 1;
-
-		if (isLastWorkApplied(poolDesc))
-			ConditionVariableSignal(&poolDesc->syncpoint_cv);
-
-		LWLockRelease(&poolDesc->lock);
 	}
 
 	dsm_detach(seg);
@@ -331,19 +322,16 @@ BgwStartExtraWorker(BgwPool *poolDesc)
 /*
  * Blocking push of message (work size field + ctx + work) into the MTM
  * Executor queue. A circular buffer is used; receiver pushes the whole
- * message in one go and worker reads is out similarly. We never wrap messages
- * around the queue end, so max work size if half of the queue len -- larger
+ * message in one go and worker reads it out similarly. We never wrap messages
+ * around the queue end, so max work size is half of the queue len -- larger
  * jobs must go via file.
  *
  * After return from routine work and ctx buffers can be reused safely.
- *
- * XXX there is no need to pass MtmReceiverWorkerContext, it is historic
- * legacy. Left just in case we ever need this again...
  */
 void
-BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverWorkerContext *ctx)
+BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverWorkerContext *rwctx)
 {
-	int			payload = INTALIGN(sizeof(MtmReceiverWorkerContext));
+	int			txlist_pos;
 
 	Assert(poolDesc != NULL);
 	Assert(queue != NULL);
@@ -376,15 +364,23 @@ BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverWorkerContext
 		 * the end of buffer (tail < head) we can fit message only between
 		 * head and tail.
 		 */
-		if ((poolDesc->head <= poolDesc->tail &&
+		if (((poolDesc->head <= poolDesc->tail &&
 			 (poolDesc->size - poolDesc->tail >= MSGLEN(size) ||
-			  poolDesc->head >= size + payload)) ||
+			  poolDesc->head >= MSGLEN(size) - sizeof(int))) ||
 			(poolDesc->head > poolDesc->tail &&
-			 poolDesc->head - poolDesc->tail >= MSGLEN(size)))
+			 poolDesc->head - poolDesc->tail >= MSGLEN(size))) &&
+			/*
+			 * This should normally be always true: during normal work we can'
+			 * t get more than max_connections xacts because sender should
+			 * wait for us, and during recovery bgwpool is not used at all.
+			 * But there is no strict guarantee of course, and so better be
+			 * safe about transitions between these states.
+			 */
+			(poolDesc->txlist.nelems < poolDesc->txlist.size))
 		{
-			poolDesc->pending += 1;
+			txlist_pos = txl_store(&poolDesc->txlist, 1);
 
-			if (poolDesc->active + poolDesc->pending > poolDesc->nWorkers)
+			if (poolDesc->txlist.nelems > poolDesc->nWorkers)
 				BgwStartExtraWorker(poolDesc);
 
 			/*
@@ -396,15 +392,15 @@ BgwPoolExecute(BgwPool *poolDesc, void *work, int size, MtmReceiverWorkerContext
 
 			if (poolDesc->size - poolDesc->tail >= MSGLEN(size))
 			{
-				memcpy(&queue[poolDesc->tail + sizeof(int)], ctx, payload);
-				memcpy(&queue[poolDesc->tail + sizeof(int) + payload], work, size);
+				*((int *) &queue[poolDesc->tail + sizeof(int)]) = txlist_pos;
+				memcpy(&queue[poolDesc->tail + 2 * sizeof(int)], work, size);
 				poolDesc->tail += MSGLEN(size);
 			}
 			else
 			{
 				/* Message can't fit into the end of queue. */
-				memcpy(queue, ctx, payload);
-				memcpy(&queue[payload], work, size);
+				*((int *) queue) = txlist_pos;
+				memcpy(&queue[sizeof(int)], work, size);
 				poolDesc->tail = MSGLEN(size) - sizeof(int);
 			}
 
@@ -472,7 +468,11 @@ BgwPoolShutdown(BgwPool *poolDesc)
 	 * Clear all handlers because at the next iteration of the receiver
 	 * process will launch new pool of workers.
 	 */
+	poolDesc->nWorkers = 0;
+	poolDesc->producerBlocked = false;
 	memset(poolDesc->bgwhandles, 0, MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
+	txl_clear(&poolDesc->txlist);
+
 	elog(LOG, "Shutdown of the receiver workers pool. Pool name = %s",
 		 poolDesc->poolName);
 }
@@ -510,10 +510,251 @@ BgwPoolCancel(BgwPool *poolDesc)
 
 	/* The pool shared structures can be reused and we need to clean data */
 	poolDesc->nWorkers = 0;
-	poolDesc->active = 0;
-	poolDesc->pending = 0;
 	poolDesc->producerBlocked = false;
 	memset(poolDesc->bgwhandles, 0, MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
+	txl_clear(&poolDesc->txlist);
+
 	elog(LOG, "Cancel of the receiver workers pool. Pool name = %s",
 		 poolDesc->poolName);
+}
+
+int
+txl_store(txlist_t *txlist, int value)
+{
+	int			pos = 0;
+
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+
+	/* Search for an empty position */
+	while (txlist->store[pos].value != 0)
+	{
+		Assert(pos < txlist->size);
+		Assert(txlist->store[pos].prev == -1 || txlist->store[pos].prev != pos);
+		Assert(txlist->store[pos].next == -1 || txlist->store[pos].next != pos);
+		Assert(txlist->store[pos].prev == -1 || txlist->store[pos].prev != txlist->store[pos].next);
+		pos++;
+	}
+
+	txlist->store[pos].value = value;
+	txlist->store[pos].next = -1;
+	txlist->store[pos].prev = txlist->tail;
+	if (txlist->tail >= 0)
+		txlist->store[txlist->store[pos].prev].next = pos;
+	else
+		Assert(txlist->head == -1);
+
+	if (txlist->head == -1)
+		txlist->head = pos;
+
+	txlist->tail = pos;
+	txlist->nelems++;
+
+	Assert(txlist->nelems <= txlist->size);
+	Assert(txlist->store[pos].prev == -1 || txlist->store[pos].prev != pos);
+	Assert(txlist->store[pos].next == -1 || txlist->store[pos].next != pos);
+	Assert(txlist->store[pos].prev == -1 || txlist->store[pos].prev != txlist->store[pos].next);
+
+	LWLockRelease(&txlist->lock);
+
+	return pos;
+}
+
+void
+txl_remove(txlist_t *txlist, int txlist_pos)
+{
+	if (txlist_pos == -1)
+		/* Transaction is applied by the receiver itself. */
+		return;
+
+	Assert(txlist->store[txlist_pos].value > 0);
+
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+	if (txlist_pos != txlist->head)
+	{
+		int			ppos = txlist->store[txlist_pos].prev;
+		int			npos = txlist->store[txlist_pos].next;
+
+		Assert(ppos != -1);
+		txlist->store[ppos].next = npos;
+
+		if (npos != -1)
+			/* Element is not last */
+			txlist->store[npos].prev = ppos;
+
+		if (txlist_pos == txlist->tail)
+		{
+			txlist->tail = ppos;
+			Assert(txlist->store[ppos].next == -1);
+		}
+	}
+	else
+	{
+		/* Remove head element */
+		int			npos = txlist->store[txlist_pos].next;
+
+		txlist->head = npos;
+		if (npos != -1)
+			txlist->store[npos].prev = -1;
+		else
+			/* List will be empty */
+			txlist->tail = -1;
+	}
+
+	txlist->store[txlist_pos].value = 0;
+	txlist->store[txlist_pos].prev = -1;
+	txlist->store[txlist_pos].next = -1;
+	txlist->nelems--;
+
+	if (txlist->nelems > 0)
+		txl_wakeup_workers(txlist);
+
+	LWLockRelease(&txlist->lock);
+	Assert(txlist->nelems >= 0);
+}
+
+/*
+ * We can commit transaction if no one syncpoints is before.
+ */
+static bool
+can_commit(const txlist_t *txlist, int pos)
+{
+	int			prev = pos;
+
+	if (pos == -1)
+		return true;
+
+	while ((prev = txlist->store[prev].prev) != -1)
+	{
+		Assert(txlist->store[prev].prev == -1 || txlist->store[prev].prev != prev);
+		Assert(txlist->store[prev].next == -1 || txlist->store[prev].next != prev);
+		Assert(txlist->store[prev].prev == -1 || txlist->store[prev].prev != txlist->store[prev].next);
+		Assert(txlist->store[prev].value != 0);
+
+		if (txlist->store[prev].value == 2)
+			return false;
+	}
+
+	return true;
+}
+
+static void
+txl_clear(txlist_t *txlist)
+{
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+	memset(txlist->store, 0, txlist->size * sizeof(txlelem_t));
+	txlist->head = -1;
+	txlist->tail = -1;
+	txlist->nelems = 0;
+	LWLockRelease(&txlist->lock);
+}
+
+static bool
+txl_syncpoint_at_head(txlist_t *txlist)
+{
+	bool		is_sp;
+
+	if (txlist->head == -1)
+		is_sp = false;
+	else if (txlist->store[txlist->head].value == 2)
+		is_sp = true;
+	else
+		is_sp = false;
+
+	return is_sp;
+}
+
+/*
+ * Wait until there are no pending syncpoints before us.
+ *
+ * This was created to handle syncpoint processing in apply worker while
+ * preserving the strict barrier semantics: all xacts created before sp must
+ * be written before applied sp, all xacts created after sp must be written
+ * after applied sp. However, handling sp in workers is slightly cumbersome as
+ * progress is reported by main receiver; moreover, if one day we still decide
+ * to optimize this, we should avoid such waiting altogether: points 'we
+ * definitely applied all xacts up to origin lsn n at our LSN x' and 'we
+ * definitely have all origin's xacts since lsn n at >= our LSN y' would have
+ * different x and y, but that's fine.
+ */
+void
+txl_wait_syncpoint(txlist_t *txlist, int txlist_pos)
+{
+	Assert(txlist != NULL && txlist_pos >= 0);
+
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+
+	/* Wait until all synchronization points received before are committed. */
+	while (true)
+	{
+		if (can_commit(txlist, txlist_pos))
+		{
+			LWLockRelease(&txlist->lock);
+			break;
+		}
+
+		ConditionVariablePrepareToSleep(&txlist->transaction_cv);
+		LWLockRelease(&txlist->lock);
+
+		ConditionVariableSleep(&txlist->transaction_cv, PG_WAIT_EXTENSION);
+		LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+	}
+}
+
+void
+txl_wait_sphead(txlist_t *txlist, int txlist_pos)
+{
+	Assert(txlist_pos >= 0);
+
+	/*
+	 * Await for our pool workers to finish what they are currently doing.
+	 */
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+
+	for (;;)
+	{
+		if (txlist_pos == txlist->head)
+		{
+			LWLockRelease(&txlist->lock);
+			break;
+		}
+
+		ConditionVariablePrepareToSleep(&txlist->syncpoint_cv);
+		LWLockRelease(&txlist->lock);
+
+		ConditionVariableSleep(&txlist->syncpoint_cv, PG_WAIT_EXTENSION);
+		LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+	}
+}
+
+void
+txl_wait_txhead(txlist_t *txlist, int txlist_pos)
+{
+	/*
+	 * Await for our pool workers to finish what they are currently doing.
+	 */
+	LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+
+	for (;;)
+	{
+		if (txlist_pos == txlist->head)
+		{
+			LWLockRelease(&txlist->lock);
+			break;
+		}
+
+		ConditionVariablePrepareToSleep(&txlist->transaction_cv);
+		LWLockRelease(&txlist->lock);
+
+		ConditionVariableSleep(&txlist->transaction_cv, PG_WAIT_EXTENSION);
+		LWLockAcquire(&txlist->lock, LW_EXCLUSIVE);
+	}
+}
+
+void
+txl_wakeup_workers(txlist_t *txlist)
+{
+	if (txl_syncpoint_at_head(txlist))
+		ConditionVariableBroadcast(&txlist->syncpoint_cv);
+	else
+		ConditionVariableBroadcast(&txlist->transaction_cv);
 }

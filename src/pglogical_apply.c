@@ -513,41 +513,13 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
 
 	mtm_log(SyncpointApply, "Syncpoint: await for parallel workers to finish");
-
 	/*
 	 * Await for our pool workers to finish what they are currently doing.
-	 *
-	 * XXX: that is quite performance-sensitive. Much better solution would be
-	 * a barried before processing prepare/commit which will delay all
-	 * transaction with bigger lsn that this syncpoint but will allow previous
-	 * transactions to proceed. This way we will not delay application of
-	 * transaction bodies, just prepare record itself.
 	 */
-	LWLockAcquire(&Mtm->pools[rwctx->sender_node_id - 1].lock, LW_EXCLUSIVE);
-	for (;;)
-	{
-		int			ntasks;
-
-		if (Mtm->pools[rwctx->sender_node_id - 1].nWorkers <= 0)
-		{
-			LWLockRelease(&Mtm->pools[rwctx->sender_node_id - 1].lock);
-			break;
-		}
-
-		ntasks = Mtm->pools[rwctx->sender_node_id - 1].active +
-			Mtm->pools[rwctx->sender_node_id - 1].pending;
-		ConditionVariablePrepareToSleep(&Mtm->pools[rwctx->sender_node_id - 1].syncpoint_cv);
-		LWLockRelease(&Mtm->pools[rwctx->sender_node_id - 1].lock);
-
-		Assert(ntasks >= 0);
-		if (ntasks == 0)
-			break;
-
-		ConditionVariableSleep(&Mtm->pools[rwctx->sender_node_id - 1].syncpoint_cv,
-							   PG_WAIT_EXTENSION);
-		LWLockAcquire(&Mtm->pools[rwctx->sender_node_id - 1].lock, LW_EXCLUSIVE);
-	}
-	ConditionVariableCancelSleep();
+	rwctx->txlist_pos = txl_store(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+								  2);
+	txl_wait_sphead(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+					rwctx->txlist_pos);
 
 	/*
 	 * Postgres decoding API doesn't disclose origin info about logical
@@ -1892,6 +1864,10 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	{
 		ErrorData  *edata;
 
+		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+				   rwctx->txlist_pos);
+		rwctx->txlist_pos = -1;
+
 		query_cancel_allowed = false;
 
 		old_context = MemoryContextSwitchTo(MtmApplyContext);
@@ -1959,6 +1935,9 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	}
 	PG_END_TRY();
 
+	txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+			   rwctx->txlist_pos);
+	rwctx->txlist_pos = -1;
 	if (s.data != work)
 		pfree(s.data);
 	MemoryContextSwitchTo(top_context);

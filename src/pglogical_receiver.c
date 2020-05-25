@@ -302,7 +302,7 @@ MtmExecute(void *work, int size, MtmReceiverWorkerContext *rwctx, bool no_pool)
 	if (rwctx->mode == REPLMODE_RECOVERY || no_pool)
 		MtmExecutor(work, size, rwctx);
 	else
-		BgwPoolExecute(&Mtm->pools[rwctx->sender_node_id - 1], work,
+		BgwPoolExecute(BGW_POOL_BY_NODE_ID(rwctx->sender_node_id), work,
 					   size, rwctx);
 
 }
@@ -573,6 +573,7 @@ pglogical_receiver_main(Datum main_arg)
 
 	rctx = MemoryContextAllocZero(TopMemoryContext, sizeof(MtmReceiverContext));
 	rctx->w.sender_node_id = DatumGetInt32(main_arg);
+	rctx->w.txlist_pos = -1;
 	sender = rctx->w.sender_node_id; /* shorter lines */
 
 	/*
@@ -911,12 +912,14 @@ pglogical_receiver_main(Datum main_arg)
 						ByteBufferReset(&buf);
 					}
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
-															  stmt[1] == 'P' || stmt[1] == 'C' || stmt[1] == 'S')))
+															  stmt[1] == 'P' ||
+															  stmt[1] == 'C' ||
+															  stmt[1] == 'S')))
 					{
 						if (stmt[0] == 'M' && stmt[1] == 'C')
 
 							/*
-							 * concurrent DDL should be executed by parallel
+							 * non-tx DDL should be executed by parallel
 							 * workers
 							 */
 							MtmExecute(stmt, msg_len, &rctx->w, false);
