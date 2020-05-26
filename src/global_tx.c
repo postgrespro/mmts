@@ -110,8 +110,8 @@ parse_gtx_state(const char *state, GlobalTxStatus *status,
 	if (state[0] == '\0')
 	{
 		*status = GTXInvalid;
-		*term_prop = (GlobalTxTerm) {1,0};
-		*term_acc = (GlobalTxTerm) {0,0};
+		*term_prop = InitialGTxTerm;
+		*term_acc = InvalidGTxTerm;
 	}
 	else
 	{
@@ -145,12 +145,7 @@ void
 GlobalTxAtExit(int code, Datum arg)
 {
 	if (my_locked_gtx)
-	{
-		LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
-		my_locked_gtx->acquired_by = InvalidBackendId;
-		LWLockRelease(gtx_shared->lock);
-		my_locked_gtx = NULL;
-	}
+		GlobalTxRelease(my_locked_gtx);
 }
 
 void
