@@ -450,7 +450,9 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 		GlobalTxTerm prop, acc;
 
 		parse_gtx_state(txn->state_3pc, &status, &prop, &acc);
-		if (status != GTXPreCommitted || term_cmp(acc, InitialGTxTerm) != 0)
+		if (status != GTXPreCommitted ||
+			term_cmp(prop, InitialGTxTerm) != 0 ||
+			term_cmp(acc, InitialGTxTerm) != 0)
 		{
 			return;
 		}
@@ -773,6 +775,9 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 {
 	ListCell   *param;
 	MtmDecoderPrivate *hooks_data;
+
+	if (Mtm->my_node_id == MtmInvalidNodeId)
+		mtm_log(ERROR, "multimaster is not configured or not initialized yet");
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
