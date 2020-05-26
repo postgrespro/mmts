@@ -71,14 +71,12 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         try:
             th.assertDataSync()
             cls.client.stop()
-        except Exception as e:
-            print('got exception during final assertDataSync: ', e)
-
-        # Destroying containers is really unhelpful for local debugging, so
-        # do this automatically only in CI.
-        if 'CI' in os.environ:
-            cls.collectLogs()
-            subprocess.check_call(['docker-compose', 'down'])
+        finally:
+            # Destroying containers is really unhelpful for local debugging, so
+            # do this automatically only in CI.
+            if 'CI' in os.environ:
+                cls.collectLogs()
+                subprocess.check_call(['docker-compose', 'down'])
 
     @classmethod
     def collectLogs(cls):

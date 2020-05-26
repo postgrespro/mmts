@@ -116,6 +116,12 @@ class TestHelper(object):
             raise AssertionError('Different data on nodes')
 
         # no new PREPARE should have appeared, the client is stopped
+        # XXX actually they could: something like
+        # - no prepare on 1, so going ahead to check 2
+        # - prepare on 2
+        # - waited until prepare on 2 is resolved
+        # - ... but now it is sent to 1
+        # probably we should just have here keep_trying is_data_identic
         self.AssertNoPrepares()
 
         self.client.bgrun()
