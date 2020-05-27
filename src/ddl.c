@@ -232,13 +232,12 @@ temp_schema_reset(void)
 {
 	Assert(TempDropRegistered);
 
-	MtmTx.contains_ddl = true;
 	MtmProcessDDLCommand(
 						 psprintf("select mtm.set_temp_schema('%s'); "
 								  "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
 								  "DROP SCHEMA IF EXISTS %s CASCADE;",
 								  MtmTempSchema, MtmTempSchema, MtmTempSchema),
-						 true
+						 false
 		);
 	MtmFinishDDLCommand();
 }
@@ -261,12 +260,42 @@ temp_schema_init(void)
 	if (!TempDropRegistered)
 	{
 		char	   *temp_schema;
+		unsigned short drandom_seed[3] = {0, 0, 0};
+		double	   rand1;
+		double	   rand2;
+
+		/*
+		 * borrowed from float.c
+		 * TODO: unify with state.c usage
+		 */
+		{
+			TimestampTz now = GetCurrentTimestamp();
+			uint64		iseed;
+
+			/* Mix the PID with the most predictable bits of the timestamp */
+			iseed = (uint64) now ^ ((uint64) MyProcPid << 32);
+			drandom_seed[0] = (unsigned short) iseed;
+			drandom_seed[1] = (unsigned short) (iseed >> 16);
+			drandom_seed[2] = (unsigned short) (iseed >> 32);
+		}
+		rand1 = pg_erand48(drandom_seed);
+		rand2 = pg_erand48(drandom_seed);
 
 		/*
 		 * NB: namespace.c:isMtmTemp() assumes 'mtm_tmp_' prefix for mtm temp
 		 * tables to defuse autovacuum.
+		 *
+		 * rand1 and rand2 are a kludge providing sorta unique name; without
+		 * it, schema name can be reused immediately after backend exit before
+		 * it was dropped at peers. An alternative which existed previously --
+		 * running full-fledged xact with transactional ddl in on_shmem_exit
+		 * hook -- is hard because of commit.c on on_shmem_exit cleanup
+		 * interference and fragile (what if xact aborted?)
 		 */
-		temp_schema = psprintf("mtm_tmp_%d_%d", Mtm->my_node_id, MyBackendId);
+		temp_schema = psprintf("mtm_tmp_%d_%d_%llx%llx",
+							   Mtm->my_node_id, MyBackendId,
+							   (unsigned long long) (rand1 * ((unsigned long long) 1 << 48)),
+							   (unsigned long long) (rand2 * ((unsigned long long) 1 << 48)));
 		memcpy(&MtmTempSchema, temp_schema, strlen(temp_schema) + 1);
 		before_shmem_exit(temp_schema_at_exit, (Datum) 0);
 		TempDropRegistered = true;
