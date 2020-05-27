@@ -101,10 +101,13 @@ static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
 static void process_remote_delete(StringInfo s, Relation rel);
 
+#if 0
 /*
  * Handle critical errors while applying transaction at replica.
  * Such errors should cause shutdown of this cluster node to allow other nodes to continue serving client requests.
  * Other error will be just reported and ignored
+ *
+ * XXX this kind of artificial intelligence is not used now.
  */
 static void
 MtmHandleApplyError(void)
@@ -128,6 +131,7 @@ MtmHandleApplyError(void)
 	}
 	FreeErrorData(edata);
 }
+#endif
 
 /*
  * Handler of receiver worker for SIGINT and SIGHUP signals
@@ -538,7 +542,7 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		if (rc != 3)
 		{
 			Assert(false);
-			mtm_log(PANIC, "wrong syncpoint message format");
+			mtm_log(PANIC, "unexpected forwarded syncpoint message format");
 		}
 
 		/* skip our own syncpoints */
@@ -555,7 +559,11 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		origin_lsn = received_end_lsn;
 		origin_node = rwctx->sender_node_id;
 		rc = sscanf(msg, UINT64_FORMAT, &trim_lsn);
-		Assert(rc == 1);
+		if (rc != 1 || origin_node == Mtm->my_node_id)
+		{
+			Assert(false);
+			mtm_log(PANIC, "unexpected syncpoint messaged format");
+		}
 		Assert(origin_node != Mtm->my_node_id);
 
 		/* load restart_lsn before taking local_lsn */
@@ -1377,10 +1385,11 @@ process_remote_insert(StringInfo s, Relation rel)
 
 		while (nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE)
 		{
-			int			action = pq_getmsgbyte(s);
-
-			if (action != 'I')
+			if (pq_getmsgbyte(s) != 'I')
+			{
 				Assert(false);
+				mtm_log(PANIC, "unexpected insert message format");
+			}
 			read_tuple_parts(s, rel, &new_tuple);
 			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
 															  new_tuple.values, new_tuple.isnull);
@@ -1691,7 +1700,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	int			save_cursor = 0;
 	int			save_len = 0;
 	MemoryContext old_context;
-	MemoryContext top_context;
 	volatile GlobalTransactionId current_gtid = {0, InvalidTransactionId, InvalidTransactionId};
 
 	s.data = work;
@@ -1703,8 +1711,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		MtmApplyContext = AllocSetContextCreate(TopMemoryContext,
 												"ApplyContext",
 												ALLOCSET_DEFAULT_SIZES);
-
-	top_context = MemoryContextSwitchTo(MtmApplyContext);
 	replorigin_session_origin = InvalidRepOriginId;
 
 	PG_TRY();
@@ -1732,11 +1738,17 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			receiver_mtm_cfg_valid = true;
 		}
 
+		/*
+		 * context which is reset per message, containing whatever hasn't got
+		 * into transaction ctxses (most things will; xxx are there any of
+		 * such allocations at all apart from ErrorData?)
+		 */
+		old_context = MemoryContextSwitchTo(MtmApplyContext);
 		do
 		{
 			char		action = pq_getmsgbyte(&s);
 
-			old_context = MemoryContextSwitchTo(MtmApplyContext);
+			MemoryContextResetAndDeleteChildren(MtmApplyContext);
 			mtm_log(MtmApplyTrace, "got action '%c'", action);
 
 			switch (action)
@@ -1780,7 +1792,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 						spill_file = MtmOpenSpillFile(node_id, file_id);
 						break;
 					}
-				case '(':
+				case '(': /* read chunk from spill file */
 					{
 						size_t		size = pq_getmsgint(&s, 4);
 
@@ -1792,7 +1804,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 						MtmReadSpillFile(spill_file, s.data, size);
 						break;
 					}
-				case ')':
+				case ')': /* end of chunk in spill file */
 					pfree(s.data);
 					s.data = work;
 					s.cursor = save_cursor;
@@ -1856,23 +1868,23 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 				default:
 					mtm_log(ERROR, "unknown action of type %c", action);
 			}
-			MemoryContextSwitchTo(old_context);
-			MemoryContextResetAndDeleteChildren(MtmApplyContext);
 		} while (inside_transaction);
 	}
 	PG_CATCH();
 	{
 		ErrorData  *edata;
 
+		/* log error immediately, before the cleanup */
+		MemoryContextSwitchTo(MtmApplyContext);
+		edata = CopyErrorData();
+		EmitErrorReport();
+		FlushErrorState();
+
 		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
 				   rwctx->txlist_pos);
 		rwctx->txlist_pos = -1;
 
 		query_cancel_allowed = false;
-
-		old_context = MemoryContextSwitchTo(MtmApplyContext);
-		MtmHandleApplyError();
-		edata = CopyErrorData();
 
 		/*
 		 * handle only prepare errors here
@@ -1909,14 +1921,16 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			!TransactionIdIsValid(current_gtid.my_xid))
 		{
 			if (rwctx->mode == REPLMODE_RECOVERY)
-				mtm_log(WARNING, "got ERROR while applying in recovery, xid=" XID_FMT,
-					current_gtid.my_xid);
-			PG_RE_THROW();
+				mtm_log(WARNING, "got ERROR while applying in recovery, origin_xid=" XID_FMT,
+						current_gtid.xid);
+			/*
+			 * We already did FlushErrorState, so EmitErrorReport in
+			 * bgworker.c would confuse elog machinery. Die on our own instead
+			 * of PG_RE_THROW.
+			 */
+			proc_exit(1);
 		}
 
-		MemoryContextSwitchTo(old_context);
-		EmitErrorReport();
-		FlushErrorState();
 		ReleasePB();
 		if (rwctx->gtx != NULL)
 		{
@@ -1927,7 +1941,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 
 		MtmDDLResetApplyState();
 
-		mtm_log(MtmApplyError, "Receiver: abort transaction " XID_FMT,
+		mtm_log(MtmApplyError, "abort transaction origin_xid=" XID_FMT,
 				current_gtid.xid);
 
 		FreeErrorData(edata);
@@ -1940,6 +1954,5 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	rwctx->txlist_pos = -1;
 	if (s.data != work)
 		pfree(s.data);
-	MemoryContextSwitchTo(top_context);
-	MemoryContextResetAndDeleteChildren(MtmApplyContext);
+	MemoryContextSwitchTo(old_context);
 }
