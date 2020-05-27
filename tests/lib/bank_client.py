@@ -226,25 +226,19 @@ class MtmClient(object):
         return (len(hashes) == 1 and len(hashes2) == 1)
 
     def n_prepared_tx(self):
-        n_prepared = 0
+        total_n_prepared = 0
 
-        for dsn in self.dsns:
-            con = psycopg2.connect(dsn + " application_name=mtm_admin")
-            try:
-                cur = con.cursor()
-                cur.execute("select count(*) from pg_prepared_xacts;")
-                n_prepared += int(cur.fetchone()[0])
-                if n_prepared != 0:
-                    print("{} prepared xacts on node {}".format(n_prepared, dsn))
-                cur.close()
-            finally:
-                con.close()
+        for dsn_ind in range(0, len(self.dsns)):
+            n_prepared = self.list_prepared(dsn_ind)
+            total_n_prepared += n_prepared
 
-        print("total num of prepared xacts on all nodes: %d" % (n_prepared))
-        return (n_prepared)
+        print("total num of prepared xacts on all nodes: %d" % (total_n_prepared))
+        return (total_n_prepared)
 
     def list_prepared(self, node_id):
+        n_prepared = 0
         con = psycopg2.connect(self.dsns[node_id] + " application_name=mtm_admin")
+        print("listing prepared xacts on node {} ({}):".format(node_id + 1, self.dsns[node_id]))
         try:
             cur = con.cursor()
             cur.execute('select * from pg_prepared_xacts order by prepared;')
@@ -252,9 +246,11 @@ class MtmClient(object):
                 for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
                     print(pxact[i], end="\t")
                 print("\n")
+                n_prepared += 1
         finally:
             con.close()
-        print("----\n")
+        print("total {} prepared xacts\n----\n".format(n_prepared))
+        return n_prepared
 
     def insert_counts(self):
         counts = []
