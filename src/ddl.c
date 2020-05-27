@@ -820,10 +820,20 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	char	   *stmt_string = palloc(stmt_len + 1);
 	bool		isTopLevel = (context == PROCESS_UTILITY_TOPLEVEL);
 
+	/*
+	 * Generate schema name and send logical message saying to destroy the
+	 * schema on peers on backend exit only if this command has a chance of
+	 * using temp objects remotely.
+	 */
+#define SkipCommand(skip) \
+{ \
+	if (!skip) \
+		temp_schema_init(); \
+	skipCommand = skip; \
+}
+
 	strncpy(stmt_string, queryString + stmt_start, stmt_len);
 	stmt_string[stmt_len] = 0;
-
-	temp_schema_init();
 
 	mtm_log(DDLProcessingTrace,
 			"MtmProcessUtilitySender tag=%d, context=%d, issubtrans=%d,  statement=%s",
@@ -905,7 +915,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_DeclareCursorStmt:
 		case T_ClosePortalStmt:
 		case T_VacuumStmt:
-			skipCommand = true;
+			 SkipCommand(true);
 			break;
 
 		case T_CreateSeqStmt:
@@ -919,7 +929,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 		case T_CreateTableSpaceStmt:
 		case T_DropTableSpaceStmt:
-			skipCommand = true;
+			SkipCommand(true);
 			MtmProcessDDLCommand(stmt_string, false);
 			break;
 
@@ -934,7 +944,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				Query	   *query = (Query *) stmt->query;
 				ListCell   *lc;
 
-				skipCommand = true;
+				SkipCommand(true);
 				if (query->commandType == CMD_UTILITY &&
 					IsA(query->utilityStmt, CreateTableAsStmt))
 				{
@@ -943,7 +953,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 						DefElem    *opt = (DefElem *) lfirst(lc);
 
 						if (strcmp(opt->defname, "analyze") == 0)
-							skipCommand = false;
+							SkipCommand(false);
 					}
 				}
 				break;
@@ -959,7 +969,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 				if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
 				{
-					skipCommand = true;
+					SkipCommand(true);
 					MtmGucDiscard();
 				}
 				break;
@@ -971,11 +981,11 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 				/* Prevent SET TRANSACTION from replication */
 				if (stmt->kind == VAR_SET_MULTI)
-					skipCommand = true;
+					SkipCommand(true);
 
 				if (!IsTransactionBlock())
 				{
-					skipCommand = true;
+					SkipCommand(true);
 
 					/*
 					 * Catch GUC assignment after it will be performed, as it
@@ -1013,7 +1023,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 							 errmsg("multimaster doesn't support CREATE INDEX CONCURRENTLY")));
 					/*
 					 * MtmProcessDDLCommand(stmt_string, false);
-					 * skipCommand = true;
+					 * SkipCommand(true);
 					 */
 				}
 				break;
@@ -1026,7 +1036,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				if (stmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 				{
 					MtmProcessDDLCommand(stmt_string, false);
-					skipCommand = true;
+					SkipCommand(true);
 				}
 				break;
 			}
@@ -1051,7 +1061,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			{
 				CopyStmt   *copyStatement = (CopyStmt *) parsetree;
 
-				skipCommand = true;
+				SkipCommand(true);
 				if (copyStatement->is_from)
 				{
 					RangeVar   *relation = copyStatement->relation;
@@ -1075,7 +1085,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			}
 
 		default:
-			skipCommand = false;
+			SkipCommand(false);
 			break;
 	}
 
