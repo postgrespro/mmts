@@ -866,6 +866,44 @@ dmq_sender_main(Datum main_arg)
  *
  *****************************************************************************/
 
+/*
+ * Get shm_mq ring buffer available space.
+ *
+ * We use this in dmq receiver in case when we need to bu sure that next
+ * message will definetely fit into buffer and won't block sender.
+ */
+static Size
+shm_mq_available(shm_mq_handle *mqh)
+{
+	uint64		rb;
+	uint64		wb;
+	uint64		used;
+	Size		ringsize;
+
+	/* redefine this structure in extension */
+	struct
+	{
+		slock_t		mq_mutex;
+		PGPROC	   *mq_receiver;
+		PGPROC	   *mq_sender;
+		pg_atomic_uint64 mq_bytes_read;
+		pg_atomic_uint64 mq_bytes_written;
+		Size		mq_ring_size;
+		bool		mq_detached;
+		uint8		mq_ring_offset;
+		char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
+	} *mq = (void *) shm_mq_get_queue(mqh);
+
+	/* Compute number of ring buffer bytes used and available. */
+	rb = pg_atomic_read_u64(&mq->mq_bytes_read);
+	wb = pg_atomic_read_u64(&mq->mq_bytes_written);
+	ringsize = mq->mq_ring_size;
+	used = wb - rb;
+	Assert(wb >= rb);
+	Assert(used <= ringsize);
+	return mq->mq_ring_size - used;
+}
+
 /* recreate shm_mq to the given subscriber */
 static void
 dmq_receiver_recreate_mq(DmqReceiverSlot *my_slot,
@@ -1008,11 +1046,28 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 			"[DMQ] got message %s.%s (len=%d), passing to %d", stream_name, body,
 			body_len, sub.procno);
 
-	/* and send it */
-	res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
-	if (res != SHM_MQ_SUCCESS)
+	/*
+	 * XXX: there used to be per-subscription support for dropping messages if
+	 * queue is full, created for xact resolving requests which may took very
+	 * long due to WAL scan. I've (mostly) ported it but disabled because
+	 * monitor now answers to both generation election and xact resolution
+	 * requests, and silently dropping the former might lead to inifinite
+	 * waiting of the remote campaigner. We could deal with that by moving
+	 * xact resolution requests to yet another bgw.
+	 */
+	if (false &&
+		shm_mq_available(mq_handles[sub.procno]) < MAXALIGN(body_len) + sizeof(Size))
 	{
-		mtm_log(COMMERROR, "[DMQ] can't send to queue %d", sub.procno);
+		/* Assert(sub->can_drop); */
+		mtm_log(COMMERROR, "[DMQ] queue %d is full, dropping message",
+				sub.procno);
+	}
+	else
+	{
+		res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
+		if (res == SHM_MQ_DETACHED)
+			mtm_log(COMMERROR, "[DMQ] queue %d is detached, dropping message",
+					sub.procno);
 	}
 }
 
