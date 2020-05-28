@@ -499,19 +499,22 @@ BgwPoolCancel(BgwPool *poolDesc)
 	LWLockRelease(&poolDesc->lock);
 
 	/* Send termination signal to each worker and wait for end of its work. */
-	for (i = 0; i < MtmMaxWorkers; i++)
+	if (poolDesc->bgwhandles != NULL) /* if we managed to create handles... */
 	{
-		if (poolDesc->bgwhandles[i] == NULL)
-			continue;
-		TerminateBackgroundWorker(poolDesc->bgwhandles[i]);
-		WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
-		pfree(poolDesc->bgwhandles[i]);
+		for (i = 0; i < MtmMaxWorkers; i++)
+		{
+			if (poolDesc->bgwhandles[i] == NULL)
+				continue;
+			TerminateBackgroundWorker(poolDesc->bgwhandles[i]);
+			WaitForBackgroundWorkerShutdown(poolDesc->bgwhandles[i]);
+			pfree(poolDesc->bgwhandles[i]);
+		}
 	}
 
 	/* The pool shared structures can be reused and we need to clean data */
 	poolDesc->nWorkers = 0;
 	poolDesc->producerBlocked = false;
-	memset(poolDesc->bgwhandles, 0, MtmMaxWorkers * sizeof(BackgroundWorkerHandle *));
+	poolDesc->bgwhandles = NULL;
 	txl_clear(&poolDesc->txlist);
 
 	elog(LOG, "Cancel of the receiver workers pool. Pool name = %s",

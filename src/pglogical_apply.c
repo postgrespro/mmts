@@ -1328,7 +1328,10 @@ process_remote_commit(StringInfo in,
 				 */
 				rwctx->gtx = GlobalTxAcquire(gid, false);
 				if (!rwctx->gtx)
+				{
+					mtm_log(MtmApplyTrace, "skipping ABORT PREPARED of %s as there is no xact", gid);
 					break;
+				}
 
 				MtmBeginSession(origin_node);
 				StartTransactionCommand();
