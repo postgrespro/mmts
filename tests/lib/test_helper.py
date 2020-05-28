@@ -77,7 +77,7 @@ class TestHelper(object):
                 cur.execute("select 1")
                 one = int(cur.fetchone()[0])
                 cur.close()
-                print("{} is online!".format(dsn))
+                print("{} {} is online!".format(datetime.datetime.utcnow(), dsn))
                 return
             except Exception as e:
                 print('{} waiting for {} to get online: {}'.format(datetime.datetime.utcnow(), dsn, str(e)))

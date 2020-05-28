@@ -12,6 +12,7 @@ import aioprocessing
 import multiprocessing
 import logging
 import re
+import signal
 import pprint
 import uuid
 import traceback
@@ -285,8 +286,18 @@ class MtmClient(object):
                         serialized_aggs[node_id][aggname] = total_agg.as_dict()
 
                 yield from self.child_pipe.coro_send(serialized_aggs)
+            elif msg == 'exit':
+                break
             else:
                 print('evloop: unknown message')
+
+        # End of work. Wait for tasks and stop event loop.
+        self.running = False # mark for other coroutines to exit
+        tasks = [t for t in asyncio.Task.all_tasks() if t is not asyncio.Task.current_task()]
+        yield from asyncio.gather(*tasks)
+
+        self.loop.stop()
+
 
     @asyncio.coroutine
     def exec_tx(self, tx_block, node_id, aggname_prefix, conn_i):
@@ -359,7 +370,12 @@ class MtmClient(object):
                 # back to event loop and block it
                 yield from asyncio.sleep(0.5)
 
-        print("We've count to infinity!")
+        # Close connection during client termination
+        # XXX: I tried to be polite and close the cursor beforehand, but it
+        # sometimes gives 'close cannot be used while an asynchronous query
+        # is underway'.
+        if conn:
+            conn.close()
 
     @asyncio.coroutine
     def transfer_tx(self, conn, cur, agg, conn_i):
@@ -407,14 +423,19 @@ class MtmClient(object):
 
         for i, _ in enumerate(self.dsns):
             for j in range(1):
-                asyncio.ensure_future(self.exec_tx(self.transfer_tx, i, 'transfer', j))
+                self.loop.create_task(self.exec_tx(self.transfer_tx, i, 'transfer', j))
+            self.loop.create_task(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
             asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
             for j in range(10):
-                asyncio.ensure_future(self.exec_tx(self.insert_tx, i, 'inserter', j))
+                self.loop.create_task(self.exec_tx(self.insert_tx, i, 'inserter', j))
 
-        asyncio.ensure_future(self.status())
+        self.loop.create_task(self.status())
 
-        self.loop.run_forever()
+        try:
+            self.running = True
+            self.loop.run_forever()
+        finally:
+             self.loop.close()
 
     def bgrun(self):
         print('Starting evloop in different process')
@@ -446,10 +467,9 @@ class MtmClient(object):
         print('aggregates cleaned')
 
     def stop(self):
-        self.running = False
-        self.evloop_process.terminate()
+        print('stopping client')
+        self.parent_pipe.send('exit')
         self.evloop_process.join()
-        time.sleep(3)
         print('client stopped')
 
     @classmethod
