@@ -9,9 +9,9 @@ from .failure_injector import *
 from .bank_client import keep_trying
 
 TEST_WARMING_TIME = 3
-TEST_DURATION = 30
+TEST_DURATION = 10
 TEST_MAX_RECOVERY_TIME = 1200
-TEST_RECOVERY_TIME = 20
+TEST_RECOVERY_TIME = 10
 TEST_SETUP_TIME = 20
 TEST_STOP_DELAY = 5
 
