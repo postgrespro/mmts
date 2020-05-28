@@ -1,6 +1,7 @@
 # run sql/multimaster.sql tests
 use Cluster;
 use File::Basename;
+use IPC::Run 'run';
 use Test::More tests => 1;
 
 # determenistic ports for expected files
@@ -91,6 +92,9 @@ unlink('results/regression.diff');
 # Do not use diffs extension as some upper level testing systems are searching for all
 # *.diffs files.
 TestLib::append_to_file('results/regression.diff', $res_diff);
-$diff = TestLib::system_log("diff results/regression.diff expected/regression.diff");
+$diff = TestLib::system_log("diff expected/regression.diff results/regression.diff");
 
-is($diff, 0, "postgres regress");
+# save diff of diff in file
+run [ "diff", "-U3", "expected/regression.diff", "results/regression.diff" ], ">", "regression.diff.diff";
+my $res = $?;
+is($res, 0, "postgres regress");
