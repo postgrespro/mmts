@@ -12,6 +12,7 @@
 #include "replication/origin.h"
 #include "replication/message.h"
 #include "utils/builtins.h"
+#include "storage/lmgr.h"
 #include "storage/procarray.h"
 
 #include "multimaster.h"
@@ -60,15 +61,34 @@
 bool
 MtmDetectGlobalDeadLock(PGPROC *proc, Datum arg)
 {
+	StringInfoData locktagbuf;
+	LOCK	   *lock = proc->waitLock;
+	bool		is_detected = false;
 	MtmReplicationMode *repl_mode = (MtmReplicationMode *) DatumGetPointer(arg);
-	return (repl_mode != NULL) &&
-			/*
-			 * There is no need to check for deadlocks in recovery: all
-			 * conflicting transactions must be eventually committed/aborted
-			 * by the resolver. It would not be fatal, but restarting due to
-			 * deadlock ERRORs might significantly slow down the recovery
-			 */
+
+	Assert(proc == MyProc);
+
+	is_detected = (repl_mode != NULL) &&
+		/*
+		 * There is no need to check for deadlocks in recovery: all
+		 * conflicting transactions must be eventually committed/aborted
+		 * by the resolver. It would not be fatal, but restarting due to
+		 * deadlock ERRORs might significantly slow down the recovery
+		 */
 		*repl_mode == REPLMODE_NORMAL;
+
+	if (is_detected)
+	{
+		initStringInfo(&locktagbuf);
+		DescribeLockTag(&locktagbuf, &lock->tag);
+		mtm_log(LOG, "apply worker %d waits for %s on %s",
+				MyProcPid,
+				GetLockmodeName(lock->tag.locktag_lockmethodid, proc->waitLockMode),
+				locktagbuf.data);
+	}
+
+	return is_detected;
+
 }
 
 #if 0
