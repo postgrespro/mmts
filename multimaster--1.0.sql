@@ -292,3 +292,7 @@ CREATE VIEW mtm.stat_bgwpool AS
 	FROM mtm.node_bgwpool_stat();
 
 -- select mtm.alter_sequences();
+
+CREATE FUNCTION mtm.get_logged_prepared_xact_state(gid text) RETURNS text
+  AS 'MODULE_PATHNAME','mtm_get_logged_prepared_xact_state'
+  LANGUAGE C;

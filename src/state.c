@@ -5,6 +5,8 @@
 #include <sys/types.h>
 
 #include "access/twophase.h"
+#include "access/xlogutils.h"
+#include "access/xlog_internal.h"
 #include "executor/spi.h"
 #include "utils/snapmgr.h"
 #include "nodes/makefuncs.h"
@@ -202,9 +204,12 @@ static void MtmStateLoad(void);
 
 static void pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue);
 
+static void GetLoggedPreparedXactState(HTAB *txset);
+
 PG_FUNCTION_INFO_V1(mtm_node_info);
 PG_FUNCTION_INFO_V1(mtm_status);
 PG_FUNCTION_INFO_V1(mtm_state_create);
+PG_FUNCTION_INFO_V1(mtm_get_logged_prepared_xact_state);
 
 static bool pb_preparers_incremented = false;
 static bool pb_holders_incremented = false;
@@ -2651,36 +2656,33 @@ handle_1a_gtx(MtmTxRequest *msg, GlobalTx *gtx, MtmTxStatusResponse *resp)
 	}
 }
 
-/* Reply to 1A of paxos */
-static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
-{
-	GlobalTx   *gtx;
-	uint64		last_online_in;
-	char	   *state_3pc;
-	bool		prepare_seen;
-	StringInfo	packed_msg;
+typedef struct {
+	char	gid[GIDSIZE];
+	MtmTxRequest *req;
 	/*
-	 * We always respond something -- it will be useful if we ever switch to
-	 * synchronous resolving instead of that 'resolve during 3 seconds or I'll
-	 * start a new ballot'. If by Paxos rules we must ignore the message, we
-	 * reply with invalid terms and status -- resolver won't regard it as ack.
+	 * if GetLoggedPreparedXactState can find the outcome, it writes it
+	 * directly to resp->state.status
 	 */
-	MtmTxStatusResponse resp = {
-		.tag = T_MtmTxStatusResponse,
-		.node_id = Mtm->my_node_id,
-		.state = {
-			.proposal = InvalidGTxTerm,
-			.accepted = InvalidGTxTerm,
-			.status = GTXInvalid
-		},
-		.gid = msg->gid
-	};
+	MtmTxStatusResponse resp;
+	bool	prepare_seen;
+	int		dest_node_id; /* for logging */
+	int		dest_id;
+} txset_entry;
+
+/* Reply to 1A of paxos */
+static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
+					  uint64 *last_online_in)
+{
+	MtmTxRequest *msg = txse->req;
+	MtmTxStatusResponse *resp = &txse->resp; /* shorter lines */
+	GlobalTx   *gtx;
+	StringInfo	packed_msg;
 
 	/* fast check before digging WAL */
 	gtx = GlobalTxAcquire(msg->gid, false);
 	if (gtx != NULL)
 	{
-		handle_1a_gtx(msg, gtx, &resp);
+		handle_1a_gtx(msg, gtx, resp);
 		GlobalTxRelease(gtx);
 		goto reply_1a;
 	}
@@ -2691,20 +2693,18 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 	 * reply with direct ABORT for transactions which can't ever be committed
 	 * -- this prevents recovery deadlocks as explained below
 	 */
-	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
-	last_online_in = mtm_state->last_online_in;
-	LWLockRelease(mtm_state->gen_lock);
+	if (!(*wal_scanned))
+	{
+		LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
+		*last_online_in = mtm_state->last_online_in;
+		LWLockRelease(mtm_state->gen_lock);
 
-	state_3pc = GetLoggedPreparedXactState(msg->gid, &prepare_seen);
-	if (strcmp(state_3pc, "committed") == 0)
-	{
-		resp.state.status = GTXCommitted;
+		GetLoggedPreparedXactState(txset);
+		*wal_scanned = true;
 	}
-	else if (strcmp(state_3pc, "aborted") == 0)
-	{
-		resp.state.status = GTXAborted;
-	}
-	else
+
+	if (resp->state.status != GTXCommitted &&
+		resp->state.status != GTXAborted)
 	{
 		uint64 xact_gen_num;
 
@@ -2751,7 +2751,7 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		gtx = GlobalTxAcquire(msg->gid, false);
 		if (gtx != NULL)
 		{
-			handle_1a_gtx(msg, gtx, &resp);
+			handle_1a_gtx(msg, gtx, resp);
 			GlobalTxRelease(gtx);
 			goto reply_1a;
 		}
@@ -2763,13 +2763,13 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		 * could re-scan WAL again in this case, but it is simpler to just
 		 * ignore it currently and resolve on the next request.
 		 */
-		if (!prepare_seen &&
-			last_online_in > xact_gen_num)
+		if (!txse->prepare_seen &&
+			*last_online_in > xact_gen_num)
 		{
-			resp.state.status = GTXAborted;
-			mtm_log(StatusRequest, "replying direct abort %s as my last_online_in=" UINT64_FORMAT ", its gen_num=" UINT64_FORMAT " and there is no data for it",
+			resp->state.status = GTXAborted;
+			mtm_log(StatusRequest, "replying directly abort %s as my last_online_in=" UINT64_FORMAT ", xact gen_num=" UINT64_FORMAT " and there is no data for it",
 					msg->gid,
-					last_online_in,
+					*last_online_in,
 					xact_gen_num);
 		}
 		else
@@ -2778,11 +2778,35 @@ static void handle_1a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 	}
 
 reply_1a:
-	packed_msg = MtmMessagePack((MtmMessage *) &resp);
+	packed_msg = MtmMessagePack((MtmMessage *) resp);
 	mtm_log(StatusRequest, "replying to 1a from node %d with %s",
-			dest_node_id,
-			MtmMesageToString((MtmMessage *) &resp));
-	dmq_push_buffer(dest_id, "txresp", packed_msg->data, packed_msg->len);
+			txse->dest_node_id,
+			MtmMesageToString((MtmMessage *) resp));
+	dmq_push_buffer(txse->dest_id, "txresp", packed_msg->data, packed_msg->len);
+}
+
+/* process and send response for each 1a message in the accumulated batch */
+static void
+handle_1a_batch(HTAB *txset)
+{
+	HASH_SEQ_STATUS txset_seq;
+	txset_entry *txse;
+	/*
+	 * scan wal lazily, only on first request needing this. e.g. in referee
+	 * mode this is never needed.
+	 */
+	bool wal_scanned = false;
+	uint64		last_online_in;
+
+	if (hash_get_num_entries(txset) == 0)
+		return; /* prevent dummy logging */
+	mtm_log(StatusRequest, "got batch of %ld 1a messages to process",
+				hash_get_num_entries(txset));
+	hash_seq_init(&txset_seq, txset);
+	while ((txse = hash_seq_search(&txset_seq)) != NULL)
+	{
+		handle_1a(txse, txset, &wal_scanned, &last_online_in);
+	}
 }
 
 /* reply to 2a of paxos */
@@ -2858,25 +2882,47 @@ reply_2a:
 
 }
 
-/*
- * We might need to perform local xacts inside (gtx_proposals table
- * manipulations) and commit them immediately (persist before reply), so pass
- * the mem context to get back into after commits.
- */
 static void
 check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 {
 	int8 sender_mask_pos;
 	StringInfoData packed_msg;
 	bool		wait;
+	HASHCTL		txset_hash_ctl;
+	HTAB	   *txset;
+	/*
+	 * this hopefully will resolve all xacts of node who returned after being
+	 * offline for a long time in one wal scan
+	 */
+	int			max_batch_size = mtm_cfg->n_nodes * MaxBackends + 100;
+	int			n_received_msgs = 0;
 
-	if (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedMask(false), &wait))
+	/*
+	 * Initial resolution requests (1a message) handling often requires to
+	 * scan WAL to learn status of already finished xact. This might be very
+	 * slow e.g. if some node was offline for a long time and others
+	 * accumulated a lot of WAL for it. To alleviate (we'd better have
+	 * specificially tailored gid->outcome map, but ENOINFRASTRUCTURE) this,
+	 * read batch of 1a requests and process (search WAL for needed entries)
+	 * them at once. Other messages are processed immediately.
+	 *
+	 * XXX possibility of blocking generation election by long WAL scan still
+	 * doesn't look appealing. It would be probably better to split tx
+	 * resolution responder to yet another process.
+	 */
+	MemSet(&txset_hash_ctl, 0, sizeof(txset_hash_ctl));
+	txset_hash_ctl.keysize = GIDSIZE;
+	txset_hash_ctl.entrysize = sizeof(txset_entry);
+	txset_hash_ctl.hcxt = CurrentMemoryContext;
+	txset = hash_create("txset", max_batch_size, &txset_hash_ctl,
+						HASH_ELEM | HASH_CONTEXT);
+
+	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedMask(false), &wait))
 	{
 		MtmMessage *raw_msg = MtmMessageUnpack(&packed_msg);
 		int			sender_node_id;
 		int			dest_id;
 
-		*job_pending = true; /* probably there are more messages */
 		sender_node_id = sender_mask_pos + 1;
 		LWLockAcquire(Mtm->lock, LW_SHARED);
 		dest_id = Mtm->peers[sender_node_id - 1].dmq_dest_id;
@@ -2886,14 +2932,37 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 		if (raw_msg->tag == T_MtmTxRequest)
 		{
 			MtmTxRequest *msg = (MtmTxRequest *) raw_msg;
-			GlobalTx   *gtx;
 
 			mtm_log(StatusRequest, "got '%s' from %d",
 					MtmMesageToString(raw_msg), sender_node_id);
 
 			if (msg->type == MTReq_Status) /* 1a */
 			{
-				handle_1a(msg, dest_id, sender_node_id);
+				txset_entry *txse;
+
+				txse = hash_search(txset, msg->gid, HASH_ENTER, NULL);
+				txse->req = msg;
+				/*
+				 * We always respond something -- it will be useful if we ever
+				 * switch to synchronous resolving instead of that 'resolve
+				 * during 3 seconds or I'll start a new ballot'. If by Paxos
+				 * rules we must ignore the message, we reply with invalid
+				 * terms and status -- resolver won't regard it as ack.
+				 */
+				txse->resp = (MtmTxStatusResponse)
+				{
+					.tag = T_MtmTxStatusResponse,
+					.node_id = Mtm->my_node_id,
+					.state = {
+						.proposal = InvalidGTxTerm,
+						.accepted = InvalidGTxTerm,
+						.status = GTXInvalid
+					},
+					.gid = msg->gid
+				};
+				txse->prepare_seen = false;
+				txse->dest_node_id = sender_node_id;
+				txse->dest_id = dest_id;
 			}
 			else if (msg->type == MTReq_Preabort || /* 2a */
 					 msg->type == MTReq_Precommit)
@@ -2902,13 +2971,14 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 			}
 			else /* commit|abort */
 			{
+				GlobalTx   *gtx;
 				MemoryContext oldcontext = CurrentMemoryContext;
 
 				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
 
 				gtx = GlobalTxAcquire(msg->gid, false);
 				if (!gtx)
-					return;
+					goto got_message;
 
 				StartTransactionCommand();
 				FinishPreparedTransaction(gtx->gid,
@@ -2933,9 +3003,27 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 		{
 			Assert(false);
 		}
+
+got_message:
+		n_received_msgs++;
+		/*
+		 * prevent potential infinite spinning in this function; monitor has
+		 * other jobs to do
+		 */
+		if (n_received_msgs >= max_batch_size)
+		{
+			*job_pending = true; /* probably there are more messages */
+			break;
+		}
 	}
-	else if (sender_mask_pos != -1)
+	/*
+	 * if we ended loop not because of WOULDBLOCK but due to one of
+	 * counterparties failing, get back here without waiting on latch
+	 */
+	if (sender_mask_pos != -1)
 		*job_pending = true;
+
+	handle_1a_batch(txset);
 }
 
 
@@ -3470,4 +3558,225 @@ MtmMonitor(Datum arg)
 				ResetLatch(MyLatch);
 		}
 	}
+}
+
+/*
+ * Lsn can point to the end of the record, which is not necessarily the
+ * beginning of the next record, if the previous record happens to end at
+ * a page boundary. Skip over the page header in that case to find the next
+ * record.
+ */
+static void
+lsn_bump(XLogRecPtr *lsn)
+{
+	if (*lsn != InvalidXLogRecPtr && *lsn % XLOG_BLCKSZ == 0)
+	{
+		if (XLogSegmentOffset(*lsn, wal_segment_size) == 0)
+			*lsn += SizeOfXLogLongPHD;
+		else
+			*lsn += SizeOfXLogShortPHD;
+	}
+}
+
+/* ars: this is horrible */
+static void
+GetLoggedPreparedXactState(HTAB *txset)
+{
+	XLogRecord *record;
+	XLogReaderState *xlogreader;
+	char *errormsg;
+	XLogRecPtr start_lsn;
+	XLogRecPtr lsn;
+	TimeLineID timeline;
+	XLogRecPtr end_wal_lsn = GetFlushRecPtr();
+	XLogRecPtr end_lsn = end_wal_lsn;
+	int		   n_trans = hash_get_num_entries(txset);
+
+	GetOldestRestartPoint(&start_lsn, &timeline);
+	if (start_lsn != InvalidXLogRecPtr)
+	{
+		MemoryContext memctx = CurrentMemoryContext;
+		xlogreader = XLogReaderAllocate(wal_segment_size, &read_local_xlog_page, NULL);
+		if (!xlogreader)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory"),
+					 errdetail("Failed while allocating a WAL reading processor.")));
+
+		PG_TRY();
+		{
+			/*
+			 * If checkpoint interval is large enough it may be more efficient
+			 * to start scanning from last WAL segment
+			 */
+			XLogSegNoOffsetToRecPtr(end_lsn / wal_segment_size, 0, wal_segment_size, lsn);
+			lsn_bump(&lsn);
+			lsn = XLogFindNextRecord(xlogreader, lsn);
+			if (lsn != InvalidXLogRecPtr && lsn > start_lsn)
+				start_lsn = lsn;
+
+			/* loop over segments */
+			while (start_lsn != InvalidXLogRecPtr)
+			{
+				lsn = start_lsn;
+				/* loop over records in the segment */
+				do
+				{
+					lsn_bump(&lsn);
+					record = XLogReadRecord(xlogreader, lsn, &errormsg);
+					if (record == NULL)
+						break;
+					lsn = InvalidXLogRecPtr; /* continue after the record */
+					if (XLogRecGetRmid(xlogreader) == RM_XACT_ID)
+					{
+						uint32 info = XLogRecGetInfo(xlogreader);
+						bool	found;
+						txset_entry *txse;
+
+						switch (info & XLOG_XACT_OPMASK)
+						{
+						case XLOG_XACT_PREPARE:
+						{
+							TwoPhaseFileHeader *hdr = (TwoPhaseFileHeader *)XLogRecGetData(xlogreader);
+							char *xact_gid = (char *)hdr + MAXALIGN(sizeof(TwoPhaseFileHeader));
+
+							txse = hash_search(txset, xact_gid, HASH_FIND, &found);
+							if (found)
+							{
+								Assert(TransactionIdIsValid(hdr->xid));
+								txse->prepare_seen = true;
+								/*
+								 * we could also pick up hdr->state_3pc here
+								 * if we wanted, but we don't
+								 */
+							}
+							break;
+						}
+						case XLOG_XACT_COMMIT_PREPARED:
+						{
+							xl_xact_commit *xlrec;
+							xl_xact_parsed_commit parsed;
+
+							xlrec = (xl_xact_commit *)XLogRecGetData(xlogreader);
+							ParseCommitRecord(info, xlrec, &parsed);
+							txse = hash_search(txset, parsed.twophase_gid, HASH_FIND, &found);
+							if (found)
+							{
+								Assert(TransactionIdIsValid(parsed.twophase_xid));
+								txse->resp.state.status = GTXCommitted;
+								n_trans--;
+							}
+							break;
+						}
+
+						case XLOG_XACT_ABORT_PREPARED:
+						{
+							xl_xact_abort *xlrec;
+							xl_xact_parsed_abort parsed;
+
+							xlrec = (xl_xact_abort *)XLogRecGetData(xlogreader);
+							ParseAbortRecord(info, xlrec, &parsed);
+							txse = hash_search(txset, parsed.twophase_gid, HASH_FIND, &found);
+							if (found)
+							{
+								Assert(TransactionIdIsValid(parsed.twophase_xid));
+								txse->resp.state.status = GTXAborted;
+								n_trans--;
+							}
+							break;
+						}
+						default:
+							break;
+						}
+					}
+				} while (n_trans > 0 && xlogreader->EndRecPtr < end_lsn);
+
+				if (n_trans == 0)
+					break;
+
+				end_lsn = start_lsn;
+				/* Get LSN of first record in the current segment */
+				XLogSegNoOffsetToRecPtr(end_lsn / wal_segment_size, 0, wal_segment_size, start_lsn);
+				lsn_bump(&start_lsn);
+				start_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+				/*
+				 * If we didn't start from the beginning of segment, then restart
+				 * scan from the beginning of segment
+				 */
+				if (start_lsn == end_lsn)
+				{
+					/* ... otherwise check if it is not the first segment */
+					if (end_lsn <= wal_segment_size * 2)
+						break;
+					/* ... and if not: shift to previous segment */
+					XLogSegNoOffsetToRecPtr(end_lsn / wal_segment_size - 1, 0, wal_segment_size, start_lsn);
+					/* ... and check that pending segment is actually exists */
+					if (start_lsn / wal_segment_size <= XLogGetLastRemovedSegno())
+						break;
+					lsn_bump(&start_lsn);
+					start_lsn = XLogFindNextRecord(xlogreader, start_lsn);
+				}
+			}
+		}
+		PG_CATCH();
+		{
+			/* Catch access to unexisted WAL segment */
+			/*
+			 * XXX ars: we need to understand better how we end up
+			 * here. Generally this function must not silently eat errors: if
+			 * it failed to determine the xact outcome, we expect that the
+			 * outcome indeed doesn't exist, or status responder will
+			 * misbehave. However, if this is a failure to read recycled WAL,
+			 * and the whole WAL up to the flush point on the moment of scan
+			 * start has already been either scanned or recycled that's fine.
+			 *
+			 * I tried to make it safer by ignoring the result in case of
+			 * error (peers resolvers retry their requests), but that once led
+			 * to 2 minutes of continious errors (during which xacts to be
+			 * resolved hanged of course), after which they suddently
+			 * disappeared -- and I'm pretty sure slots weren't advanced
+			 * during that period.
+			 */
+			EmitErrorReport();
+			FlushErrorState();
+		}
+		PG_END_TRY();
+		MemoryContextSwitchTo(memctx);
+		XLogReaderFree(xlogreader);
+	}
+	return;
+}
+
+/* SQL wrapper for debugging/testing/investigating */
+Datum
+mtm_get_logged_prepared_xact_state(PG_FUNCTION_ARGS)
+{
+	char	   *gid = text_to_cstring(PG_GETARG_TEXT_P(0));
+	char	   *res;
+	HASHCTL		txset_hash_ctl;
+	HTAB	   *txset;
+	txset_entry *txse;
+
+	MemSet(&txset_hash_ctl, 0, sizeof(txset_hash_ctl));
+	txset_hash_ctl.keysize = GIDSIZE;
+	txset_hash_ctl.entrysize = sizeof(txset_entry);
+	txset_hash_ctl.hcxt = CurrentMemoryContext;
+	txset = hash_create("txset", 1, &txset_hash_ctl,
+						HASH_ELEM | HASH_CONTEXT);
+
+	txse = hash_search(txset, gid, HASH_ENTER, NULL);
+	txse->resp.state.status = GTXInvalid;
+	txse->prepare_seen = false;
+	GetLoggedPreparedXactState(txset);
+
+	if (txse->resp.state.status == GTXCommitted)
+		res = "committed";
+	else if (txse->resp.state.status == GTXAborted)
+		res = "aborted";
+	else
+	{
+		Assert(txse->resp.state.status == GTXInvalid);
+		res = "notfound";
+	}
+	PG_RETURN_TEXT_P(cstring_to_text(res));
 }
