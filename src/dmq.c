@@ -205,6 +205,7 @@ struct
 	shm_mq_handle *mq_outh;
 
 	/* to receive */
+	char	curr_stream_name[DMQ_NAME_MAXLEN];
 	uint64	my_procno_gen;
 	int			n_inhandles;
 	struct
@@ -1784,9 +1785,21 @@ dmq_detach_receiver(char *sender_name)
 			sender_name, handle_id);
 }
 
+/* unsubscribe on exit automatically */
+static void
+dmq_subscriber_before_shmem_exit(int status, Datum arg)
+{
+	dmq_stream_unsubscribe();
+}
+
 /*
  * Subscribes caller to msgs from stream_name and attempts to reattach to
  * receivers.
+ *
+ * We support only one subscription per backend at the same time. It wouldn't
+ * be hard to support multiple of them (e.g. maintain list of active subs in
+ * local mem and automatically unsubscribe all of them on exit), but currently
+ * there is no real need for that.
  */
 void
 dmq_stream_subscribe(char *stream_name)
@@ -1801,6 +1814,7 @@ dmq_stream_subscribe(char *stream_name)
 	if (dmq_local.my_procno_gen == 0)
 	{
 		dmq_local.my_procno_gen = ++dmq_state->procno_gens[MyProc->pgprocno];
+		before_shmem_exit(dmq_subscriber_before_shmem_exit, 0);
 		mtm_log(DmqTraceShmMq, "my_procno_gen issued, my id <%d, " UINT64_FORMAT ">",
 				MyProc->pgprocno, dmq_local.my_procno_gen);
 	}
@@ -1808,15 +1822,16 @@ dmq_stream_subscribe(char *stream_name)
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
 	sub = (DmqStreamSubscription *) hash_search(dmq_subscriptions, stream_name,
 												HASH_ENTER, &found);
-	if (found && sub->procno != MyProc->pgprocno)
+	if (found)
 	{
 		mtm_log(ERROR,
-				"[DMQ] procno%d: %s: subscription is already active for procno %d / %s",
+				"[DMQ] procno %d: %s: subscription is already active for procno %d / %s",
 				MyProc->pgprocno, stream_name, sub->procno, sub->stream_name);
 	}
 	sub->procno = MyProc->pgprocno;
 	sub->procno_gen = dmq_local.my_procno_gen;
 	LWLockRelease(dmq_state->lock);
+	strncpy(dmq_local.curr_stream_name, stream_name, DMQ_NAME_MAXLEN);
 
 	/*
 	 * Try to ensure we have live connections to receivers, if not yet. The
@@ -1843,14 +1858,20 @@ dmq_stream_subscribe(char *stream_name)
 	}
 }
 
+/* unsubscribe from the current stream */
 void
-dmq_stream_unsubscribe(char *stream_name)
+dmq_stream_unsubscribe(void)
 {
 	bool		found;
 
+	if (dmq_local.curr_stream_name[0] == '\0')
+		return;
+
 	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
-	hash_search(dmq_subscriptions, stream_name, HASH_REMOVE, &found);
+	hash_search(dmq_subscriptions, dmq_local.curr_stream_name, HASH_REMOVE,
+				&found);
 	LWLockRelease(dmq_state->lock);
+	dmq_local.curr_stream_name[0] = '\0';
 
 	Assert(found);
 }

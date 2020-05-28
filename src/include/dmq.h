@@ -22,7 +22,7 @@ extern void dmq_detach_receiver(char *sender_name);
 extern void dmq_terminate_receiver(char *name);
 
 extern void dmq_stream_subscribe(char *stream_name);
-extern void dmq_stream_unsubscribe(char *stream_name);
+extern void dmq_stream_unsubscribe(void);
 
 extern void dmq_get_sendconn_cnt(uint64 participants, int *sconn_cnt);
 extern bool dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask);

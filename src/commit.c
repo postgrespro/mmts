@@ -50,8 +50,6 @@ MtmCurrentTrans MtmTx;
 /* holds state defining cleanup actions in case of failure during commit */
 static struct MtmCommitState
 {
-	char stream_name[DMQ_NAME_MAXLEN];
-	bool subscribed;
 	char gid[GIDSIZE];
 	GlobalTx *gtx;
 	bool abort_prepare; /* whether cleanup can (should) abort xact immediately */
@@ -125,12 +123,7 @@ mtm_commit_cleanup(int status, Datum arg)
 	bool on_exit = DatumGetInt32(arg) == 1;
 
 	ReleasePB();
-
-	if (mtm_commit_state.subscribed)
-	{
-		dmq_stream_unsubscribe(mtm_commit_state.stream_name);
-		mtm_commit_state.subscribed = false;
-	}
+	dmq_stream_unsubscribe();
 
 	if (mtm_commit_state.gtx != NULL)
 	{
@@ -386,6 +379,7 @@ MtmTwoPhaseCommit(void)
 	int 		nvotes;
 	nodemask_t	pc_success_cohort;
 	MtmGeneration xact_gen;
+	char dmq_stream_name[DMQ_NAME_MAXLEN];
 
 	if (MtmNo3PC)
 	{
@@ -414,7 +408,6 @@ MtmTwoPhaseCommit(void)
 	}
 
 	/* prepare for cleanup */
-	mtm_commit_state.subscribed = false;
 	mtm_commit_state.gtx = NULL;
 	mtm_commit_state.abort_prepare = false;
 	/*
@@ -445,11 +438,10 @@ MtmTwoPhaseCommit(void)
 		xid = GetTopTransactionId();
 		MtmGenerateGid(mtm_commit_state.gid, mtm_cfg->my_node_id, xid,
 					   xact_gen.num, xact_gen.configured);
-		sprintf(mtm_commit_state.stream_name, "xid" XID_FMT, xid);
-		dmq_stream_subscribe(mtm_commit_state.stream_name);
-		mtm_commit_state.subscribed = true;
+		sprintf(dmq_stream_name, "xid" XID_FMT, xid);
+		dmq_stream_subscribe(dmq_stream_name);
 		mtm_log(MtmTxTrace, "%s subscribed for %s", mtm_commit_state.gid,
-				mtm_commit_state.stream_name);
+				dmq_stream_name);
 
 		/* prepare transaction on our node */
 
@@ -679,10 +671,9 @@ precommit_tour_done:
 		}
 
 commit_tour_done:
-		dmq_stream_unsubscribe(mtm_commit_state.stream_name);
-		mtm_commit_state.subscribed = false;
+		dmq_stream_unsubscribe();
 		mtm_log(MtmTxTrace, "%s unsubscribed for %s",
-				mtm_commit_state.gid, mtm_commit_state.stream_name);
+				mtm_commit_state.gid, dmq_stream_name);
 	}
 	PG_CATCH();
 	{
@@ -743,7 +734,7 @@ MtmExplicitPrepare(char *gid)
 		   (MtmMessage **) messages, NULL, &n_messages,
 		   NULL, 0,
 		   NULL, 0);
-	dmq_stream_unsubscribe(stream);
+	dmq_stream_unsubscribe();
 
 	for (i = 0; i < n_messages; i++)
 	{
@@ -812,7 +803,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 			   NULL, 0,
 			   NULL, 0);
 
-		dmq_stream_unsubscribe(gid);
+		dmq_stream_unsubscribe();
 	}
 	else
 	{

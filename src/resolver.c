@@ -375,7 +375,8 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 			gtx->resolver_stage = GTRS_AwaitStatus;
 
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &status_msg));
+			scatter(mtm_cfg, connected, "mon",
+					MtmMessagePack((MtmMessage *) &status_msg));
 		}
 	}
 	LWLockRelease(gtx_shared->lock);
@@ -571,7 +572,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				InvalidXLogRecPtr
 			};
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
+			scatter(mtm_cfg, connected, "mon",
+					MtmMessagePack((MtmMessage *) &request_msg));
 		}
 	}
 	else if (gtx->resolver_stage == GTRS_AwaitAcks &&
@@ -617,7 +619,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				gid
 			};
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "txreq", MtmMessagePack((MtmMessage *) &request_msg));
+			scatter(mtm_cfg, connected, "mon",
+					MtmMessagePack((MtmMessage *) &request_msg));
 			return;
 		}
 	}

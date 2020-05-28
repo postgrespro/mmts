@@ -1236,7 +1236,8 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 
 	request_msg.tag = T_MtmGenVoteRequest;
 	request_msg.gen = candidate_gen;
-	scatter(*mtm_cfg, cohort, "genvotereq", MtmMessagePack((MtmMessage *) &request_msg));
+	scatter(*mtm_cfg, cohort, "mon",
+			MtmMessagePack((MtmMessage *) &request_msg));
 
 	gather(cohort, (MtmMessage **) messages, senders, &n_messages,
 		   CampaignerGatherHook, UInt64GetDatum(candidate_gen.num),
@@ -3438,8 +3439,7 @@ MtmMonitor(Datum arg)
 								  pubsub_change_cb,
 								  (Datum) 0);
 
-	dmq_stream_subscribe("txreq");
-	dmq_stream_subscribe("genvotereq");
+	dmq_stream_subscribe("mon"); /* use single stream for xact and gen reqs */
 
 	/* Launch resolver */
 	Assert(resolver == NULL);
