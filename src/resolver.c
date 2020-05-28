@@ -305,6 +305,17 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	GlobalTx   *gtx;
 	GlobalTxTerm new_term;
 
+	/*
+	 * It is almost pointless to resolve unless we see the majority, do not
+	 * wind term numbers in waste. Yeah, we could get some finished xact
+	 * statuses, but normal paxos resolution would surely fail.
+	 */
+	if (!MtmQuorum(mtm_cfg, MtmGetConnectedMaskWithMe(false)))
+	{
+		mtm_log(ResolverState, "not sending requests as there is no connected majority");
+		return;
+	}
+
 	mtm_log(ResolverState, "orphaned transactions detected");
 
 	/*
