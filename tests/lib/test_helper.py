@@ -194,6 +194,7 @@ class TestHelper(object):
 
         return (aggs_failure, aggs)
 
+    @staticmethod
     def nodeExecute(dsn, statements):
         con = psycopg2.connect(dsn)
         try:
@@ -204,3 +205,15 @@ class TestHelper(object):
             cur.close()
         finally:
             con.close()
+
+    @staticmethod
+    def nodeSelect(dsn, statement):
+        con = psycopg2.connect(dsn + " connect_timeout=1")
+        try:
+            cur = con.cursor()
+            cur.execute(statement)
+            res = cur.fetchall()
+            cur.close()
+        finally:
+            con.close()
+        return res
