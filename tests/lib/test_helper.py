@@ -99,30 +99,39 @@ class TestHelper(object):
     def assertDataSync(self):
         self.client.stop()
 
-        # wait until prepares will be resolved
+        try:
+            # wait until prepares will be resolved
 
-        # TODO: port graceful client termination from current stable branches.
-        # In that case I'd expect tests to pass without waiting as there are at
-        # least several seconds between 'all nodes are online' and this check
-        # (and with current hard client stop 1-2 hanged prepares are rarely
-        # but repeatedly seen). However generally there is no strict guarantee
-        # 'nodes are online and no clients => there are no unresolved xacts'
-        # in current mtm, end of recovery doesn't mean node doesn't have any
-        # prepares. Probably we could such guarantee via counter of orphaned
-        # xacts?
-        keep_trying(40, 1, self.AssertNoPrepares, 'AssertNoPrepares')
+            # TODO: port graceful client termination from current stable
+            # branches.  In that case I'd expect tests to pass without waiting
+            # as there are at least several seconds between 'all nodes are
+            # online' and this check (and with current hard client stop 1-2
+            # hanged prepares are rarely but repeatedly seen). However generally
+            # there is no strict guarantee 'nodes are online and no clients =>
+            # there are no unresolved xacts' in current mtm, end of recovery
+            # doesn't mean node doesn't have any prepares. Probably we could
+            # add such guarantee via counter of orphaned xacts?
+            keep_trying(40, 1, self.AssertNoPrepares, 'AssertNoPrepares')
 
-        if not self.client.is_data_identic():
-            raise AssertionError('Different data on nodes')
+            if not self.client.is_data_identic():
+                raise AssertionError('Different data on nodes')
 
-        # no new PREPARE should have appeared, the client is stopped
-        # XXX actually they could: something like
-        # - no prepare on 1, so going ahead to check 2
-        # - prepare on 2
-        # - waited until prepare on 2 is resolved
-        # - ... but now it is sent to 1
-        # probably we should just have here keep_trying is_data_identic
-        self.AssertNoPrepares()
+            # no new PREPARE should have appeared, the client is stopped
+            # XXX actually they could: something like
+            # - no prepare on 1, so going ahead to check 2
+            # - prepare on 2
+            # - waited until prepare on 2 is resolved
+            # - ... but now it is sent to 1
+            # probably we should just have here keep_trying is_data_identic
+            #
+            # UPD: well, that was issue of temp schema deletion which happened
+            # on session exit and went though full fledged 3pc commit. This is
+            # fixed now; but theoretically the problem still exists.
+            self.AssertNoPrepares()
+        except AssertionError:
+            # further tests assume the client continues running
+            self.client.bgrun()
+            raise
 
         self.client.bgrun()
 
