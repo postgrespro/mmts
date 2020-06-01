@@ -47,7 +47,7 @@ class TestHelper(object):
         total_sleep = 0
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
-            print('waiting for commit on node {}, slept for {}, aggregates:'.format(node_id + 1, total_sleep))
+            print('{} waiting for commit on node {}, slept for {}, aggregates:'.format(datetime.datetime.utcnow(), node_id + 1, total_sleep))
             aggs = self.client.get_aggregates(clean=False, _print=True)
             print('=== transfer finishes: ', aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
@@ -170,7 +170,7 @@ class TestHelper(object):
 
         if stop_load:
             time.sleep(3)
-            print('aggs before client stop:')
+            print('{} aggs before client stop:'.format(datetime.datetime.utcnow()))
             self.client.get_aggregates(clean=False)
             self.client.stop()
 
@@ -189,7 +189,7 @@ class TestHelper(object):
             time.sleep(TEST_RECOVERY_TIME)
 
         time.sleep(TEST_RECOVERY_TIME)
-        print('aggs after failure:')
+        print('{} aggs after failure:'.format(datetime.datetime.utcnow()))
         aggs = self.client.get_aggregates()
 
         return (aggs_failure, aggs)

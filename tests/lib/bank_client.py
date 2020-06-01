@@ -467,10 +467,10 @@ class MtmClient(object):
         print('aggregates cleaned')
 
     def stop(self):
-        print('stopping client')
+        print('{} stopping client'.format(datetime.datetime.utcnow()))
         self.parent_pipe.send('exit')
         self.evloop_process.join()
-        print('client stopped')
+        print('{} client stopped'.format(datetime.datetime.utcnow()))
 
     @classmethod
     def print_aggregates(cls, aggs):
