@@ -314,8 +314,7 @@ GlobalTxRelease(GlobalTx *gtx)
  * Scan and load in gid2gtx hashtable transactions from postgres gxacts and
  * from our private table.
  *
- * Called only upon multimaster startup and shmem restart from initialising
- * bgworker.
+ * Called only upon multimaster startup.
  */
 void
 GlobalTxLoadAll()
@@ -323,8 +322,21 @@ GlobalTxLoadAll()
 	PreparedTransaction pxacts;
 	int					n_xacts;
 	int					i;
+	HASH_SEQ_STATUS hash_seq;
+	GlobalTx   *gtx;
 
 	LWLockAcquire(gtx_shared->lock, LW_EXCLUSIVE);
+
+	/*
+	 * This is called without shmem reset if monitor restarts.
+	 * XXX is there are a better way to rm all elements of hash?
+	 */
+	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
+	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
+	{
+		gtx = (GlobalTx *) hash_search(gtx_shared->gid2gtx, gtx->gid,
+									   HASH_REMOVE, NULL);
+	}
 
 	/* Walk over postgres gxacts */
 	n_xacts = GetPreparedTransactions(&pxacts);

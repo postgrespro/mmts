@@ -413,10 +413,11 @@ handle_responses(MtmConfig *mtm_cfg)
 }
 
 static bool
-quorum(MtmConfig *mtm_cfg, GTxState *all_states)
+quorum(MtmConfig *mtm_cfg, GTxState *all_states, char *gid)
 {
 	int i, n_states = 0;
 	GTxState my_state = all_states[mtm_cfg->my_node_id - 1];
+	nodemask_t configured;
 
 	/*
 	 * Make sure it is actually our term we are trying to assemble majority
@@ -442,7 +443,13 @@ quorum(MtmConfig *mtm_cfg, GTxState *all_states)
 			n_states++;
 	}
 
-	return MtmQuorum(mtm_cfg, n_states);
+	/*
+	 * only configured mask of xact generation participates in resolving --
+	 * this guarantees two successfull votings with non-intersecting quorums
+	 * are not possible
+	 */
+	configured = MtmGidParseConfigured(gid);
+	return Quorum(popcount(configured), n_states);
 }
 
 static void
@@ -492,7 +499,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			GlobalTxRelease(gtx);
 			return;
 		}
-		else if (quorum(mtm_cfg, gtx->phase1_acks))
+		else if (quorum(mtm_cfg, gtx->phase1_acks, gtx->gid))
 		{
 			int			i;
 			char	   *sstate;
@@ -598,7 +605,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			msg->status
 		};
 
-		if (quorum(mtm_cfg, gtx->phase2_acks))
+		if (quorum(mtm_cfg, gtx->phase2_acks, gtx->gid))
 		{
 			MtmTxRequest request_msg;
 			uint64		connected;

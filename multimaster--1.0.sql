@@ -99,7 +99,7 @@ RETURNS VOID
 AS 'MODULE_PATHNAME','mtm_init_cluster'
 LANGUAGE C;
 
-CREATE OR REPLACE FUNCTION mtm.state_create(n_nodes int)
+CREATE OR REPLACE FUNCTION mtm.state_create(node_ids int[])
 RETURNS VOID
 AS 'MODULE_PATHNAME','mtm_state_create'
 LANGUAGE C;

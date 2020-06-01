@@ -17,6 +17,7 @@
 #include "catalog/index.h"
 #include "catalog/heap.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_subscription.h"
 #include "catalog/pg_type.h"
 
 #include "executor/spi.h"
@@ -1574,6 +1575,11 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 								mtm_log(ERROR, "could not finish SPI");
 							PopActiveSnapshot();
 
+							/*
+							 * xxx a really rude way to force config update in
+							 * all procs, but this is done very rarely
+							 */
+							CacheInvalidateCatalog(SubscriptionRelationId);
 							CommitTransactionCommand();
 
 							receiver_mtm_cfg_valid = false;

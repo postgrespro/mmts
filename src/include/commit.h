@@ -22,6 +22,7 @@ extern void MtmGenerateGid(char *gid, int node_id, TransactionId xid, uint64 gen
 extern uint64 MtmGidParseGenNum(const char *gid);
 extern int	MtmGidParseNodeId(const char *gid);
 extern TransactionId MtmGidParseXid(const char *gid);
+extern nodemask_t MtmGidParseConfigured(const char *gid);
 
 extern bool MtmTwoPhaseCommit(void);
 extern void MtmBeginTransaction(void);

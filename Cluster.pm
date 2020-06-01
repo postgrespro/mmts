@@ -58,7 +58,7 @@ sub init
 			shared_preload_libraries = 'multimaster, pg_pathman'
 
 			max_prepared_transactions = 250
-			max_worker_processes = 220
+			max_worker_processes = 320
 			max_wal_senders = 6
 			max_replication_slots = 12
 			wal_sender_timeout = 0

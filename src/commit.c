@@ -338,6 +338,20 @@ MtmGidParseXid(const char *gid)
 	return xid;
 }
 
+/* parse generation configured mask from gid */
+nodemask_t
+MtmGidParseConfigured(const char *gid)
+{
+	TransactionId xid;
+	uint64 gen_num;
+	nodemask_t configured = 0;
+
+	sscanf(gid, "MTM-%*d-" XID_FMT "-%" INT64_MODIFIER "X-%" INT64_MODIFIER "X",
+		   &xid, &gen_num, &configured);
+	Assert(configured != 0);
+	return configured;
+}
+
 /* ensure we get the right PREPARE ack */
 static bool
 PrepareGatherHook(MtmMessage *anymsg, Datum arg)

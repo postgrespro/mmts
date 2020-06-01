@@ -423,7 +423,7 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 		 * filter on receiver side.
 		 */
 		mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
-		pq_sendbyte(out, -1);
+		pq_sendbyte(out, MtmInvalidNodeId);
 	}
 	else
 	{

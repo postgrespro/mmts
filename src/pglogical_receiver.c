@@ -351,7 +351,7 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	 * lead to skipping dropped node xacts on some lagged node, but who ever
 	 * said we support membership changes under load?
 	 */
-	if (origin_node == -1)
+	if (origin_node == MtmInvalidNodeId)
 		return true;
 
 	/* Skip all transactions from our node */

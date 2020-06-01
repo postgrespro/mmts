@@ -141,6 +141,10 @@ bool		MtmNo3PC;
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
 
+/*
+ * If you get really bored one day, you may try hardware-accelerated popcount
+ * here and see if anything changes.
+ */
 int
 popcount(nodemask_t mask)
 {
@@ -639,11 +643,12 @@ MtmAllApplyWorkersFinished()
 		}
 
 		LWLockAcquire(&Mtm->pools[i].txlist.lock, LW_SHARED);
-		ntasks = Mtm->pools[0].txlist.nelems;
+		ntasks = Mtm->pools[i].txlist.nelems;
 		LWLockRelease(&Mtm->pools[i].txlist.lock);
 		LWLockRelease(&Mtm->pools[i].lock);
 
-		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished", ntasks);
+		mtm_log(MtmApplyBgwFinish, "MtmAllApplyWorkersFinished %d tasks not finished from node %d",
+				ntasks, i+1);
 
 		if (ntasks != 0)
 			return false;
@@ -662,7 +667,7 @@ MtmAllApplyWorkersFinished()
  * Check correctness of multimaster configuration
  */
 static bool
-check_config(int node_id)
+check_config(int node_id, int n_nodes)
 {
 	bool		ok = true;
 	int			workers_required;
@@ -690,11 +695,8 @@ check_config(int node_id)
 	 * receiver hogging the covers and occupying all slots with its workers
 	 * while another one wouldn't be able to spin even one, thus hanging the
 	 * cluster.
-	 *
-	 * We hope that the configuration is the same on all nodes, so it is ok to
-	 * abuse node_id as number of nodes in the cluster.
 	 */
-	workers_required = 4 + (node_id - 1) * (MtmMaxWorkers + 1);
+	workers_required = 4 + (n_nodes - 1) * (MtmMaxWorkers + 1);
 	if (max_worker_processes < workers_required)
 	{
 		mtm_log(WARNING,
@@ -747,6 +749,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	int			n_nodes;
 	PGconn	  **peer_conns;
 	StringInfoData local_query;
+	StringInfoData node_ids_arr;
 
 	/* parse array with peer connstrings */
 	Assert(ARR_ELEMTYPE(peers_arr) == TEXTOID);
@@ -763,6 +766,17 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 
 	if (n_peers < 1)
 		mtm_log(ERROR, "at least one peer node should be specified");
+
+	/* initial node ids are 1..n_nodes */
+	initStringInfo(&node_ids_arr);
+	appendStringInfoString(&node_ids_arr, "'{");
+	for (i = 0; i < n_nodes; i++)
+	{
+		if (i != 0)
+			appendStringInfoString(&node_ids_arr, ", ");
+		appendStringInfo(&node_ids_arr, "%d", i + 1);
+	}
+	appendStringInfoString(&node_ids_arr, "}'");
 
 	peer_conns = (PGconn **) palloc0(n_peers * sizeof(PGconn *));
 
@@ -801,7 +815,8 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 
 		/* create persistent state (initial generation) */
 		res = PQexec(peer_conns[i],
-					 psprintf("select mtm.state_create(%d);", n_nodes));
+					 psprintf("select mtm.state_create(%s);",
+							  node_ids_arr.data));
 		if (PQresultStatus(res) != PGRES_TUPLES_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
@@ -855,8 +870,8 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 		mtm_log(ERROR, "could not connect using SPI");
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	rc = SPI_execute(psprintf("select mtm.state_create(%d);", n_nodes),
-					 false, 0);
+	rc = SPI_execute(psprintf("select mtm.state_create(%s);",
+							  node_ids_arr.data), false, 0);
 	if (rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to create mtm state");
 
@@ -882,6 +897,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	bool		is_self_isnull;
 	char	   *conninfo;
 	bool		conninfo_isnull;
+	int			n_nodes;
+	int			rc;
 
 	Assert(CALLED_AS_TRIGGER(fcinfo));
 	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
@@ -904,7 +921,20 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 										&is_self_isnull));
 	Assert(!is_self_isnull);
 
-	if (!check_config(node_id))
+	/* get total num of nodes for check_config */
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	/*
+	 * NOTE: if we say to SPI_execute that query is read only, we won't see
+	 * the changes of current INSERT, making this pointless. Why?
+	 */
+	rc = SPI_execute("select * from " MTM_NODES , false, 0);
+	if (rc != SPI_OK_SELECT)
+		mtm_log(ERROR, "Failed to select from " MTM_NODES);
+	n_nodes = SPI_processed;
+	SPI_finish();
+
+	if (!check_config(node_id, n_nodes))
 		mtm_log(ERROR, "multimaster can't start with current configs");
 
 	mtm_log(NodeMgmt, "mtm_after_node_create %d", node_id);

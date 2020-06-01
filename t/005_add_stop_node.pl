@@ -3,7 +3,21 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 6;
+use Test::More tests => 8;
+
+# Generally add node with concurrent load (and failures) is not supported
+# because of at least
+# 1) it is not clear why non-donor nodes should properly keep WAL for new node;
+# 2) if donor fails, it is not clear whether new node will obtain suitable
+#    syncpoints to pull from non-donors;
+# 3) A problem with slot creation and receiver start deadlocking each other,
+#    see PGPRO-3618.
+#
+# drop_node with concurrent load is not safe at least because once it is done we
+# can't determine origin node properly, so no its xacts would be replicated.
+#
+# An option is left for experiments/future work.
+my $concurrent_load = 0;
 
 my $cluster = new Cluster(3);
 $cluster->init();
@@ -29,6 +43,7 @@ foreach (0..$#{$cluster->{nodes}})
 
     $cluster->safe_psql($_, qq{
         create extension multimaster;
+		select mtm.state_create('{2, 4, 5}');
         insert into mtm.cluster_nodes values
             (2, \$\$@{[ $cluster->connstr(0) ]}\$\$, '@{[ $_ == 0 ? 't' : 'f' ]}', 'f'),
             (4, \$\$@{[ $cluster->connstr(1) ]}\$\$, '@{[ $_ == 1 ? 't' : 'f' ]}', 'f'),
@@ -48,6 +63,8 @@ $cluster->pgbench(2, ('-N', '-n', -t => '100') );
 ################################################################################
 
 $cluster->{nodes}->[2]->stop('fast');
+# sometimes failure of one node forces another into short recovery
+sleep(2);
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[2]->start;
 
@@ -64,8 +81,13 @@ $cluster->safe_psql(0, "insert into test_seq values(DEFAULT)");
 $cluster->safe_psql(1, "insert into test_seq values(DEFAULT)");
 $cluster->safe_psql(2, "insert into test_seq values(DEFAULT)");
 
-my $pgb1= $cluster->pgbench_async(0, ('-N', '-n', -T => '3600', -c => '2') );
-my $pgb2= $cluster->pgbench_async(1, ('-N', '-n', -T => '3600', -c => '2') );
+my $pgb1;
+my $pgb2;
+if ($concurrent_load)
+{
+	$pgb1= $cluster->pgbench_async(0, ('-N', '-n', -T => '3600', -c => '2') );
+	$pgb2= $cluster->pgbench_async(1, ('-N', '-n', -T => '3600', -c => '2') );
+}
 
 my $new_node_off = $cluster->add_node();
 $cluster->{nodes}->[$new_node_off]->{dbname} = 'postgres';
@@ -76,7 +98,10 @@ my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node(\$\$$connstr\$\$)"
 is($new_node_id, 1, "sparse id assignment");
 is($new_node_off, 3, "sparse id assignment");
 
-$cluster->pgbench(0, ('-N', '-n', -t => '100') );
+if ($concurrent_load)
+{
+	$cluster->pgbench(0, ('-N', '-n', -t => '100') );
+}
 
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
 $cluster->release_socket($sock);
@@ -85,10 +110,14 @@ $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket
 $cluster->{nodes}->[$new_node_off]->start;
 $cluster->await_nodes( (3,0,1,2) );
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");
+note("join_node done");
 
-sleep(5);
-IPC::Run::kill_kill($pgb1);
-IPC::Run::kill_kill($pgb2);
+if ($concurrent_load)
+{
+	sleep(5);
+	IPC::Run::kill_kill($pgb1);
+	IPC::Run::kill_kill($pgb2);
+}
 
 $cluster->await_nodes( (3,0,1,2) );
 $cluster->pgbench(0, ('-N', '-n', -t => '100') );
@@ -107,6 +136,37 @@ $cluster->safe_psql(0, "insert into test_seq values(DEFAULT)");
 $cluster->safe_psql(1, "insert into test_seq values(DEFAULT)");
 $cluster->safe_psql(2, "insert into test_seq values(DEFAULT)");
 $cluster->safe_psql(3, "insert into test_seq values(DEFAULT)");
+
+################################################################################
+# basic check of recovery after add node succeeded
+################################################################################
+
+$cluster->{nodes}->[0]->stop('fast');
+sleep(2);
+$cluster->pgbench(3, ('-N', '-n', -T => '1') );
+$cluster->{nodes}->[0]->start;
+
+$cluster->await_nodes( (2,0,1) );
+is($cluster->is_data_identic((0,1,2,3)), 1, "check recovery after add_node");
+
+################################################################################
+# drop one of the initial nodes
+################################################################################
+
+$cluster->safe_psql(1, "select mtm.drop_node(2)");
+$cluster->{nodes}->[0]->stop('fast');
+
+# check basic recovery after drop_node
+$cluster->{nodes}->[1]->stop('fast');
+sleep(2);
+$cluster->pgbench(3, ('-N', '-n', -T => '1') );
+$cluster->pgbench(2, ('-N', '-n', -T => '1') );
+$cluster->{nodes}->[1]->start;
+$cluster->await_nodes( (3,2,1) );
+is($cluster->is_data_identic((1,2,3)), 1, "check recovery after drop_node");
+
+
+# TODO: check that WALs are not kept for dropped node anymore
 
 ################################################################################
 # XXX: check remove/add of same node

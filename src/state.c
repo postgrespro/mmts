@@ -301,10 +301,23 @@ Datum
 mtm_state_create(PG_FUNCTION_ARGS)
 {
 	/*
-	 * Initial node numbers are 1..n_nodes
+	 * Initial node ids normally are 1..n_nodes, but we pass array of node ids
+	 * here to allow tests configure sparse numbers.
 	 */
-	int n_nodes = PG_GETARG_INT32(0);
-	int i;
+	ArrayType  *node_ids_arr = PG_GETARG_ARRAYTYPE_P(0);
+	Datum	   *node_ids_datums;
+	bool	   *node_ids_nulls;
+	int			n_nodes;
+	int			i;
+
+	/* parse array with node ids */
+	Assert(ARR_ELEMTYPE(node_ids_arr) == INT4OID);
+	Assert(ARR_NDIM(node_ids_arr) == 1);
+	deconstruct_array(node_ids_arr,
+					  INT4OID,
+					  4, true, 'i',
+					  &node_ids_datums, &node_ids_nulls, &n_nodes);
+
 
 	/*
 	 * Initially, all members are online in gen 1.
@@ -317,8 +330,11 @@ mtm_state_create(PG_FUNCTION_ARGS)
 	mtm_state->current_gen_configured = 0;
 	for (i = 0; i < n_nodes; i++)
 	{
-		BIT_SET(mtm_state->current_gen_members, i);
-		BIT_SET(mtm_state->current_gen_configured, i);
+		int node_id = DatumGetInt32(node_ids_datums[i]);
+
+		Assert(node_id >= 1);
+		BIT_SET(mtm_state->current_gen_members, node_id - 1);
+		BIT_SET(mtm_state->current_gen_configured, node_id - 1);
 	}
 	mtm_state->donors = mtm_state->current_gen_members;
 	mtm_state->last_online_in = 1;
@@ -442,6 +458,7 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	/* update current gen */
 	pg_atomic_write_u64(&mtm_state->current_gen_num, gen.num);
 	mtm_state->current_gen_members = gen.members;
+	mtm_state->current_gen_configured = gen.configured;
 	mtm_state->donors = donors;
 
 	/*
@@ -974,6 +991,18 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	nodemask_t clique;
 
 	/*
+	 * Basebackup'ed node must recover from donor until it obtains syncpoints
+	 * allowing to pull properly from the rest of nodes.
+	 */
+	if (mtm_cfg->backup_node_id != MtmInvalidNodeId)
+	{
+		mtm_log(MtmStateDebug, "setting to recover from donor %d after basebackup",
+				mtm_cfg->backup_node_id);
+		MtmSetReceiveMode(mtm_cfg->backup_node_id);
+		return false;
+	}
+
+	/*
 	 * Exclude voter and gen switchers. Get locks before peeking connectivity
 	 * to forbid checking out campaigner_on_tour until we decide whether we're
 	 * going to campaign basing on this connectivity.
@@ -1207,25 +1236,6 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 	uint64 max_last_vote_num = MtmInvalidGenNum;
 	uint64 max_last_online_in = my_last_online_in;
 	nodemask_t donors = 0;
-
-	/*
-	 * XXX: Doing this here, *after* cohort is formed, is somewhat important:
-	 * otherwise new node might be added after config reload, but fast enough
-	 * to be included in the clique, in which case gather would hang waiting
-	 * for reply from new node infinitely as we hadn't done
-	 * dmq_attach_receiver. A better way would be to make dmq_pop_nb iterate
-	 * over participants and error out when handle can't be found -- that
-	 * would render all this irrelevant.
-	 */
-	AcceptInvalidationMessages();
-	if (!config_valid)
-	{
-		*mtm_cfg = MtmReloadConfig(*mtm_cfg, attach_node, detach_node, (Datum) NULL);
-		config_valid = true;
-	}
-	/* xact in MtmReloadConfig could've knocked down our ctx */
-	MemoryContextSwitchTo(campaigner_ctx);
-
 
 	/*
 	 * TODO: it would be nice to dmq_reattach_shm_mq here (normally it is done
@@ -1559,6 +1569,7 @@ CampaignerMain(Datum main_arg)
 		MtmGeneration candidate_gen;
 		nodemask_t cohort;
 		uint64 my_last_online_in;
+		bool	tour;
 
 		/* cleanup message pack/unpack allocations */
 		MemoryContextReset(campaigner_ctx);
@@ -1566,7 +1577,28 @@ CampaignerMain(Datum main_arg)
 		CHECK_FOR_INTERRUPTS();
 
 		/* do the job */
-		if (CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in))
+		tour = CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in);
+
+		/*
+		 * XXX: Doing this here, *after* cohort is formed, is somewhat
+		 * important: otherwise new node might be added after config reload,
+		 * but fast enough to be included in the clique, in which case gather
+		 * would hang waiting for reply from new node infinitely as we hadn't
+		 * done dmq_attach_receiver. A better way would be to make dmq_pop_nb
+		 * iterate over participants and error out when handle can't be found
+		 * -- that would render all this irrelevant.
+		 */
+		AcceptInvalidationMessages();
+		if (!config_valid)
+		{
+			mtm_log(LOG, "reloading config");
+			mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
+			config_valid = true;
+		}
+		/* xact in MtmReloadConfig could've knocked down our ctx */
+		MemoryContextSwitchTo(campaigner_ctx);
+
+		if (tour)
 		{
 			if (!IS_REFEREE_GEN(candidate_gen.members, candidate_gen.configured))
 			{
@@ -3387,7 +3419,16 @@ MtmMonitor(Datum arg)
 	{
 		int			rc;
 
-		mtm_log(LOG, "Basebackup detected");
+		mtm_log(LOG, "basebackup detected");
+
+		/*
+		 * We are not really the member of last_online_in gen inherited from
+		 * donor (others may commit without waiting for us), so reset it.
+		 */
+		LWLockAcquire(mtm_state->gen_lock, LW_EXCLUSIVE);
+		mtm_state->last_online_in = MtmInvalidGenNum;
+		MtmStateSave();
+		LWLockRelease(mtm_state->gen_lock);
 
 		StartTransactionCommand();
 		if (SPI_connect() != SPI_OK_CONNECT)
