@@ -476,7 +476,6 @@ static void
 pglogical_receiver_at_exit(int status, Datum arg)
 {
 	MtmReceiverContext *rctx = (MtmReceiverContext *) DatumGetPointer(arg);
-	bool wrong_mode;
 
 	/*
 	 * We might've come here after siglongjmp to bgworker.c which had restored
@@ -495,25 +494,17 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	 */
 	BackgroundWorkerUnblockSignals();
 
-	/*
-	 * If we should apply in another mode, we will restart immediately;
-	 * otherwise, we exit due to error/shutdown and should wait a timeout
-	 * before retry.
-	 */
-	wrong_mode = rctx->w.mode != MtmGetReceiverMode(rctx->w.sender_node_id);
 	/* seems better to log this *before* we start killing workers */
-	if (wrong_mode)
+	/* monitor will restart us immediately if our mode has changed */
+	if (rctx->w.mode != MtmGetReceiverMode(rctx->w.sender_node_id))
 		mtm_log(MtmApplyError, "receiver %s is exiting to reconnect in another mode",
 				MyBgworkerEntry->bgw_name);
 	else
 		/*
-		 * XXX: message is somewhat confusing as it will be issued on any
-		 * non-panic exit, e.g. after SIGTERM (instance shutdown, for
-		 * example), and distinguishing it from real error is not
-		 * straightforward.  Probably better not to log it at all -- pm will
-		 * anyway mention non-zero exit code termination.
+		 * TODO: it would be nice to distinguish exit on error here from
+		 * normal one after SIGTERM (instance shutdown, for example).
 		 */
-		mtm_log(MtmApplyError, "receiver %s is exiting due to error",
+		mtm_log(MtmApplyError, "receiver %s is exiting",
 				MyBgworkerEntry->bgw_name);
 
 	ReleasePB();
@@ -543,20 +534,9 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	else if (rctx->w.mode == REPLMODE_NORMAL)
 		Mtm->nreceivers_normal--;
 	Mtm->peers[rctx->w.sender_node_id - 1].walreceiver_pid = InvalidPid;
-	Mtm->peers[rctx->w.sender_node_id - 1].receiver_mode = REPLMODE_DISABLED;
 	BIT_CLEAR(Mtm->walreceivers_mask, rctx->w.sender_node_id - 1);
 	LWLockRelease(Mtm->lock);
 	ConditionVariableBroadcast(&Mtm->receivers_cv);
-
-	/*
-	 * Sleep a bit if we exit due to error; monitor will restart us
-	 * immediately. Usage of wal_retrieve_retry_interval is slightly weird,
-	 * but we follow vanilla LR here.
-	 * TODO: this is obviously horrible idea leading to long sleep during
-	 * normal shutdown, this logic should be moved to monitor.
-	 */
-	if (!wrong_mode)
-		MtmSleep(wal_retrieve_retry_interval * INT64CONST(1000));
 }
 
 void

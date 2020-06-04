@@ -3301,6 +3301,7 @@ MtmMonitor(Datum arg)
 													   "MonitorContext",
 													   ALLOCSET_DEFAULT_SIZES);
 	bool	job_pending;
+	TimestampTz last_start_time = 0;
 
 	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
 
@@ -3492,6 +3493,10 @@ MtmMonitor(Datum arg)
 		int			rc;
 		int			i;
 		pid_t		pid;
+		long		wait_time = 2000; /* milliseconds */
+		TimestampTz	now;
+		bool		restart_workers;
+		long		next_restart_after = 0;
 
 		job_pending = false;
 		CHECK_FOR_INTERRUPTS();
@@ -3550,17 +3555,55 @@ MtmMonitor(Datum arg)
 		 * Check and restart resolver, campaigner and receivers if they were
 		 * stopped by any error.
 		 */
+		now = GetCurrentTimestamp();
+		/*
+		 * Limit the start retry to once a wal_retrieve_retry_interval. Usage
+		 * of this GUC is slightly weird, but we follow vanilla LR here.
+		 *
+		 * We are using single last_start_time for all workers; thus restart
+		 * may grab worker for which the interval hasn't passed yet along with
+		 * one for which it did happen, making restarts possibly more frequent
+		 * than wal_retrieve_retry_interval. OTOH, if immediately after worker
+		 * 1 start worker 2 fails, we would need to wait for the interval to
+		 * pass before restarting it. That's all shouldn't matter much.
+		 *
+		 * TODO: these 3 copies of identic code ask for unification.
+		 */
+		restart_workers = TimestampDifferenceExceeds(last_start_time, now,
+													 wal_retrieve_retry_interval);
+		if (!restart_workers)
+			next_restart_after = last_start_time / 1000 + wal_retrieve_retry_interval - now / 1000;
 		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
 		{
-			mtm_log(MtmStateMessage, "resolver is dead, restarting it");
-			pfree(resolver);
-			resolver = ResolverStart(db_id, user_id);
+			if (restart_workers)
+			{
+				mtm_log(MtmStateMessage, "resolver is dead, restarting it");
+				pfree(resolver);
+				resolver = ResolverStart(db_id, user_id);
+				last_start_time = now;
+			}
+			/*
+			 * if we should restart but the interval hasn't passed yet, wake
+			 * up when it does
+			 */
+			else
+			{
+				wait_time = Min(wait_time, next_restart_after);
+			}
 		}
 		if (GetBackgroundWorkerPid(campaigner, &pid) == BGWH_STOPPED)
 		{
-			mtm_log(MtmStateMessage, "campaigner is dead, restarting it");
-			pfree(campaigner);
-			campaigner = CampaignerStart(db_id, user_id);
+			if (restart_workers)
+			{
+				mtm_log(MtmStateMessage, "campaigner is dead, restarting it");
+				pfree(campaigner);
+				campaigner = CampaignerStart(db_id, user_id);
+				last_start_time = now;
+			}
+			else
+			{
+				wait_time = Min(wait_time, next_restart_after);
+			}
 		}
 
 		for (i = 0; i < MTM_MAX_NODES; i++)
@@ -3570,11 +3613,27 @@ MtmMonitor(Datum arg)
 
 			if (GetBackgroundWorkerPid(receivers[i], &pid) == BGWH_STOPPED)
 			{
-				mtm_log(MtmStateMessage, "Restart receiver for the node%d", i + 1);
-				/* Receiver has finished by some kind of mistake. Start it. */
-				pfree(receivers[i]);
-				receivers[i] = MtmStartReceiver(i + 1, MyDatabaseId,
-												GetUserId(), MyProcPid);
+				if (restart_workers ||
+					/*
+					 * Restart worker immediately if his last reported mode is
+					 * not the one he should be currently working in; e.g. we
+					 * don't want to have wait interval in recovery->normal
+					 * transition.
+					 */
+					Mtm->peers[i].receiver_mode != MtmGetReceiverMode(i + 1))
+				{
+					mtm_log(MtmStateMessage,
+							"receiver for node %d is dead, restarting it", i + 1);
+					/* Receiver has finished by some kind of mistake. Start it. */
+					pfree(receivers[i]);
+					receivers[i] = MtmStartReceiver(i + 1, MyDatabaseId,
+													GetUserId(), MyProcPid);
+					last_start_time = now;
+				}
+				else
+				{
+					wait_time = Min(wait_time, next_restart_after);
+				}
 			}
 		}
 
@@ -3588,7 +3647,7 @@ MtmMonitor(Datum arg)
 		{
 			rc = WaitLatch(MyLatch,
 						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   1000, PG_WAIT_EXTENSION);
+						   wait_time, PG_WAIT_EXTENSION);
 
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)

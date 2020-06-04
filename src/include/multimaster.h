@@ -185,6 +185,10 @@ typedef struct
 
 	struct
 	{
+		/*
+		 * mode in which receiver is actually running (or has been running the
+		 * last time it was alive)
+		 */
 		MtmReplicationMode receiver_mode;
 		pid_t		walsender_pid;
 		pid_t		walreceiver_pid;
