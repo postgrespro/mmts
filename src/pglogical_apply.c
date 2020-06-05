@@ -1069,7 +1069,29 @@ process_remote_commit(StringInfo in,
 				 * she'd reply with direct abort -- because if there was
 				 * commit, we must have already received it and the answer
 				 * doesn't matter.
+				 *
+				 * However, we have another ordering issue: if client abruptly
+				 * disconnects before PRECOMMIT, backend aborts immediately.
+				 * P and AP in healthy cluster (on online nodes) will be
+				 * executed concurrently and possibly reorder. This results in
+				 * hanged PREPARED xact: until node reboots or receiver dies
+				 * there is no reason to resolve it. To prevent this, avoid
+				 * reordering by waiting till all xacts before this AP are
+				 * applied. This bears some performance penalty but 1) aborts
+				 * shouldn't be frequent 2) if really needed, we could
+				 * optimize by waiting for our specific P instead of all
+				 * previous queue 3) the only alternative I've in mind
+				 * currently -- HOLD_INTERRUPTS during PREPARE round -- is
+				 * much less appealing and not even bullet-proof safe
+				 * (e.g. commit sequence interruption might be raised by
+				 * internal error, OOM or whatever)
 				 */
+				if (rwctx->txlist_pos != -1)
+				{
+					txl_wait_txhead(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+									rwctx->txlist_pos);
+				}
+
 				rwctx->gtx = GlobalTxAcquire(gid, false);
 				if (!rwctx->gtx)
 				{
