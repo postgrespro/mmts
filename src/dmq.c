@@ -1467,9 +1467,9 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 			 * receiver never rereads the actual conf. There are hardly any
 			 * GUCs that meaningfully influence it though.
 			 */
+			ConfigReloadPending = false;
 			dmq_receiver_recreate_mqs(&dmq_state->receivers[receiver_id],
 									  segs, mq_handles);
-			ConfigReloadPending = false;
 		}
 
 		if (dmq_now() - last_message_at > recv_timeout)
