@@ -1082,7 +1082,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 		 * However, if most advanced nodes' last_online_in <= ours, there are
 		 * no committable xacts which we miss, so skip the check.
 		 */
-		if (!BIT_CHECK(mtm_state->current_gen_members, Mtm->my_node_id) &&
+		if (!BIT_CHECK(mtm_state->current_gen_members, Mtm->my_node_id - 1) &&
 			(mtm_state->last_online_in < donor_loi))
 		{
 			int catchup_node_id;
