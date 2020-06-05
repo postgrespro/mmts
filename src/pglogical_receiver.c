@@ -764,7 +764,7 @@ pglogical_receiver_main(Datum main_arg)
 				/* Process config file */
 				ProcessConfigFile(PGC_SIGHUP);
 				got_sighup = false;
-				ereport(ERROR, (MTM_ERRMSG("%s: processed SIGHUP",
+				ereport(LOG, (MTM_ERRMSG("%s: processed SIGHUP",
 										   MyBgworkerEntry->bgw_name)));
 			}
 
