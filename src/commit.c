@@ -52,7 +52,8 @@ static struct MtmCommitState
 {
 	char gid[GIDSIZE];
 	GlobalTx *gtx;
-	bool abort_prepare; /* whether cleanup can (should) abort xact immediately */
+	bool	inside_commit_sequence;
+	MemoryContext mctx;
 } mtm_commit_state;
 
 static void
@@ -94,6 +95,13 @@ MtmXactCallback(XactEvent event, void *arg)
 		return;
 	}
 
+	/*
+	 * MtmTwoPhaseCommit does (Start|Commit)TransactionCommand, they shouldn't
+	 * nest into our hooks again.
+	 */
+	if (mtm_commit_state.inside_commit_sequence)
+		return;
+
 	switch (event)
 	{
 		case XACT_EVENT_START:
@@ -119,77 +127,65 @@ MtmXactCallback(XactEvent event, void *arg)
 static void
 mtm_commit_cleanup(int status, Datum arg)
 {
-	/* 0 is ERROR, 1 is on exit hook */
-	bool on_exit = DatumGetInt32(arg) == 1;
-
 	ReleasePB();
 	dmq_stream_unsubscribe();
 
 	if (mtm_commit_state.gtx != NULL)
 	{
 		/*
-		 * This crutchy dance matters if this is proc exit (FATAL in the
-		 * middle of commit sequence): global_tx.c automatically releases gtx,
-		 * and it would be really not nice to rely on the order in which the
-		 * hooks are called. So reacquire the gtx if it was already released.
+		 * If we managed to prepare the xact but failed to commit, try to
+		 * abort it immediately if it is still possible (no precommit =>
+		 * others nodes can't commit) or issue a warning about unclear xact
+		 * status
 		 */
-		Assert(GetMyGlobalTx() != NULL || on_exit);
-		if (GetMyGlobalTx() == NULL)
-			mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid,
-												   false);
-		/*
-		 * If we managed to prepare the xact, tell resolver to deal with it
-		 */
-		if (mtm_commit_state.gtx != NULL && mtm_commit_state.gtx->prepared)
+		if (mtm_commit_state.gtx->prepared)
 		{
-			/*
-			 * If there were no precommit, xact will definitely be aborted. We
-			 * could abort it right here, but this requires very careful
-			 * acting:
-			 * 1) who would release gtx if we fail during
-			 *    FinishPreparedTransaction?
-			 *
-			 * 2) Generally FinishPreparedTransaction and
-			 *    SetPreparedTransactionState should run in xact, i.e.
-			 *    surrounded by
-			 *    StartTransactionCommand/CommitTransactionCommand.
-			 *    e.g. LockGXact will fail if I am not the owner of
-			 *    gxact. However, some hops are needed to avoid entering
-			 *    MtmTwoPhaseCommit/MtmBeginTransaction twice. In particular,
-			 *    erroring out from MtmBeginTransaction on attempt to abort
-			 *    xact after we got network error because, well, we are
-			 *    isolated after network error is really unpleasant. This
-			 *    relates to all
-			 *    StartTransactionCommand/CommitTransactionCommand in this
-			 *    file.
-			 *
-			 * As a sort of compromise, we could instead add the 'this is my
-			 * orphaned prepare => directly abort it' logic to resolver.
-			 */
 			if ((term_cmp(mtm_commit_state.gtx->state.accepted,
-						  InvalidGTxTerm) == 0) && !MtmVolksWagenMode)
+						  InvalidGTxTerm) == 0))
 			{
-				ereport(WARNING,
-						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("[multimaster] exiting commit sequence of transaction %s which will be aborted",
-								mtm_commit_state.gid)));
+				/* there was no precommit, we can abort */
+				PG_TRY();
+				{
+					AbortOutOfAnyTransaction();
+					StartTransactionCommand();
+					FinishPreparedTransaction(mtm_commit_state.gid, false, false);
+					mtm_commit_state.gtx->state.status = GTXAborted;
+					mtm_log(MtmTxFinish, "TXFINISH: %s aborted as own orphaned not precomitted",
+							mtm_commit_state.gid);
+					CommitTransactionCommand();
 
+				}
+				/*
+				 * this should be extremely unlikely, but if we fail, don't
+				 * forget to release gtx
+				 */
+				PG_CATCH();
+				{
+					GlobalTxRelease(mtm_commit_state.gtx);
+					mtm_commit_state.gtx = NULL;
+					mtm_commit_state.inside_commit_sequence = false;
+					PG_RE_THROW();
+				}
+				PG_END_TRY();
 			}
-			else if (!MtmVolksWagenMode)
+			else
 			{
-				ereport(WARNING,
-						(errcode(ERRCODE_TRANSACTION_RESOLUTION_UNKNOWN),
-						 errmsg("[multimaster] exiting commit sequence of transaction %s with unknown status",
-								mtm_commit_state.gid),
-						 errdetail("The transaction will be committed or aborted later.")));
+				ResolverWake();
+				if (!MtmVolksWagenMode)
+				{
+					ereport(WARNING,
+							(errcode(ERRCODE_TRANSACTION_RESOLUTION_UNKNOWN),
+							 errmsg("[multimaster] exiting commit sequence of transaction %s with unknown status",
+									mtm_commit_state.gid),
+							 errdetail("The transaction will be committed or aborted later.")));
+
+				}
 			}
-			mtm_commit_state.gtx->orphaned = true;
 		}
-		if (mtm_commit_state.gtx != NULL)
-			GlobalTxRelease(mtm_commit_state.gtx);
+		GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
-		ResolverWake();
 	}
+	mtm_commit_state.inside_commit_sequence = false;
 }
 
 void
@@ -222,7 +218,15 @@ MtmBeginTransaction()
 		CacheRegisterSyscacheCallback(PROCOID,
 									  proc_change_cb,
 									  (Datum) 0);
-		on_shmem_exit(mtm_commit_cleanup, Int32GetDatum(1));
+		/*
+		 * mtm_commit_cleanup must do its job *before* gtx is released, so
+		 * register gtx hook first (it will be called last)
+		 */
+		GlobalTxEnsureBeforeShmemExitHook();
+		before_shmem_exit(mtm_commit_cleanup, Int32GetDatum(1));
+		mtm_commit_state.mctx = AllocSetContextCreate(TopMemoryContext,
+													  "MtmCommitContext",
+													  ALLOCSET_DEFAULT_SIZES);
 		init_done = true;
 	}
 
@@ -423,7 +427,10 @@ MtmTwoPhaseCommit(void)
 
 	/* prepare for cleanup */
 	mtm_commit_state.gtx = NULL;
-	mtm_commit_state.abort_prepare = false;
+	mtm_commit_state.inside_commit_sequence = true;
+	/* used for allocations not inside tx, e.g. messages in gather() */
+	MemoryContextReset(mtm_commit_state.mctx);
+
 	/*
 	 * Note that we do not HOLD_INTERRUPTS; user might cancel waiting whenever
 	 * he wants. However, probably xact status would be unclear at that
@@ -460,6 +467,12 @@ MtmTwoPhaseCommit(void)
 		/* prepare transaction on our node */
 
 		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true);
+		/*
+		 * it is simpler to mark gtx originated here as orphaned from the
+		 * beginning rather than in error handler; resolver won't touch gtx
+		 * while it is locked on us anyway
+		 */
+		mtm_commit_state.gtx->orphaned = true;
 		Assert(mtm_commit_state.gtx->state.status == GTXInvalid);
 		/*
 		 * PREPARE doesn't happen here; ret 0 just means we were already in
@@ -474,13 +487,14 @@ MtmTwoPhaseCommit(void)
 
 		AllowTempIn2PC = true;
 		CommitTransactionCommand(); /* here we actually PrepareTransaction */
-		ReleasePB(); /* don't hold generation switch anymore */
 		mtm_commit_state.gtx->prepared = true;
+		ReleasePB(); /* don't hold generation switch anymore */
 		/* end_lsn of PREPARE */
 		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
 				mtm_commit_state.gid,
 				(uint32) (XactLastCommitEnd >> 32),
 				(uint32) (XactLastCommitEnd));
+		MemoryContextSwitchTo(mtm_commit_state.mctx);
 
 		/*
 		 * By definition of generations, we must collect PREPARE ack from
@@ -513,7 +527,6 @@ MtmTwoPhaseCommit(void)
 		if (!ret)
 		{
 			MtmGeneration new_gen = MtmGetCurrentGen(false);
-			mtm_commit_state.abort_prepare = true;
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("[multimaster] failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
@@ -527,7 +540,6 @@ MtmTwoPhaseCommit(void)
 			nodemask_t failed_cohort = cohort;
 			for (i = 0; i < n_messages; i++)
 				BIT_CLEAR(failed_cohort, p_messages[i]->node_id - 1);
-			mtm_commit_state.abort_prepare = true;
 
 			ereport(ERROR,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
@@ -538,7 +550,6 @@ MtmTwoPhaseCommit(void)
 		{
 			if (!p_messages[i]->prepared)
 			{
-				mtm_commit_state.abort_prepare = true;
 				/* don't print random gid, node id for regression tests output */
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
@@ -688,6 +699,7 @@ commit_tour_done:
 		dmq_stream_unsubscribe();
 		mtm_log(MtmTxTrace, "%s unsubscribed for %s",
 				mtm_commit_state.gid, dmq_stream_name);
+		mtm_commit_state.inside_commit_sequence = false;
 	}
 	PG_CATCH();
 	{

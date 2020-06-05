@@ -188,6 +188,19 @@ MtmGlobalTxShmemStartup(void)
 }
 
 /*
+ * needed for commit.c proper order of cleanup actions
+ */
+void
+GlobalTxEnsureBeforeShmemExitHook(void)
+{
+	if (!gtx_exit_registered)
+	{
+		before_shmem_exit(GlobalTxAtExit, 0);
+		gtx_exit_registered = true;
+	}
+}
+
+/*
  * Obtain a global tx and lock it on calling backend.
  *
  * Several backend can try to access same gtx only during resolving
@@ -267,14 +280,6 @@ GlobalTxAcquire(const char *gid, bool create)
 		Assert(gtx->state.status != GTXAborted);
 	}
 	return gtx;
-}
-
-/*
- * needed for ugly hack in commit.c exit hook
- */
-GlobalTx *GetMyGlobalTx(void)
-{
-	return my_locked_gtx;
 }
 
 /*
