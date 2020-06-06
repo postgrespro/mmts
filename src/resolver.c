@@ -219,8 +219,11 @@ finish_ready(void)
 		 * don't intervene if backend is still working on xact or it is not
 		 * prepared yet
 		 */
-		if (!gtx->orphaned || !gtx->prepared)
+		if (gtx->acquired_by != InvalidBackendId ||
+			!gtx->orphaned || !gtx->prepared)
+		{
 			continue;
+		}
 
 		coordinator = MtmGidParseNodeId(gtx->gid);
 		/*
@@ -259,7 +262,7 @@ finish_ready(void)
 		FinishPreparedTransaction(gtx->gid, false, false);
 		CommitTransactionCommand();
 		gtx->state.status = GTXAborted;
-		mtm_log(MtmTxFinish, "TXFINISH: %s aborted as own orphaned not precomitted",
+		mtm_log(MtmTxFinish, "TXFINISH: %s aborted as own orphaned not precommitted",
 				gtx->gid);
 		GlobalTxRelease(gtx);
 	}

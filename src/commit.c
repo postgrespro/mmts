@@ -577,7 +577,8 @@ MtmTwoPhaseCommit(void)
 		 * receive our precommit and resolve xact to commit without us
 		 */
 		mtm_commit_state.gtx->state.status = GTXPreCommitted;
-		mtm_commit_state.gtx->state.accepted = (GlobalTxTerm) {1, 0};
+		mtm_commit_state.gtx->state.proposal = InitialGTxTerm;
+		mtm_commit_state.gtx->state.accepted = InitialGTxTerm;
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", mtm_commit_state.gid);
 
 		/*
