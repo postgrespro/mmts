@@ -70,8 +70,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         # collect logs for CI anyway
         try:
             th.assertDataSync()
-            cls.client.stop()
         finally:
+            cls.client.stop()
             # Destroying containers is really unhelpful for local debugging, so
             # do this automatically only in CI.
             if 'CI' in os.environ:
@@ -120,6 +120,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.assertIsolation(aggs_failure)
             self.assertCommits(aggs)
             self.assertIsolation(aggs)
+            self.assertDataSync()
 
             print(f'Iteration #{i} is OK')
 
