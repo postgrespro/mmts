@@ -586,6 +586,7 @@ MtmTwoPhaseCommit(void)
 		 * i.e. working alone. We actually could do direct commits without 2PC
 		 * as an optimization...
 		 */
+		pc_success_cohort = 0;
 		if (IS_REFEREE_GEN(xact_gen.members, xact_gen.configured))
 			goto precommit_tour_done;
 		/*
@@ -599,7 +600,6 @@ MtmTwoPhaseCommit(void)
 
 		/* check ballots in answers */
 		nvotes = 1; /* myself */
-		pc_success_cohort = 0;
 		for (i = 0; i < n_messages; i++)
 		{
 			if (term_cmp(twoa_messages[i]->accepted_term,

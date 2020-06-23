@@ -1491,7 +1491,6 @@ RefereeClearGrant(void)
 	 * referee_grant_turn_in_pending of newer gen and thus never clear the
 	 * grant; to avoid this, check the gen num in which clear request was
 	 * created.
-	 *
 	 */
 	if (mtm_state->referee_grant_turn_in_pending <= full_online_gen_num)
 		mtm_state->referee_grant_turn_in_pending = MtmInvalidGenNum;
