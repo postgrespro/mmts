@@ -1133,10 +1133,11 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 */
 	candidate_gen->members = mtm_state->current_gen_members & clique;
 	BIT_SET(candidate_gen->members, Mtm->my_node_id - 1);
+	candidate_gen->configured = mtm_cfg->mask;
 
 	/*
 	 * Note that candidate members might be minority when live majority clique
-	 * happens to contain nodes which wasn't present in latest gen and thus
+	 * happens to contain nodes which weren't present in latest gen and thus
 	 * are probably in deep recovery -- they are intentionally not included in
 	 * candidates. We still ballot in this case, even if I am member of
 	 * current gen and thus don't need new gen to declare "I'm caught up". The
@@ -1176,13 +1177,37 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 
 	/*
 	 * All right, we have meaningful candidates, let's ballot.
-	 * Vote myself.
+	 * Vote myself. However, if our last_vote is exactly as candidates, reuse
+	 * it instead of advancement: this prevents healthy node needlessly going
+	 * into recovery in races like
+	 * - C dies, AB are alive
+	 * - A ballots for 10 <AB>
+	 * - B agrees to 10 <AB>
+	 * - A declares 10 <AB> as elected and gets online there; B is not aware
+	 *   of this yet
+	 * - B proposes (would propose, if we inc last_vote here) 11 <AB>
+	 * - A agrees and says its last_online_in is 10
+	 * - B last_online_in is < 10, so it is not donor in 11 <AB>, which
+	 *   pointlessly puts it into recovery
+	 *
+	 * last_vote reusage is obviously safe. It also doesn't harm liveness: if
+	 * cohort refuses the campaign due to gen num being too low, responder
+	 * will report that so we would bump last_vote further. Liveness related
+	 * to 'can't be online in gen < last_vote' promise is also not affected
+	 * since, well, we *can* be online in last_vote gen.
 	 */
 	mtm_state->campaigner_on_tour = true;
-	candidate_gen->num = mtm_state->last_vote.num + 1;
-	candidate_gen->configured = mtm_cfg->mask;
-	mtm_state->last_vote = *candidate_gen;
-	MtmStateSave();
+	if (candidate_gen->members == mtm_state->last_vote.members &&
+		candidate_gen->configured == mtm_state->last_vote.configured)
+	{
+		candidate_gen->num = mtm_state->last_vote.num;
+	}
+	else
+	{
+		candidate_gen->num = mtm_state->last_vote.num + 1;
+		mtm_state->last_vote = *candidate_gen;
+		MtmStateSave();
+	}
 
 	mtm_log(MtmStateSwitch, "proposed and voted myself for gen num=" UINT64_FORMAT ", members=%s, configured=%s, clique=%s",
 			candidate_gen->num,
@@ -1655,6 +1680,7 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	mtm_log(MtmStateDebug, "HandleGenVoteRequest: got '%s' from %d",
 			MtmMesageToString((MtmMessage *) req), sender_node_id);
 
+	MemSet(&resp, '\0', sizeof(MtmGenVoteResponse));
 	resp.tag = T_MtmGenVoteResponse;
 	resp.gen_num = req->gen.num;
 
@@ -1662,20 +1688,32 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	LWLockAcquire(mtm_state->vote_lock, LW_EXCLUSIVE);
 
+	/*
+	 * If our generation num is already equal to requested or even higher,
+	 * refuse the vote. Checks below ensure safety wouldn't be damaged anyway,
+	 * however ignoring this might needlessly put healthy node into recovery:
+	 * if C died, both A and B vote for excluding it and A already switched
+	 * into AB gen while B is not aware about the election yet, A's 'ok' reply
+	 * will force B into recovery as its last_online_in of A is higher than B
+	 * one.
+	 *
+	 * Requester must soon learn about our current gen and change his mind
+	 * anyway.
+	 */
+	if (MtmGetCurrentGenNum() >= req->gen.num)
+	{
+		resp.vote_ok = false;
+	}
 	/* already voted for exactly this gen, can safely confirm it again */
-	if (EQUAL_GENS(mtm_state->last_vote, req->gen))
+	else if (EQUAL_GENS(mtm_state->last_vote, req->gen))
 	{
 		resp.vote_ok = true;
 		resp.last_online_in = mtm_state->last_online_in;
-		/* nobody will look into it, but sending garbage is not nice */
-		resp.last_vote_num = MtmInvalidGenNum;
 	}
 	else if (mtm_state->last_vote.num >= req->gen.num)
 	{
 		/* already voted for lower gen, can't do that again */
 		resp.vote_ok = false;
-		/* nobody will look at it, but sending garbage is not nice */
-		resp.last_online_in = MtmInvalidGenNum;
 		resp.last_vote_num = mtm_state->last_vote.num;
 	}
 	else
@@ -1724,7 +1762,6 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 		else
 		{
 			resp.vote_ok = false;
-			resp.last_online_in = MtmInvalidGenNum;
 		}
 		resp.last_vote_num = MtmInvalidGenNum;
 	}

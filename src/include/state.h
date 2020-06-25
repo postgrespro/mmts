@@ -96,8 +96,6 @@ typedef enum
 	 * It's Twelve O'clock and All's Well.
 	 */
 	MTM_ONLINE,
-
-	MTM_RECOVERED /* REMOVEME */
 } MtmNodeStatus;
 
 extern char const *const MtmNodeStatusMnem[];
