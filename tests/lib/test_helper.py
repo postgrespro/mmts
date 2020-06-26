@@ -135,14 +135,14 @@ class TestHelper(object):
 
         self.client.bgrun()
 
-    def performRandomFailure(self, node, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
+    def performRandomFailure(self, node, wait=0, nodes_wait_for_commit=[], node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
         FailureClass = random.choice(ONE_NODE_FAILURES)
         failure = FailureClass(node)
 
         print('Simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
-        return self.performFailure(failure, wait, node_wait_for_commit, node_wait_for_online, stop_load, nodes_assert_commit_during_failure)
+        return self.performFailure(failure, wait, nodes_wait_for_commit, node_wait_for_online, stop_load, nodes_assert_commit_during_failure)
 
-    def performFailure(self, failure, wait=0, node_wait_for_commit=-1, node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
+    def performFailure(self, failure, wait=0, nodes_wait_for_commit=[], node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
 
         time.sleep(TEST_WARMING_TIME)
 
@@ -183,9 +183,9 @@ class TestHelper(object):
             self.client.bgrun()
             time.sleep(3)
 
-        if node_wait_for_commit >= 0:
+        for node_wait_for_commit in nodes_wait_for_commit:
             self.awaitCommit(node_wait_for_commit)
-        else:
+        if len(nodes_wait_for_commit) == 0:
             time.sleep(TEST_RECOVERY_TIME)
 
         time.sleep(TEST_RECOVERY_TIME)
