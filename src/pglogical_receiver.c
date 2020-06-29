@@ -86,21 +86,11 @@ char const *const MtmReplicationModeMnem[] =
 	"normal"
 };
 
-static dlist_head MtmLsnMapping = DLIST_STATIC_INIT(MtmLsnMapping);
-
 MtmConfig  *receiver_mtm_cfg;
 bool		receiver_mtm_cfg_valid;
 
 /* Signal handling */
 static volatile sig_atomic_t got_sighup = false;
-
-/* GUC variables */
-static bool receiver_sync_mode = true;	/* We need sync mode to have
-										 * up-to-date values of catalog_xmin
-										 * in replication slots */
-
-/* Lastly written positions */
-static XLogRecPtr output_written_lsn = InvalidXLogRecPtr;
 
 /* Stream functions */
 static void fe_sendint64(int64 i, char *buf);
@@ -128,16 +118,15 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 {
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int			len = 0;
-	XLogRecPtr	output_applied_lsn = output_written_lsn;
 	XLogRecPtr	output_flushed_lsn = MtmGetFlushPosition(node_id);
 
 	replybuf[len] = 'r';
 	len += 1;
-	fe_sendint64(output_written_lsn, &replybuf[len]);	/* write */
+	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* write */
 	len += 8;
 	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* flush */
 	len += 8;
-	fe_sendint64(output_applied_lsn, &replybuf[len]);	/* apply */
+	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* apply */
 	len += 8;
 	fe_sendint64(now, &replybuf[len]);	/* sendTime */
 	len += 8;
@@ -153,8 +142,7 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 				(uint32) output_flushed_lsn);
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
-		ereport(LOG, (MTM_ERRMSG("%s: could not send feedback packet: %s",
-								 MyBgworkerEntry->bgw_name, PQerrorMessage(conn))));
+		mtm_log(ERROR, "could not send feedback packet: %s", PQerrorMessage(conn));
 		return false;
 	}
 
@@ -239,61 +227,7 @@ feTimestampDifference(int64 start_time, int64 stop_time,
 static XLogRecPtr
 MtmGetFlushPosition(int node_id)
 {
-	dlist_mutable_iter iter;
-	XLogRecPtr	flush_lsn = InvalidXLogRecPtr;
-	XLogRecPtr	local_flush = GetFlushRecPtr();
-
-	dlist_foreach_modify(iter, &MtmLsnMapping)
-	{
-		MtmFlushPosition *flushpos;
-
-		flushpos = dlist_container(MtmFlushPosition, node, iter.cur);
-
-		/* XXX: probably it's better just not write this */
-		if (node_id != flushpos->node_id)
-			continue;
-
-		if (flushpos->local_end <= local_flush)
-		{
-			flush_lsn = flushpos->remote_end;
-			dlist_delete(iter.cur);
-			pfree(flushpos);
-		}
-		else
-			break;
-	}
-
-	return flush_lsn;
-}
-
-/**
- * Keep track of progress of WAL writer.
- * We need to notify WAL senders at other nodes which logical records
- * are flushed to the disk and so can survive failure. In asynchronous commit mode
- * WAL is flushed by WAL writer. Current flush position can be obtained by GetFlushRecPtr().
- * So on applying new logical record we insert it in the MtmLsnMapping and compare
- * their poistions in local WAL log with current flush position.
- * The records which are flushed to the disk by WAL writer are removed from the list
- * and mapping ing mtm->nodes[].flushPos is updated for this node.
- */
-void
-MtmUpdateLsnMapping(int node_id, XLogRecPtr end_lsn)
-{
-	MtmFlushPosition *flushpos;
-	MemoryContext old_context = MemoryContextSwitchTo(TopMemoryContext);
-
-	Assert(MtmIsReceiver && !MtmIsPoolWorker);
-
-	if (end_lsn != InvalidXLogRecPtr)
-	{
-		/* Track commit lsn */
-		flushpos = (MtmFlushPosition *) palloc(sizeof(MtmFlushPosition));
-		flushpos->node_id = node_id;
-		flushpos->local_end = XactLastCommitEnd;
-		flushpos->remote_end = end_lsn;
-		dlist_push_tail(&MtmLsnMapping, &flushpos->node);
-	}
-	MemoryContextSwitchTo(old_context);
+	return 0;
 }
 
 static void
@@ -781,7 +715,6 @@ pglogical_receiver_main(Datum main_arg)
 			 */
 			while (true)
 			{
-				XLogRecPtr	walEnd;
 				char	   *stmt;
 
 				CHECK_FOR_INTERRUPTS();
@@ -818,6 +751,7 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int			pos;
 					bool		replyRequested;
+					int64		now;
 
 					/*
 					 * Parse the keepalive message, enclosed in the CopyData
@@ -826,12 +760,7 @@ pglogical_receiver_main(Datum main_arg)
 					 */
 					pos = 1;	/* skip msgtype 'k' */
 
-					/*
-					 * In this message is the latest WAL position that server
-					 * has considered as sent to this receiver.
-					 */
-					walEnd = fe_recvint64(&copybuf[pos]);
-					pos += 8;	/* read walEnd */
+					pos += 8;  /* skip so-called walEnd (actually the last LSN sent) */
 					pos += 8;	/* skip sendTime */
 					if (rc < pos + 1)
 					{
@@ -840,23 +769,14 @@ pglogical_receiver_main(Datum main_arg)
 					}
 					replyRequested = copybuf[pos];
 
-					/* Update written position */
-					output_written_lsn = Max(walEnd, output_written_lsn);
-
 					/*
-					 * If the server requested an immediate reply, send one.
-					 * If sync mode is sent reply in all cases to ensure that
-					 * server knows how far replay has been done. In recovery
-					 * mode also always send reply to provide master with more
-					 * precise information about recovery progress
+					 * TODO: send feedback ony if requested or once in
+					 * wal_receiver_status_interval
 					 */
-					if (replyRequested || receiver_sync_mode || MtmGetCurrentStatus(false, false) == MTM_RECOVERY)
-					{
-						int64		now = feGetCurrentTimestamp();
+					now = feGetCurrentTimestamp();
 
-						/* Leave if feedback is not sent properly */
-						sendFeedback(rctx->conn, now, sender);
-					}
+					/* Leave if feedback is not sent properly */
+					sendFeedback(rctx->conn, now, sender);
 					continue;
 				}
 				else if (copybuf[0] != 'w')
@@ -869,14 +789,11 @@ pglogical_receiver_main(Datum main_arg)
 				hdr_len = 1;	/* msgtype 'w' */
 				fe_recvint64(&copybuf[hdr_len]);
 				hdr_len += 8;	/* dataStart */
-				walEnd = fe_recvint64(&copybuf[hdr_len]);
 				hdr_len += 8;	/* WALEnd */
 				hdr_len += 8;	/* sendTime */
 
-				/*
-				 * mtm_log(LOG, "receive message %c length %d",
-				 *		copybuf[hdr_len], rc - hdr_len);
-				 */
+				mtm_log(LOG, "receive message %c length %d",
+						copybuf[hdr_len], rc - hdr_len);
 
 				Assert(rc >= hdr_len);
 
@@ -963,8 +880,6 @@ pglogical_receiver_main(Datum main_arg)
 						}
 					}
 				}
-				/* Update written position */
-				output_written_lsn = Max(walEnd, output_written_lsn);
 			}
 
 			/* No data, move to next loop */
@@ -1009,7 +924,6 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int64		now = feGetCurrentTimestamp();
 
-					MtmUpdateLsnMapping(sender, InvalidXLogRecPtr); /* wat */
 					sendFeedback(rctx->conn, now, sender);
 				}
 				else if (r < 0 && errno == EINTR)
@@ -1023,8 +937,7 @@ pglogical_receiver_main(Datum main_arg)
 
 				else if (r < 0)
 				{
-					ereport(ERROR, (MTM_ERRMSG("%s: Incorrect status received.",
-											   MyBgworkerEntry->bgw_name)));
+					mtm_log(ERROR, "select failed");
 				}
 
 				/*
