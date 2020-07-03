@@ -143,7 +143,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         print('#### down restart(winner) || down')
         print('###########################')
         docker_api.containers.get('referee').stop()
-        aggs_failure, aggs = self.performFailure(RestartNode('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(RestartNode('node2'), nodes_wait_for_commit=[1])
 
         # without saved decision node2 will be endlessy disabled here
 
@@ -217,7 +217,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs[1:])
         self.assertIsolation(aggs)
 
-        aggs_failure, aggs = self.performFailure(RestartNode('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(RestartNode('node2'), nodes_wait_for_commit=[1])
 
         self.assertNoCommits(aggs_failure)
         self.assertIsolation(aggs_failure)
@@ -251,7 +251,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs[1:])
         self.assertIsolation(aggs)
 
-        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node2'), node_wait_for_commit=1)
+        aggs_failure, aggs = self.performFailure(CrashRecoverNode('node2'), nodes_wait_for_commit=[1])
 
         self.assertNoCommits(aggs_failure)
         self.assertIsolation(aggs_failure)
