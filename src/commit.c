@@ -3,8 +3,7 @@
  * commit.c
  *		Replace ordinary commit with 3PC.
  *
- * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
- * Portions Copyright (c) 1994, Regents of the University of California
+ * Copyright (c) 2019-2020, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */

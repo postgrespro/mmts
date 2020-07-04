@@ -3,7 +3,8 @@
  * pglogical_config.c
  *		  Logical Replication output plugin
  *
- * Copyright (c) 2012-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2015-2020, Postgres Professional
+ * Portions Copyright (c) 2015-2020, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *		  pglogical_config.c

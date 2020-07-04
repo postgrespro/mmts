@@ -1,3 +1,13 @@
+/*----------------------------------------------------------------------------
+ *
+ * ddd.c
+ *
+ * Distributed deadlock detector.
+ *
+ * Copyright (c) 2017-2020, Postgres Professional
+ *
+ *----------------------------------------------------------------------------
+ */
 
 #include "postgres.h"
 #include "access/clog.h"

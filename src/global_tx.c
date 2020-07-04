@@ -12,7 +12,7 @@
  *    which made possible to participate in normal voting before getting P,
  *    but there is no need for that anymore.
  *
- * Copyright (c) 2016-2020, Postgres Professional
+ * Copyright (c) 2019-2020, Postgres Professional
  *
  *-----------------------------------------------------------------------------
  */

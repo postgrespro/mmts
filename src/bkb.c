@@ -1,7 +1,11 @@
 /*
- * Bron–Kerbosch algorithm to find maximum clique in graph
+ * bkb.c
+ *
+ * Bron–Kerbosch algorithm to find maximum clique in a graph.
+ *
+ * Copyright (c) 2017-2020, Postgres Professional
+ *
  */
-
 #ifndef TEST
 #include "bkb.h"
 

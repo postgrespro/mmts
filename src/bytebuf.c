@@ -1,4 +1,11 @@
+/*
+ * bytebuf.c
+ *
+ * Copyright (c) 2016-2020, Postgres Professional
+ *
+ */
 #include "postgres.h"
+
 #include "bytebuf.h"
 
 #define INIT_BUF_SIZE 1024

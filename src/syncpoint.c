@@ -18,8 +18,7 @@
  * none of next transaction did commit before syncpoint. So it is safe to start
  * recovery from this syncpoints.
  *
- * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
- * Portions Copyright (c) 1994, Regents of the University of California
+ * Copyright (c) 2019-2020, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */

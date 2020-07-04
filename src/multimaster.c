@@ -1,8 +1,11 @@
-/*
+/*-----------------------------------------------------------------------------
  * multimaster.c
  *
  * Multimaster based on logical replication
  *
+ * Copyright (c) 2016-2020, Postgres Professional
+ *
+ *-----------------------------------------------------------------------------
  */
 #include "postgres.h"
 

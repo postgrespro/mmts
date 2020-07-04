@@ -1,3 +1,12 @@
+/*-------------------------------------------------------------------------
+ *
+ * pglogical_hooks.c
+ *
+ * Portions Copyright (c) 2015-2020, Postgres Professional
+ * Portions Copyright (c) 2015-2020, PostgreSQL Global Development Group
+ *
+ *-------------------------------------------------------------------------
+ */
 #include "postgres.h"
 
 #include "access/xact.h"

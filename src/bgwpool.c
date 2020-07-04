@@ -1,3 +1,9 @@
+/*
+ * bgwpool.c
+ *
+ * Copyright (c) 2016-2020, Postgres Professional
+ *
+ */
 #include "postgres.h"
 #include "access/transam.h"
 #include "access/xtm.h"

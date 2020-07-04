@@ -3,7 +3,9 @@
  * pglogical_relid_map.c
  *		  Logical Replication map of local Oids to to remote
  *
- * Copyright (c) 2012-2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2015-2020, Postgres Professional
+ * Portions Copyright (c) 2015-2020, PostgreSQL Global Development Group
+ *
  *
  * IDENTIFICATION
  *		  pglogical_relid_map.c
