@@ -1,23 +1,27 @@
 *** contrib/mmts/../../src/test/regress/expected/opr_sanity.out	CENSORED
 --- contrib/mmts/../../src/test/regress/results/opr_sanity.out	CENSORED
 ***************
-*** 871,877 ****
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-! (9 rows)
+*** 771,779 ****
+  SELECT p1.oid, p1.proname
+  FROM pg_proc AS p1
+  WHERE provolatile = 'i' AND proparallel = 'u';
+!  oid | proname 
+! -----+---------
+! (0 rows)
   
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
---- 871,878 ----
-   xml               | text              |        0 | a
-   xml               | character varying |        0 | a
-   xml               | character         |        0 | a
-!  pg_lsn            | bigint            |        0 | e
-! (10 rows)
+  -- **************** pg_cast ****************
+  -- Catch bogus values in pg_cast columns (other than cases detected by
+--- 771,780 ----
+  SELECT p1.oid, p1.proname
+  FROM pg_proc AS p1
+  WHERE provolatile = 'i' AND proparallel = 'u';
+!   oid  | proname 
+! -------+---------
+!  16472 | min
+! (1 row)
   
-  -- **************** pg_conversion ****************
-  -- Look for illegal values in pg_conversion fields.
+  -- **************** pg_cast ****************
+  -- Catch bogus values in pg_cast columns (other than cases detected by
 
 ======================================================================
 
@@ -346,6 +350,16 @@
   lseg_tbl|f
   main_table|f
 ***************
+*** 85,90 ****
+--- 90,96 ----
+  mlparted_defd|f
+  money_data|f
+  mytable|t
++ nodes_init_done|t
+  num_data|f
+  num_exp_add|t
+  num_exp_div|t
+***************
 *** 141,147 ****
   pg_pltemplate|t
   pg_policy|t
@@ -354,7 +368,7 @@
   pg_publication_rel|t
   pg_range|t
   pg_replication_origin|t
---- 146,151 ----
+--- 147,152 ----
 ***************
 *** 153,159 ****
   pg_shseclabel|t
@@ -364,10 +378,10 @@
   pg_subscription_rel|t
   pg_tablespace|t
   pg_transform|t
---- 157,162 ----
+--- 158,163 ----
 ***************
 *** 187,192 ****
---- 190,196 ----
+--- 191,197 ----
   sql_sizing_profiles|f
   stud_emp|f
   student|f
@@ -770,15 +784,32 @@
       interpt_pp(ih.thepath, r.thepath) AS exit
 ***************
 *** 1297,1302 ****
---- 1306,1316 ----
+--- 1306,1333 ----
      FROM view_base_table
     GROUP BY view_base_table.key
    HAVING (length((view_base_table.data)::text) > 0);
-+ latest_syncpoints| SELECT DISTINCT ON (syncpoints.node_id) syncpoints.node_id,
-+     syncpoints.origin_lsn,
-+     syncpoints.local_lsn
-+    FROM mtm.syncpoints
-+   ORDER BY syncpoints.node_id, syncpoints.origin_lsn DESC;
++ latest_syncpoints| SELECT node_id_pairs.origin_node_id,
++     COALESCE(ls.origin_lsn, '0/0'::pg_lsn) AS origin_lsn,
++     node_id_pairs.receiver_node_id,
++     COALESCE(mtm.translate_syncpoint(node_id_pairs.origin_node_id, ls.origin_lsn, node_id_pairs.receiver_node_id),
++         CASE
++             WHEN (node_id_pairs.receiver_node_id = mtm.my_node_id()) THEN ( SELECT pg_replication_slots.restart_lsn
++                FROM pg_replication_slots
++               WHERE ((pg_replication_slots.slot_name)::text = format('mtm_filter_slot_%s'::text, node_id_pairs.origin_node_id)))
++             ELSE NULL::pg_lsn
++         END) AS fill_filter_since
++    FROM (( SELECT n1.id AS origin_node_id,
++             n2.id AS receiver_node_id
++            FROM mtm.cluster_nodes n1,
++             mtm.cluster_nodes n2
++           WHERE (n1.id <> n2.id)) node_id_pairs
++      LEFT JOIN ( SELECT DISTINCT ON (syncpoints.origin_node_id, syncpoints.receiver_node_id) syncpoints.origin_node_id,
++             syncpoints.origin_lsn,
++             syncpoints.receiver_node_id,
++             syncpoints.receiver_lsn
++            FROM mtm.syncpoints
++           ORDER BY syncpoints.origin_node_id, syncpoints.receiver_node_id, syncpoints.origin_lsn DESC) ls ON (((node_id_pairs.origin_node_id = ls.origin_node_id) AND (node_id_pairs.receiver_node_id = ls.receiver_node_id))))
++   ORDER BY node_id_pairs.origin_node_id, node_id_pairs.receiver_node_id;
   mvtest_tv| SELECT mvtest_t.type,
       sum(mvtest_t.amt) AS totamt
      FROM mvtest_t
@@ -803,7 +834,7 @@
       (pg_class c
        JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
     WHERE (c.oid IN ( SELECT pg_get_publication_tables.relid
---- 1454,1482 ----
+--- 1471,1499 ----
       p.parameter_types,
       p.from_sql
      FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql);
@@ -842,7 +873,7 @@
     WHERE (l.objsubid = 0)
   UNION ALL
    SELECT l.objoid,
---- 1666,1672 ----
+--- 1683,1689 ----
       l.provider,
       l.label
      FROM (pg_seclabel l
@@ -859,7 +890,7 @@
   UNION ALL
    SELECT l.objoid,
       l.classoid,
---- 1678,1684 ----
+--- 1695,1701 ----
       l.provider,
       l.label
      FROM (pg_shseclabel l
@@ -876,7 +907,7 @@
        LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
   pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
       pg_stat_all_indexes.indexrelid,
---- 1931,1937 ----
+--- 1948,1954 ----
       st.last_msg_receipt_time,
       st.latest_end_lsn,
       st.latest_end_time
@@ -886,7 +917,7 @@
       pg_stat_all_indexes.indexrelid,
 ***************
 *** 2217,2222 ****
---- 2241,2257 ----
+--- 2258,2274 ----
        JOIN pg_attribute a ON (((c.oid = a.attrelid) AND (a.attnum = s.staattnum))))
        LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
     WHERE ((NOT a.attisdropped) AND has_column_privilege(c.oid, a.attnum, 'select'::text) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
@@ -906,7 +937,7 @@
       pg_get_userbyid(c.relowner) AS tableowner,
 ***************
 *** 2360,2365 ****
---- 2395,2408 ----
+--- 2412,2425 ----
              FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot)), ( SELECT pg_control_snapshot.recent_snapshot
              FROM pg_control_snapshot() pg_control_snapshot(oldest_snapshot, recent_snapshot, active_snapshot))) snap_id(snap_id)
     WHERE pg_snapshot_exists(snap_id.snap_id);

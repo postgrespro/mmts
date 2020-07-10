@@ -52,7 +52,6 @@
 
 
 static int	MtmTransactionRecords;
-static bool MtmIsFilteredTxn;
 static TransactionId MtmCurrentXid;
 static bool DDLInProgress = false;
 static Oid	MtmSenderTID;		/* transaction identifier for WAL sender */
@@ -98,11 +97,6 @@ pglogical_write_rel(StringInfo out, PGLogicalOutputData *data, Relation rel)
 	Oid			relid;
 	Oid			tid;
 
-	if (MtmIsFilteredTxn)
-	{
-		mtm_log(ProtoTraceFilter, "pglogical_write_rel filtered");
-		return;
-	}
 	if (DDLInProgress)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_rel filtered DDLInProgress");
@@ -167,7 +161,6 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
-	MtmIsFilteredTxn = false;
 	DDLInProgress = false;
 
 	pq_sendbyte(out, 'B');		/* BEGIN */
@@ -246,11 +239,6 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 			break;
 
 		case 'D':
-			if (MtmIsFilteredTxn)
-			{
-				mtm_log(ProtoTraceFilter, "pglogical_write_message filtered");
-				return;
-			}
 			DDLInProgress = true;
 			mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
 					hooks_data->receiver_node_id, message);
@@ -270,7 +258,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 			 */
 			return;
 
-		case 'B':
+		case 'T':
 			pglogical_broadcast_table(out, ctx, (MtmCopyRequest *) message);
 			return;
 
@@ -317,14 +305,8 @@ pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
 					   Relation rel, HeapTuple newtuple)
 {
 
-	elog(ProtoTraceSender, "pglogical_write_insert %d %d",
-		 MtmIsFilteredTxn, DDLInProgress);
+	elog(ProtoTraceSender, "pglogical_write_insert %d", DDLInProgress);
 
-	if (MtmIsFilteredTxn)
-	{
-		mtm_log(ProtoTraceFilter, "pglogical_write_insert filtered");
-		return;
-	}
 	if (DDLInProgress)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_insert filtered DDLInProgress");
@@ -344,11 +326,6 @@ static void
 pglogical_write_update(StringInfo out, PGLogicalOutputData *data,
 					   Relation rel, HeapTuple oldtuple, HeapTuple newtuple)
 {
-	if (MtmIsFilteredTxn)
-	{
-		mtm_log(ProtoTraceFilter, "pglogical_write_update filtered");
-		return;
-	}
 	if (DDLInProgress)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_update filtered DDLInProgress");
@@ -376,11 +353,6 @@ static void
 pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
 					   Relation rel, HeapTuple oldtuple)
 {
-	if (MtmIsFilteredTxn)
-	{
-		mtm_log(ProtoTraceFilter, "pglogical_write_delete filtered");
-		return;
-	}
 	if (DDLInProgress)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_delete filtered DDLInProgress");
@@ -463,13 +435,6 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 			return;
 		}
 	}
-
-	/*
-	 * COMMIT and PREPARE are preceded by BEGIN, which set MtmIsFilteredTxn
-	 * flag
-	 */
-	if (MtmIsFilteredTxn && event == PGLOGICAL_PREPARE)
-		return;
 
 	/* send the event fields */
 	pq_sendbyte(out, 'C');
@@ -568,9 +533,6 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) data->hooks.hooks_private_data;
 	uint8		event = PGLOGICAL_COMMIT;
 
-	if (MtmIsFilteredTxn)
-		return;
-
 	/* send fixed fields */
 	pq_sendbyte(out, 'C');
 	pq_sendbyte(out, event);
@@ -622,11 +584,6 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 	int			i;
 	uint16		nliveatts = 0;
 
-	if (MtmIsFilteredTxn)
-	{
-		mtm_log(ProtoTraceFilter, "pglogical_write_tuple filtered");
-		return;
-	}
 	if (DDLInProgress)
 	{
 		mtm_log(ProtoTraceFilter, "pglogical_write_tuple filtered DDLInProgress");

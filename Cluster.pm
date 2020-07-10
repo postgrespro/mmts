@@ -232,7 +232,7 @@ sub backup_and_init()
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	my $dumpres = command_output(['pg_basebackup', '-D', $backup_path, '-p', $port,
-		'-h', '127.0.0.1', '--no-sync', '-v', '-S', "mtm_recovery_slot_$to_mmid"]);
+		'-h', '127.0.0.1', '--no-sync', '-v', '-S', "mtm_filter_slot_$to_mmid"]);
 
 	print "# Backup finished\n";
 

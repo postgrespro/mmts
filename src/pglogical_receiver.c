@@ -97,7 +97,6 @@ static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
 void		pglogical_receiver_main(Datum main_arg);
-static XLogRecPtr MtmGetFlushPosition(int nodeId);
 
 static void
 receiver_raw_sighup(SIGNAL_ARGS)
@@ -118,7 +117,17 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 {
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
 	int			len = 0;
-	XLogRecPtr	output_flushed_lsn = MtmGetFlushPosition(node_id);
+	XLogRecPtr	output_flushed_lsn = GetRecoveryHorizon(node_id);
+
+	/*
+	 * In multimaster flush and apply are the same as we can't handle 2PC
+	 * asynchronously: P and CP are always flushed before they are declared as
+	 * applied. As for 'write', we could mimick vanilla LR behaviour,
+	 * i.e. last applied record which is not necessarily commit (e.g. not yet
+	 * committed insert is included into 'write'), but that requires
+	 * additional work due to parallel apply -- declaring records which main
+	 * receiver has just passed to workers as written would be, well, unfair.
+	 */
 
 	replybuf[len] = 'r';
 	len += 1;
@@ -135,11 +144,9 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 	replybuf[len] = 0;
 	len += 1;
 
-	/* it's a shame it can be 0/0 */
-	if (output_flushed_lsn != InvalidXLogRecPtr)
-		mtm_log(MtmReceiverFeedback, "acking flush of LSN %X/%X",
-				(uint32) (output_flushed_lsn >> 32),
-				(uint32) output_flushed_lsn);
+	mtm_log(MtmReceiverFeedback, "acking flush of LSN %X/%X",
+			(uint32) (output_flushed_lsn >> 32),
+			(uint32) output_flushed_lsn);
 	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
 	{
 		mtm_log(ERROR, "could not send feedback packet: %s", PQerrorMessage(conn));
@@ -224,12 +231,6 @@ feTimestampDifference(int64 start_time, int64 stop_time,
 	}
 }
 
-static XLogRecPtr
-MtmGetFlushPosition(int node_id)
-{
-	return 0;
-}
-
 static void
 MtmExecute(void *work, int size, MtmReceiverWorkerContext *rwctx, bool no_pool)
 {
@@ -254,14 +255,13 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 					 HTAB *filter_map, MtmReceiverContext *rctx)
 {
 	StringInfoData s;
-	uint8		event;
 	XLogRecPtr	origin_lsn;
 	XLogRecPtr	end_lsn;
 	XLogRecPtr	tx_lsn;
-	int			sender_node_id;
 	int			origin_node;
+	uint8		event = 0;
 	char const *gid = "";
-	char		msgtype PG_USED_FOR_ASSERTS_ONLY;
+	char		msgtype;
 
 	s.data = record;
 	s.len = size;
@@ -270,15 +270,70 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 
 	/* read fields */
 	msgtype = pq_getmsgbyte(&s);
-	Assert(msgtype == 'C');
-	event = pq_getmsgbyte(&s);	/* event */
-	sender_node_id = pq_getmsgbyte(&s);
-	pq_getmsgint64(&s);			/* commit_lsn */
-	end_lsn = pq_getmsgint64(&s);	/* end_lsn */
-	pq_getmsgint64(&s);			/* commit_time */
 
-	origin_node = pq_getmsgbyte(&s);
-	origin_lsn = pq_getmsgint64(&s);
+	if (msgtype == 'C')
+	{
+		int			sender_node_id PG_USED_FOR_ASSERTS_ONLY;
+
+		event = pq_getmsgbyte(&s);	/* event */
+		sender_node_id = pq_getmsgbyte(&s);
+		Assert(sender_node_id == rctx->w.sender_node_id);
+		pq_getmsgint64(&s);			/* commit_lsn */
+		end_lsn = pq_getmsgint64(&s);	/* end_lsn */
+		pq_getmsgint64(&s);			/* commit_time */
+
+		origin_node = pq_getmsgbyte(&s);
+		origin_lsn = pq_getmsgint64(&s);
+
+
+		switch (event)
+		{
+			case PGLOGICAL_PREPARE:
+			case PGLOGICAL_ABORT_PREPARED:
+				gid = pq_getmsgstring(&s);
+				break;
+			case PGLOGICAL_PREPARE_PHASE2A:
+				gid = pq_getmsgstring(&s);
+				pq_getmsgstring(&s); /* state_3pc */
+				break;
+			case PGLOGICAL_COMMIT_PREPARED:
+				pq_getmsgint64(&s); /* CSN */
+				gid = pq_getmsgstring(&s);
+				break;
+			case PGLOGICAL_COMMIT:
+				break;
+			default:
+				Assert(false);
+		}
+	} else if (msgtype == 'M')
+	{
+		char		action = pq_getmsgbyte(&s);
+		int			messageSize;
+		char const *messageBody;
+
+		end_lsn = pq_getmsgint64(&s);
+		messageSize = pq_getmsgint(&s, 4);
+		messageBody = pq_getmsgbytes(&s, messageSize);
+
+		/* We hack origin info only into syncpoint messages */
+		Assert(action == 'S');
+		if (messageBody[0] == 'F') /* forwarded, c.f. process_syncpoint */
+		{
+			int rc PG_USED_FOR_ASSERTS_ONLY;
+
+			rc = sscanf(messageBody, "F_%d_%" INT64_MODIFIER "X",
+						&origin_node, &origin_lsn);
+			Assert(rc == 2);
+		}
+		else
+		{
+			origin_node = rctx->w.sender_node_id;
+			origin_lsn = InvalidXLogRecPtr;
+		}
+	}
+	else
+		Assert(false);
+	tx_lsn = origin_node == rctx->w.sender_node_id ? end_lsn : origin_lsn;
 
 	/*
 	 * Skip all transaction from unknown nodes, i.e. dropped ones. This might
@@ -287,38 +342,25 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	 */
 	if (origin_node == MtmInvalidNodeId)
 		return true;
+	/*
+	 * Similarly, if we don't know since which LSN to filter out changes for
+	 * this origin it means we don't have filter slot and thus have no idea
+	 * about such node -- ignore the change.  Again, such thing is possible
+	 * after node drop: sp messages carry origin info in itself, so even if
+	 * sender forgot about dropped node, origin_node will still be valid here,
+	 * though we most probably have also dropped the node along with the
+	 * filter slot.
+	 *
+	 * (note that origin_lsn can't be used here as 0 origin_lsn
+	 * is normal situation immediately after start, when no syncpoint exist
+	 * yet)
+	 */
+	if (spvector[origin_node - 1].local_lsn == InvalidXLogRecPtr)
+		return true;
 
 	/* Skip all transactions from our node */
 	if (origin_node == Mtm->my_node_id)
 		return true;
-
-	switch (event)
-	{
-		case PGLOGICAL_PREPARE:
-		case PGLOGICAL_ABORT_PREPARED:
-			gid = pq_getmsgstring(&s);
-			break;
-		case PGLOGICAL_PREPARE_PHASE2A:
-			gid = pq_getmsgstring(&s);
-			pq_getmsgstring(&s); /* state_3pc */
-			break;
-		case PGLOGICAL_COMMIT_PREPARED:
-			pq_getmsgint64(&s); /* CSN */
-			gid = pq_getmsgstring(&s);
-			break;
-		default:
-			/* XXX: notreached? */
-			break;
-	}
-
-	/* sorta assert keeping the compiler quiet */
-	if (sender_node_id != rctx->w.sender_node_id)
-	{
-		Assert(false);
-		mtm_log(PANIC, "sender node id is %d but must be %d",
-				sender_node_id, rctx->w.sender_node_id);
-	}
-	tx_lsn = origin_node == rctx->w.sender_node_id ? end_lsn : origin_lsn;
 
 	if (tx_lsn <= spvector[origin_node - 1].origin_lsn)
 	{
@@ -340,7 +382,7 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 		hash_search(filter_map, &entry, HASH_FIND, &found);
 
 		mtm_log(MtmReceiverFilter,
-				"Filter (map) transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%d/%" INT64_MODIFIER "x) -> %d",
+				"Filter (map) transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%d/%" INT64_MODIFIER "x), found=%d",
 				gid, rctx->w.sender_node_id, event,
 				spvector[origin_node - 1].origin_lsn, origin_node, tx_lsn, found);
 
@@ -546,7 +588,7 @@ pglogical_receiver_main(Datum main_arg)
 
 	/* TODO there used to be PG_TRY block, reindent it back */
 	{
-		XLogRecPtr	remote_start = InvalidXLogRecPtr;
+		XLogRecPtr	remote_start;
 		Syncpoint  *spvector = NULL;
 		HTAB	   *filter_map = NULL;
 		char	   *conninfo;
@@ -594,10 +636,16 @@ pglogical_receiver_main(Datum main_arg)
 			elog(ERROR, "receiver %s exits as dmq connection to node %d is not yet established",
 				 MyBgworkerEntry->bgw_name, rctx->w.sender_node_id);
 
-		/* Acquire recovery rep slot, so we can advance it without search */
-		ReplicationSlotAcquire(psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN,
-										sender),
-							   true);
+		/*
+		 * Acquire filter rep slot, so we can advance it during normal work
+		 * without search
+		 */
+		if (rctx->w.mode == REPLMODE_NORMAL)
+		{
+			ReplicationSlotAcquire(psprintf(MULTIMASTER_FILTER_SLOT_PATTERN,
+											sender),
+								   true);
+		}
 
 		/* Establish connection to the remote server */
 		conninfo = MtmNodeById(receiver_mtm_cfg, sender)->conninfo;
@@ -606,28 +654,56 @@ pglogical_receiver_main(Datum main_arg)
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
 
+		/* TODO: remove this once we rebase onto fresh version of EE which
+		 * doesn't use MessageContext inside planner guts (PGPRO-3253)*/
+		MessageContext = AllocSetContextCreate(TopMemoryContext,
+												"MessageContext",
+												ALLOCSET_DEFAULT_SIZES);
+
 		if (rctx->w.mode == REPLMODE_RECOVERY)
 		{
+			/*
+			 * Immediately after add_node new node is forced to recover from
+			 * donor as xact order there is the same, so syncpoints are
+			 * irrelevant (it wouldn't be easy to correctly filter out xacts
+			 * if we pull immediately from other nodes, e.g. donor xacts must
+			 * be considered as having origin now).
+			 */
 			if (receiver_mtm_cfg->backup_node_id > 0)
 			{
-				spvector = SyncpointGetAllLatest();
-				filter_map = RecoveryFilterLoad(-1, spvector, receiver_mtm_cfg);
-				remote_start = spvector[sender - 1].origin_lsn;
+				spvector = palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
+				/*
+				 * Immediately after basebackup we don't have any
+				 * syncpoints. We must fetch data since backup_end_lsn and
+				 * filter since current position of filter slot (is is almost
+				 * the same, but not necessarily equal: some wal could pass
+				 * (and got recycled) between node startup and slot creation)
+				 */
+				spvector[sender - 1] = SyncpointGetLatest(sender);
+				remote_start = receiver_mtm_cfg->backup_end_lsn;
+				/*
+				 * we must filter out all xacts since sp to donor in this
+				 * special add_node case, so MtmInvalidNodeId
+				 * is important here
+				 */
+				filter_map = RecoveryFilterLoad(MtmInvalidNodeId,
+												spvector, receiver_mtm_cfg);
 				Assert(remote_start != InvalidXLogRecPtr);
 			}
 			else
 			{
-				spvector = SyncpointGetAllLatest();
-				filter_map = RecoveryFilterLoad(-1, spvector, receiver_mtm_cfg);
-				remote_start = QueryRecoveryHorizon(rctx->conn, sender, spvector);
+				spvector = SyncpointGetAllLatest(sender);
+				filter_map = RecoveryFilterLoad(MtmInvalidNodeId,
+												spvector, receiver_mtm_cfg);
+				remote_start = GetRecoveryHorizon(sender);
 			}
 		}
 		else
 		{
 			spvector = palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 			spvector[sender - 1] = SyncpointGetLatest(sender);
+			remote_start = spvector[sender - 1].origin_lsn;
 			filter_map = RecoveryFilterLoad(sender, spvector, receiver_mtm_cfg);
-			remote_start = spvector[rctx->w.sender_node_id - 1].origin_lsn;
 		}
 
 		/* log our intentions */
@@ -648,7 +724,9 @@ pglogical_receiver_main(Datum main_arg)
 				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
 				{
 					appendStringInfo(message, "%d: " LSN_FMT "/" LSN_FMT ", ",
-									 i + 1, spvector[i].origin_lsn, spvector[i].local_lsn);
+									 i + 1,
+									 spvector[i].origin_lsn,
+									 spvector[i].local_lsn);
 				}
 			}
 			appendStringInfo(message, "}");
@@ -802,6 +880,51 @@ pglogical_receiver_main(Datum main_arg)
 					int			msg_len = rc - hdr_len;
 
 					stmt = copybuf + hdr_len;
+
+					/*
+					 * Non-tx logical messages are normally short and don't
+					 * need spill support.
+					 */
+					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
+															  stmt[1] == 'P' ||
+															  stmt[1] == 'C' ||
+															  stmt[1] == 'S')))
+					{
+						/*
+						 * Filter out already applied messages. Decoding API
+						 * doesn't diclosure logical messages origin, so
+						 * currently we have directly hacked it only into
+						 * syncpoint messages (it is important to trim advance
+						 * slots during recovery). It would be good to fix
+						 * this for non-tx DDL as well -- currently it is
+						 * never relogged and thus skipped in recovery from
+						 * non-origin.
+						 */
+						if (stmt[0] == 'M' && stmt[1] == 'S' &&
+							MtmFilterTransaction(stmt, msg_len, spvector,
+												 filter_map, rctx))
+						{
+							continue;
+						}
+						if (stmt[0] == 'M' && stmt[1] == 'C')
+						{
+							/*
+							 * non-tx DDL should be executed by parallel
+							 * workers
+							 */
+							MtmExecute(stmt, msg_len, &rctx->w, false);
+						}
+						else
+						{
+							/*
+							 * all other messages should be processed by
+							 * receiver itself
+							 */
+							MtmExecute(stmt, msg_len, &rctx->w, true);
+						}
+						continue;
+					}
+
 					if (buf.used + msg_len + 1 >= MtmTransSpillThreshold * 1024L)
 					{
 						if (spill_file < 0)
@@ -819,65 +942,49 @@ pglogical_receiver_main(Datum main_arg)
 						MtmSpillToFile(spill_file, buf.data, buf.used);
 						ByteBufferReset(&buf);
 					}
-					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
-															  stmt[1] == 'P' ||
-															  stmt[1] == 'C' ||
-															  stmt[1] == 'S')))
-					{
-						if (stmt[0] == 'M' && stmt[1] == 'C')
 
-							/*
-							 * non-tx DDL should be executed by parallel
-							 * workers
-							 */
-							MtmExecute(stmt, msg_len, &rctx->w, false);
-						else
-						{
-							/*
-							 * all other messages should be processed by
-							 * receiver itself
-							 */
-							MtmExecute(stmt, msg_len, &rctx->w, true);
-						}
-					}
-					else
+					ByteBufferAppend(&buf, stmt, msg_len);
+					if (stmt[0] == 'C') /* commit */
 					{
-						ByteBufferAppend(&buf, stmt, msg_len);
-						if (stmt[0] == 'C') /* commit */
+						/*
+						 * Don't apply xact if our filter says we already
+						 * did so. Drop it if this is ABORT as well --
+						 * this means PREPARE at sender was aborted in the
+						 * middle of decoding.
+						 */
+						if ((stmt[1] != PGLOGICAL_ABORT &&
+							 !MtmFilterTransaction(stmt, msg_len, spvector,
+												   filter_map, rctx)))
 						{
-							/*
-							 * Don't apply xact if our filter says we already
-							 * did so. Drop it if this is ABORT as well --
-							 * this means PREPARE at sender was aborted in the
-							 * middle of decoding.
-							 */
-							if ((!MtmFilterTransaction(stmt, msg_len, spvector,
-													   filter_map, rctx) &&
-								 stmt[1] != PGLOGICAL_ABORT))
+							if (spill_file >= 0)
 							{
-								if (spill_file >= 0)
-								{
-									ByteBufferAppend(&buf, ")", 1);
-									pq_sendbyte(&spill_info, '(');
-									pq_sendint(&spill_info, buf.used, 4);
-									MtmSpillToFile(spill_file, buf.data, buf.used);
-									MtmCloseSpillFile(spill_file);
-									MtmExecute(spill_info.data, spill_info.len,
-											   &rctx->w, false);
-									spill_file = -1;
-									resetStringInfo(&spill_info);
-								}
-								else
-									MtmExecute(buf.data, buf.used, &rctx->w, false);
-							}
-							else if (spill_file >= 0)
-							{
+								ByteBufferAppend(&buf, ")", 1);
+								pq_sendbyte(&spill_info, '(');
+								pq_sendint(&spill_info, buf.used, 4);
+								MtmSpillToFile(spill_file, buf.data, buf.used);
 								MtmCloseSpillFile(spill_file);
-								resetStringInfo(&spill_info);
+								MtmExecute(spill_info.data, spill_info.len,
+										   &rctx->w, false);
 								spill_file = -1;
+								resetStringInfo(&spill_info);
 							}
-							ByteBufferReset(&buf);
+							else
+								MtmExecute(buf.data, buf.used, &rctx->w,
+										   /*
+											* Force bdr-like transactions
+											* ending with plain commit to
+											* execute serially to avoid
+											* reordering conflicts.
+											*/
+										   stmt[1] == PGLOGICAL_COMMIT);
 						}
+						else if (spill_file >= 0)
+						{
+							MtmCloseSpillFile(spill_file);
+							resetStringInfo(&spill_info);
+							spill_file = -1;
+						}
+						ByteBufferReset(&buf);
 					}
 				}
 			}

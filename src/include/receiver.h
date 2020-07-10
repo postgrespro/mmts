@@ -31,6 +31,16 @@ typedef struct
 	 * For parallel workers: position of current job in txlist.
 	 */
 	int					txlist_pos;
+	/*
+	 * Info about xact currently being executed
+	 */
+	TransactionId		origin_xid;
+	TransactionId		my_xid;
+	/*
+	 * true means this is xact with plain commit, so we cannot ignore
+	 * apply failure
+	 */
+	bool				bdr_like;
 } MtmReceiverWorkerContext;
 
 extern BackgroundWorkerHandle *MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid);

@@ -27,7 +27,7 @@
 /*  XXX: change to one NODENAME_FMT */
 #define MTM_SUBNAME_FMT					 "mtm_sub_%d"
 #define MTM_DMQNAME_FMT					 "node%d"
-#define MULTIMASTER_RECOVERY_SLOT_PATTERN "mtm_recovery_slot_%d"
+#define MULTIMASTER_FILTER_SLOT_PATTERN  "mtm_filter_slot_%d"
 #define MULTIMASTER_LOCAL_TABLES_TABLE   "local_tables"
 #define MULTIMASTER_MAX_CONN_STR_SIZE    128
 #define MULTIMASTER_MAX_HOST_NAME_SIZE   64
@@ -42,7 +42,7 @@
 
 typedef uint64 nodemask_t;
 
-#define LSN_FMT "%" INT64_MODIFIER "x"
+#define LSN_FMT "%" INT64_MODIFIER "X"
 
 #define MAX_NODES 64
 #define BIT_CHECK(mask, bit) (((mask) & ((nodemask_t)1 << (bit))) != 0)
@@ -61,7 +61,6 @@ typedef uint64 nodemask_t;
 #define Anum_mtm_nodes_id			1	/* node_id, same accross cluster */
 #define Anum_mtm_nodes_connifo		2	/* connection string */
 #define Anum_mtm_nodes_is_self		3	/* is that tuple for our node? */
-#define Anum_mtm_nodes_init_done	4	/* did monitor already create slots? */
 
 /*
  * Definitions for the "mtm.cluster_status" type.

@@ -833,12 +833,24 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 		appendStringInfoString(&query, "insert into " MTM_NODES " values ");
 		for (j = 0; j < n_peers; j++)
 		{
-			appendStringInfo(&query, "(%d, $$%s$$, '%c', 'f'), ",
+			appendStringInfo(&query, "(%d, $$%s$$, '%c'), ",
 							 j + 2, TextDatumGetCString(peers_datums[j]),
 							 j == i ? 't' : 'f');
 		}
-		appendStringInfo(&query, "(%d, $$%s$$, '%c', 'f')",
+		appendStringInfo(&query, "(%d, $$%s$$, '%c')",
 						 1, my_conninfo, 'f');
+
+		res = PQexec(peer_conns[i], "truncate mtm.nodes_init_done");
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
+
+			PQclear(res);
+			PQfinish(peer_conns[i]);
+			mtm_log(ERROR, "Failed to truncate mtm.nodes_init_done on '%s': %s",
+					conninfo, msg);
+		}
+		PQclear(res);
 
 		res = PQexec(peer_conns[i], query.data);
 		if (PQresultStatus(res) != PGRES_COMMAND_OK)
@@ -860,10 +872,10 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 	appendStringInfoString(&local_query, "insert into " MTM_NODES " values ");
 	for (i = 0; i < n_peers; i++)
 	{
-		appendStringInfo(&local_query, "(%d, $$%s$$, 'f', 'f'), ",
+		appendStringInfo(&local_query, "(%d, $$%s$$, 'f'), ",
 						 i + 2, TextDatumGetCString(peers_datums[i]));
 	}
-	appendStringInfo(&local_query, "(%d, $$%s$$, 't', 'f')",
+	appendStringInfo(&local_query, "(%d, $$%s$$, 't')",
 					 1, my_conninfo);
 
 	if (SPI_connect() != SPI_OK_CONNECT)
@@ -874,6 +886,10 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 							  node_ids_arr.data), false, 0);
 	if (rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to create mtm state");
+
+	rc = SPI_execute("truncate mtm.nodes_init_done", false, 0);
+	if (rc != SPI_OK_UTILITY)
+		mtm_log(ERROR, "Failed to truncate mtm.nodes_init_done");
 
 	rc = SPI_execute(local_query.data, false, 0);
 	if (rc != SPI_OK_INSERT)
@@ -1091,7 +1107,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* serialize our mtm.cluster_nodes table into string */
-	query = psprintf("select array_agg((n.id, n.conninfo, n.id = %d, 'f')::" MTM_NODES ") "
+	query = psprintf("select array_agg((n.id, n.conninfo, n.id = %d)::" MTM_NODES ") "
 					 "from " MTM_NODES " n", new_node_id);
 	rc = SPI_execute(query, true, 0);
 	if (rc != SPI_OK_SELECT || SPI_processed != 1)
@@ -1123,19 +1139,6 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		PQclear(res);
 		PQfinish(conn);
 		mtm_log(ERROR, "Can't fill mtm.config on '%s': %s", conninfo, msg);
-	}
-	PQclear(res);
-
-	res = PQexec(conn, psprintf("insert into mtm.syncpoints values "
-								"(%d, " UINT64_FORMAT ", pg_current_wal_lsn()::bigint, pg_current_wal_lsn()::bigint)",
-								cfg->my_node_id, end_lsn));
-	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-	{
-		char	   *msg = pchomp(PQerrorMessage(conn));
-
-		PQclear(res);
-		PQfinish(conn);
-		mtm_log(ERROR, "Can't fill mtm.syncpoints on '%s': %s", conninfo, msg);
 	}
 	PQclear(res);
 
@@ -1180,20 +1183,14 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			ro_id = replorigin_by_name(ro_name, false);
 			olsn = replorigin_get_progress(ro_id, false);
 
-			msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
-						   cfg->nodes[i].node_id, olsn, (XLogRecPtr) InvalidXLogRecPtr);
+			msg = psprintf("F_%d_" UINT64_FORMAT,
+						   cfg->nodes[i].node_id, olsn);
 
 			replorigin_session_origin = cfg->nodes[i].origin_id;
 			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 			replorigin_session_origin = InvalidRepOriginId;
 		}
-
-		{
-			char	   *msg = psprintf(UINT64_FORMAT, (XLogRecPtr) InvalidXLogRecPtr);
-
-			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
-		}
-
+		LogLogicalMessage("S", "", 1, false);
 	}
 	PG_CATCH();
 	{
@@ -1298,7 +1295,9 @@ MtmLoadConfig()
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 
-	rc = SPI_execute("select * from " MTM_NODES " order by id asc", true, 0);
+	rc = SPI_execute("select n.id, n.conninfo, n.is_self, i.init_done from " MTM_NODES " n "
+					 "left outer join mtm.nodes_init_done i on n.id = i.id "
+					 "order by n.id asc", true, 0);
 	if (rc < 0 || rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to load saved nodes");
 
@@ -1315,6 +1314,7 @@ MtmLoadConfig()
 		int			node_id;
 		char	   *connstr;
 		bool		is_self;
+		Datum		init_done_datum;
 		bool		init_done;
 
 		node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_id, &isnull));
@@ -1328,9 +1328,9 @@ MtmLoadConfig()
 		Assert(!isnull);
 		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_is_self - 1)->atttypid == BOOLOID);
 
-		init_done = DatumGetBool(SPI_getbinval(tup, tupdesc, Anum_mtm_nodes_init_done, &isnull));
-		Assert(!isnull);
-		Assert(TupleDescAttr(tupdesc, Anum_mtm_nodes_init_done - 1)->atttypid == BOOLOID);
+		init_done_datum = SPI_getbinval(tup, tupdesc, 4, &isnull);
+		init_done = !isnull && DatumGetBool(init_done_datum);
+		Assert(TupleDescAttr(tupdesc, 3)->atttypid == BOOLOID);
 
 		/* Empty connstr mean that this is our node */
 		if (is_self)

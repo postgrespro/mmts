@@ -710,10 +710,6 @@ pg_filter_decode_txn(LogicalDecodingContext *ctx,
 	if (txn == NULL)
 		return true;
 
-	/* MTM replicates only two-phase transactions */
-	if (txn->gid[0] == '\0')
-		return true;
-
 	/*
 	 * XXX: that is called per-change and quite expensive for in-progress
 	 * transactions.

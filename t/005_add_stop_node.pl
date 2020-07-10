@@ -45,9 +45,9 @@ foreach (0..$#{$cluster->{nodes}})
         create extension multimaster;
 		select mtm.state_create('{2, 4, 5}');
         insert into mtm.cluster_nodes values
-            (2, \$\$@{[ $cluster->connstr(0) ]}\$\$, '@{[ $_ == 0 ? 't' : 'f' ]}', 'f'),
-            (4, \$\$@{[ $cluster->connstr(1) ]}\$\$, '@{[ $_ == 1 ? 't' : 'f' ]}', 'f'),
-            (5, \$\$@{[ $cluster->connstr(2) ]}\$\$, '@{[ $_ == 2 ? 't' : 'f' ]}', 'f');
+            (2, \$\$@{[ $cluster->connstr(0) ]}\$\$, '@{[ $_ == 0 ? 't' : 'f' ]}'),
+            (4, \$\$@{[ $cluster->connstr(1) ]}\$\$, '@{[ $_ == 1 ? 't' : 'f' ]}'),
+            (5, \$\$@{[ $cluster->connstr(2) ]}\$\$, '@{[ $_ == 2 ? 't' : 'f' ]}');
     });
 }
 
@@ -97,12 +97,12 @@ my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node(\$\$$connstr\$\$)"
 
 is($new_node_id, 1, "sparse id assignment");
 is($new_node_off, 3, "sparse id assignment");
-
 if ($concurrent_load)
 {
 	$cluster->pgbench(0, ('-N', '-n', -t => '100') );
 }
-
+sleep(2); # XXX sleep a bit to ensure monitor creates slot for new node on donor
+          #  which will be used by basebackup
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
 $cluster->release_socket($sock);
 $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''

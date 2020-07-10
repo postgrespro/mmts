@@ -24,8 +24,17 @@ LANGUAGE C;
 CREATE TABLE mtm.cluster_nodes(
     id int primary key not null,
     conninfo text not null,
-    is_self bool not null,
-    init_done bool not null default 'f'
+    is_self bool not null
+);
+
+/*
+ * Nodes for which init (slot creation, etc) is done. This could be a bool
+ * column in cluster_nodes, however this state is local per node, and
+ * cluster_nodes is global table.
+ */
+CREATE TABLE mtm.nodes_init_done (
+    id int primary key not null,
+    init_done bool
 );
 
 CREATE FUNCTION mtm.after_node_create()
@@ -50,10 +59,20 @@ CREATE TRIGGER on_node_drop
     EXECUTE FUNCTION mtm.after_node_drop();
 ALTER TABLE mtm.cluster_nodes ENABLE ALWAYS TRIGGER on_node_drop;
 
-/* remove syncpoints of node on its drop */
+/*
+ * Remove syncpoints of node on its drop.
+ * XXX: Syncpoints where dropped node is origin will be automatically removed
+ * in cleanup_old_syncpoints: we must adhere to the rule 'row is deleted by
+ * node who inserted id' in bdr-like tables to avoid conflicts. However,
+ * rows inserted *by* dropped node are problematic: obviously dropped node
+ * won't remove them, and deleting it here might cause transaction to abort
+ * as not all such rows necessarily had arrived to all nodes before dropped
+ * node went down. We probably should add 'don't stream the following changes'
+ * logical message and thus make this cleanup entirely local per-node.
+ */
 CREATE FUNCTION mtm.after_node_drop_plpgsql() RETURNS TRIGGER AS $$
 BEGIN
-  DELETE FROM mtm.syncpoints WHERE node_id = OLD.id;
+  -- DELETE FROM mtm.syncpoints WHERE receiver_node_id = OLD.id;
   RETURN NULL; -- result is ignored since this is an AFTER trigger
 END
 $$ LANGUAGE plpgsql;
@@ -133,7 +152,7 @@ DECLARE
     new_node_id int;
 BEGIN
     INSERT INTO mtm.cluster_nodes SELECT
-        min(unused_ids.id), connstr, 'false', 'false'
+        min(unused_ids.id), connstr, 'false'
     FROM (
         SELECT id FROM generate_series(1,16) id
         EXCEPT
@@ -182,6 +201,11 @@ CREATE TABLE mtm.local_tables(
     primary key(rel_schema, rel_name)
 ) WITH (user_catalog_table=true);
 
+/* don't broadcast init_done state which is local per node */
+INSERT INTO mtm.local_tables VALUES ('mtm', 'nodes_init_done');
+/* same for mtm.config */
+INSERT INTO mtm.local_tables VALUES ('mtm', 'config');
+
 -- possible tuples:
 --   'basebackup' : source node_id and end lsn of basebackup
 --   XXX: move my_node_id here?
@@ -190,44 +214,198 @@ CREATE TABLE mtm.config(
     value jsonb
 );
 
--- This is a clever trick, but it leaks (generally unsafe, as bigint is signed)
--- lsn -> bigint convertion to the whole system. A function below does the same
--- without adding the cast. We'd better get rid of both...
-CREATE CAST (pg_lsn AS bigint) WITHOUT FUNCTION;
+-- min/max(pg_lsn) appeared only in 13, so put our own implementation here...
+CREATE FUNCTION mtm.pg_lsn_smaller_sql(lsn1 pg_lsn, lsn2 pg_lsn) RETURNS pg_lsn AS $$
+BEGIN
+    IF lsn1 < lsn2 THEN
+      RETURN lsn1;
+    ELSE
+      RETURN lsn2;
+    END IF;
+END
+$$ LANGUAGE plpgsql;
 
--- XXX: we need some kind of migration here
-
-CREATE TABLE mtm.syncpoints(
-    node_id int not null,
-    origin_lsn bigint not null,
-    local_lsn  bigint not null,
-    restart_lsn  bigint not null,
-    primary key(node_id, origin_lsn)
+CREATE AGGREGATE mtm.min(pg_lsn)
+(
+    sfunc = mtm.pg_lsn_smaller_sql,
+    stype = pg_lsn
 );
 
--- latest syncpoint to each node
-CREATE VIEW mtm.latest_syncpoints AS
-    SELECT DISTINCT ON (node_id) node_id, origin_lsn, local_lsn
-    FROM mtm.syncpoints
-    ORDER BY node_id, origin_lsn DESC;
+CREATE TABLE mtm.syncpoints(
+    origin_node_id int not null,
+    origin_lsn pg_lsn not null,
+    receiver_node_id int not null,
+    receiver_lsn pg_lsn not null,
+    primary key(origin_node_id, origin_lsn, receiver_node_id, receiver_lsn)
+);
 
--- TODO: use pg_lsn everywhere instead of this
-CREATE FUNCTION mtm.pg_lsn_to_bigint(lsn pg_lsn) RETURNS bigint AS $$
-  SELECT (('x' || lpad('1', 16, '0'))::bit(64) << 32)::bigint * -- 2^32
-         ('x' || lpad(split_part(lsn::text, '/', 1), 16, '0'))::bit(64)::bigint +
-         ('x' || lpad(split_part(lsn::text, '/', 2), 16, '0'))::bit(64)::bigint;
+COMMENT ON TABLE mtm.syncpoints IS
+'a row means node receiver_node_id has
+ 1) all changes of origin_node_id with end_lsn <= origin_lsn lying before
+    receiver_lsn locally;
+ 2) all changes of origin_node_id with start lsn >= origin_lsn will be
+    landed at >= receiver_lsn locally -- this is used by other nodes to report
+    origin changes to receiver node';
 
-$$
-LANGUAGE sql;
+-- for debugging
+CREATE FUNCTION mtm.syncpoints_trigger_f() RETURNS trigger AS $$
+BEGIN
+  IF (TG_OP = 'DELETE') THEN
+    RAISE LOG 'deleting syncpoint row: %', OLD;
+    RETURN OLD;
+  ELSE
+    RAISE LOG 'inserting syncpoint row: %', NEW;
+    RETURN NEW;
+  END IF;
+END
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER syncpoints_trigger BEFORE INSERT OR UPDATE OR DELETE
+    ON mtm.syncpoints FOR EACH ROW EXECUTE FUNCTION mtm.syncpoints_trigger_f();
+ALTER TABLE mtm.syncpoints ENABLE ALWAYS TRIGGER syncpoints_trigger;
 
 /*
- * Note that pg_filter_decode_txn currently prevents plain COMMITs replay and if
- * xact modified only local tables we don't perform 3pc, so there is no empty
- * sp table modification xacts flowing around. However, we cleanup node
- * syncpoints on its removal, and drop_node surely ought to go through 3pc.
- * Thus local_tables semantics does here exactly what we want.
+ * If we ever switch to non-blocking syncpoints implementation we would have
+ * two different types of
+ *   <origin_node, origin_lsn, receiver_node, receiver_lsn>
+ * syncpoint tuples (and thus two tables) instead of current
+ * (meaning hard border) one:
+ * 1) absorbpoint: means receiver got all origin transactions with end_lsn <=
+ *    origin_lsn; so he must request streaming these changes since origin_lsn
+ *    (translated into appropriate LSNs, if pulling from non-origin) and fill the
+ *    filter since receiver_lsn of emitpoint with origin_lsn <= absorbpoint's
+ *    origin_lsn to spot all already applied transactions. In fact,
+ *    receiver_lsn (local curr WAL pt on the moment of absorbpoint creation),
+ *    is useless for absorbpoints, though could be recorded. Absorbpoint is
+ *    just a mark that node have applied everything up to origin_lsn.
+ * 2) emitpoint: means all origin_node transactions with start_lsn >= origin_lsn
+ *    at receiver have or will have start_lsn >= receiver_lsn. So recovering
+ *    nodes should translate origin_lsn they need to the appropriate emitpoint of
+ *    donor and request streaming since it.
+ * In the current blocking implementation single record represents both
+ * absorbpoint and emitpoint. To make future development easier, hints are put
+ * in places where the distinction would matter.
  */
-INSERT INTO mtm.local_tables VALUES ('mtm', 'syncpoints');
+
+CREATE FUNCTION mtm.my_node_id() RETURNS int AS $$
+    SELECT id FROM mtm.cluster_nodes WHERE is_self;
+$$ LANGUAGE sql;
+
+-- Since which LSN we must request streaming from emitter_node_id to get
+-- origin_node_id changes with start_lsn >= origin_lsn?
+-- This is the same LSN since which recovering emitter_node_id must scan his WAL
+-- to fill the filter.
+-- Returns NULL if no suituable syncpoint is found.
+-- would select emitpoints in non-blocking implementation
+CREATE FUNCTION mtm.translate_syncpoint(origin_node_id int, origin_lsn pg_lsn,
+                                        emitter_node_id int) RETURNS pg_lsn AS $$
+    SELECT receiver_lsn FROM mtm.syncpoints s
+    WHERE s.origin_node_id = translate_syncpoint.origin_node_id AND
+          s.receiver_node_id = emitter_node_id AND
+          s.origin_lsn <= translate_syncpoint.origin_lsn
+    ORDER BY origin_lsn DESC LIMIT 1
+$$ LANGUAGE sql;
+
+-- Latest syncpoint to and from each node: up to which origin_lsn
+-- receiver_node_id applied *all* transactions of origin_node_id?
+-- If some syncpoint doesn't exist (possible immediately after startup),
+-- origin_lsn is 0/0 for this pair of nodes.
+-- would be latest_absorbpoints in non-blocking implementation
+CREATE VIEW mtm.latest_syncpoints AS
+    SELECT node_id_pairs.origin_node_id,
+           COALESCE(ls.origin_lsn, '0/0'::pg_lsn) origin_lsn,
+           node_id_pairs.receiver_node_id,
+	   -- Since which local lsn receiver_node_id should fill the filter?
+	   -- The answer is since the corresponding emitpoint, though in
+	   -- current blocking implementation this just trivially returns
+	   -- receiver_lsn of the row.
+	   COALESCE(mtm.translate_syncpoint(node_id_pairs.origin_node_id,
+	                                    ls.origin_lsn,
+					    node_id_pairs.receiver_node_id),
+		    -- If there is no syncpoint yet and receiver is me, fetch
+		    -- curr position of filter slot directly. This is important
+		    -- in case of node reboot before first syncpoint: we must
+		    -- fill the filter with already applied xacts. We attempt
+		    -- generic query first as it allows to get fill_filter_since
+		    -- for other nodes which is probably useful for monitoring.
+                    CASE WHEN node_id_pairs.receiver_node_id = mtm.my_node_id() THEN
+		      (SELECT restart_lsn FROM pg_replication_slots
+		       WHERE slot_name = format('mtm_filter_slot_%s',
+		         node_id_pairs.origin_node_id))
+		    END
+		   ) fill_filter_since
+    FROM
+      -- Generate pairs of all nodes and left join them with the actual sp table
+      -- to set origin_lsn 0/0 if syncpoint doesn't exist yet (and ignore
+      -- dropped nodes at the same time)
+      (SELECT n1.id origin_node_id, n2.id receiver_node_id
+       FROM mtm.cluster_nodes n1, mtm.cluster_nodes n2
+       WHERE n1.id != n2.id) node_id_pairs LEFT OUTER JOIN
+      (SELECT DISTINCT ON (origin_node_id, receiver_node_id) *
+       FROM mtm.syncpoints
+       ORDER BY origin_node_id, receiver_node_id, origin_lsn DESC) ls
+      ON (node_id_pairs.origin_node_id = ls.origin_node_id AND
+          node_id_pairs.receiver_node_id = ls.receiver_node_id)
+    ORDER BY origin_node_id, receiver_node_id;
+
+-- Which LSN our node can safely confirm as flushed to sender_node_id?
+-- Returns NULL if there is no sender_node_id node; returns 0/0 if there is no
+-- suitable syncpoint (yet) for at least one node (possible immediately after init)
+CREATE FUNCTION mtm.get_recovery_horizon(sender_node_id int) RETURNS pg_lsn AS $$
+  SELECT mtm.min(CASE
+                 WHEN origin_node_id = sender_node_id THEN origin_lsn
+                 ELSE COALESCE(mtm.translate_syncpoint(origin_node_id,
+                                                       origin_lsn,
+                                                       sender_node_id),
+                               '0/0'::pg_lsn)
+                 END)
+  FROM mtm.latest_syncpoints
+  WHERE receiver_node_id=mtm.my_node_id();
+$$ LANGUAGE sql;
+
+/*
+ * old syncpoints cleanup support
+ */
+
+-- Since which origin_lsn changes of origin_node_id must be still retained,
+-- i.e. which LSN is still needed by the node who lags applying them the most?
+-- Returns 0/0 if some node syncpoint doesn't exist yet at all.
+-- would select oldest_absorbpoints in non-blocking implementation
+CREATE FUNCTION mtm.oldest_syncpoint(origin_node_id int) RETURNS pg_lsn AS $$
+    SELECT mtm.min(origin_lsn)
+    FROM mtm.latest_syncpoints ls
+    WHERE ls.origin_node_id = oldest_syncpoint.origin_node_id;
+$$ LANGUAGE sql;
+
+-- Remove obsolete mtm.syncpoint entries. To avoid reordering conflicts in
+-- this bdr-like table we follow the simple 'only the guy who inserted the row
+-- deletes it' rule, i.e. purge only own records.
+CREATE FUNCTION mtm.cleanup_old_syncpoints() RETURNS void AS $$
+    DELETE FROM mtm.syncpoints s WHERE
+      receiver_node_id = mtm.my_node_id() AND -- purge only own records
+      -- don't remove (my own) latest absorbpoint -- it determines the LSN we
+      -- report/request streaming from.
+      -- (currently that's actually redundant as next condition always keeps at
+      -- least one syncpoint for each pair of nodes, but that's the condition
+      -- by which absorbpoints would be pruned in non-blocking implementation)
+      origin_lsn < (SELECT ls.origin_lsn FROM mtm.latest_syncpoints ls
+                    WHERE ls.origin_node_id = s.origin_node_id AND
+		          ls.receiver_node_id = s.receiver_node_id) AND
+      -- Find oldest origin_lsn still needed by me or someone else to get
+      -- origin_node_id changes. We must retain the emitpoint after which all
+      -- xacts >= oldest origin_lsn go: if oldest absorbpoint owner is  me,
+      -- I must fill recovery filter since this point; if oldest absorbpoint
+      -- owner is someone else, we must stream to him since this point.
+      receiver_lsn < mtm.translate_syncpoint(origin_node_id,
+                                             mtm.oldest_syncpoint(origin_node_id),
+                                             receiver_node_id);
+    -- Also cleanup syncpoints created by me about changes of dropped nodes.
+    -- (we also have some issues with syncpoints created *by* dropped nodes, see
+    -- after_node_drop_plpgsql)
+    DELETE FROM mtm.syncpoints s WHERE
+      receiver_node_id = mtm.my_node_id() AND
+      origin_node_id NOT IN (SELECT id FROM mtm.cluster_nodes);
+$$ LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION mtm.alter_sequences() RETURNS boolean AS
 $$

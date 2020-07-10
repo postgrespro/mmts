@@ -18,10 +18,6 @@
  * none of next transaction did commit before syncpoint. So it is safe to start
  * recovery from this syncpoints.
  *
- * XXX: replication should start from syncpoint otherwise failure between
- * slot creation and first syncpoint would be mishandled. Postpone this till
- * we have function-based config with separate function for cluster init.
- *
  * Portions Copyright (c) 1996-2018, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -42,15 +38,13 @@
 #include "access/xlog_internal.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
-
+#include "utils/pg_lsn.h"
 
 #include "libpq-fe.h"
 
 #include "multimaster.h"
 #include "syncpoint.h"
 #include "logger.h"
-
-static void AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn);
 
 /* XXX: change to some receiver-local structures */
 static int
@@ -74,23 +68,24 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
 
 
 /*
- * Periodically put in our log SyncPoint message that orders our followers
- * to await for finish of all transactions received before this message and
- * don't finish any transactions after this point.
+ * Periodically put in our log SyncPoint message which hints our followers
+ * that it would be nice to apply everything before this message and confirm
+ * the receival to advance the replication slot.
  *
- * Also include our restart_lsn in message to allow followers to advance
- * their corresponding recovery slots.
+ * The receiver doesn't actually need anyting from the sender to create
+ * syncpoint. It is logged only because sender knows the best when WAL becomes
+ * bloated and it is time to trim it. In particular, is case of assymetric
+ * node load, e.g. 1 node writes, 2 and 3 only apply, receiver 2->3 staying
+ * idle won't know WAL is being generated on 2 without additional actions.
  *
  * This is only function out of whole this file that is indended to be called
- * at publication side. It is called from user backend and also from receivers,
- * otherwise skewed node usage can result in needlessly long recovery.
+ * at publication side. It is called from user backend and also from
+ * receivers, otherwise skewed node usage can result in needlessly long
+ * recovery.
  */
 void
 MaybeLogSyncpoint()
 {
-	XLogRecPtr	syncpoint_lsn;
-	XLogRecPtr	min_confirmed_flush = InvalidXLogRecPtr;
-
 	/* do unlocked check first */
 	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)
 		return;
@@ -98,116 +93,45 @@ MaybeLogSyncpoint()
 	LWLockAcquire(Mtm->syncpoint_lock, LW_EXCLUSIVE);
 	if (GetInsertRecPtr() - Mtm->latestSyncpoint >= MULTIMASTER_SYNCPOINT_INTERVAL)
 	{
-		int			i;
-		char	   *msg;
+		XLogRecPtr syncpoint_lsn;
 
-		/*
-		 * Compute minimal restart lsn across our publications, but excluding
-		 * recovery slots.
-		 */
-		Assert(max_replication_slots > 0);
-		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
-		for (i = 0; i < max_replication_slots; i++)
-		{
-			ReplicationSlot *s;
-			XLogRecPtr	confirmed_flush;
-			int			node_id;
-
-			s = &ReplicationSlotCtl->replication_slots[i];
-
-			/* cannot change while ReplicationSlotCtlLock is held */
-			if (!s->in_use)
-				continue;
-
-			/* we're only interested in logical slots */
-			if (!SlotIsLogical(s))
-				continue;
-
-			/* skip non-mm slots and recovery slots */
-			if (sscanf(s->data.name.data, MULTIMASTER_SLOT_PATTERN, &node_id) != 1)
-				continue;
-
-			/* read once, it's ok if it increases while we're checking */
-			SpinLockAcquire(&s->mutex);
-			confirmed_flush = s->data.confirmed_flush;
-			SpinLockRelease(&s->mutex);
-
-			if (min_confirmed_flush == InvalidXLogRecPtr ||
-				confirmed_flush < min_confirmed_flush)
-				min_confirmed_flush = confirmed_flush;
-		}
-		LWLockRelease(ReplicationSlotControlLock);
-
-		/* And write it */
-		msg = psprintf(UINT64_FORMAT, min_confirmed_flush);
-		syncpoint_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
-
+		syncpoint_lsn = LogLogicalMessage("S", "", 1, false);
 		Mtm->latestSyncpoint = syncpoint_lsn;
 
 		mtm_log(SyncpointCreated,
-				"Syncpoint created (origin_lsn=%" INT64_MODIFIER "x, trim_lsn=%" INT64_MODIFIER "x)",
-				syncpoint_lsn, min_confirmed_flush
-			);
+				"syncpoint created, origin_lsn=%X/%X)",
+				(uint32) (syncpoint_lsn >> 32), (uint32) syncpoint_lsn);
 	}
 	LWLockRelease(Mtm->syncpoint_lock);
 }
 
-static void
-AdvanceRecoverySlot(int node_id, XLogRecPtr trim_lsn)
+/* copied from pg_lsn_out */
+static char*
+pg_lsn_out_c(XLogRecPtr lsn)
 {
-	char	   *sql;
-	int			rc;
-	XLogRecPtr	restart_lsn;
-	Assert(trim_lsn != InvalidXLogRecPtr);
+	char		buf[32];
+	uint32		id,
+				off;
 
-	/* Load latest checkpoint for given node */
-	sql = psprintf("select restart_lsn from mtm.syncpoints "
-				   "where node_id=%d and origin_lsn < " UINT64_FORMAT " "
-				   "order by origin_lsn desc limit 1",
-				   node_id, trim_lsn);
-	rc = SPI_execute(sql, true, 0);
+	/* Decode ID and offset */
+	id = (uint32) (lsn >> 32);
+	off = (uint32) lsn;
 
-	if (rc == SPI_OK_SELECT && SPI_processed > 0)
-	{
-		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
-		HeapTuple	tup = SPI_tuptable->vals[0];
-		bool		isnull;
-
-		Assert(SPI_processed == 1);
-
-		restart_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 1, &isnull));
-		Assert(!isnull);
-		Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT8OID);
-	}
-	else if (rc == SPI_OK_SELECT && SPI_processed == 0)
-	{
-		mtm_log(SyncpointApply, "No saved restart_lsn found");
-		return;
-	}
-	else
-		mtm_log(ERROR, "Failed to load saved restart_lsn");
-
-	/*
-	 * XXX: simple delete of restart_lsn < $restart_lsn is not working
-	 *
-	 * Need to delete old syncpoints.
-	 */
-
-	/* Advance recovery slot if possibble */
-	PhysicalConfirmReceivedLocation(restart_lsn);
-
-	mtm_log(SyncpointApply,
-			"Syncpoint processed: trim recovery slot to %" INT64_MODIFIER "x",
-			restart_lsn);
+	snprintf(buf, sizeof buf, "%X/%X", id, off);
+	return pstrdup(buf);
 }
 
-
 /*
- * Register syncpoint and release old WAL.
+ * Register that we have applied all origin_node_id changes with end_lsn <=
+ * origin_lsn; all origin_node_id xacts with end_lsn > origin_lsn will have
+ * start lsn >= receiver_lsn locally. Insertion of this info into
+ * mtm.syncpoint broadcasts it to other nodes so they can advance their
+ * progress reporting of origin changes to us.
+ *
  */
 void
-SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
-				  XLogRecPtr restart_lsn, XLogRecPtr trim_lsn)
+SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
+				  XLogRecPtr receiver_lsn)
 {
 	char	   *sql;
 	int			rc;
@@ -218,52 +142,65 @@ SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
 		mtm_log(ERROR, "could not connect using SPI");
 	PushActiveSnapshot(GetTransactionSnapshot());
 
+	/*
+	 * Log mark that this is bdr-like transaction: plain COMMIT will be
+	 * performed instead of 3PC and so receiver is not allowed to fail
+	 * applying this transaction and go ahead even in normal mode.
+	 */
+	LogLogicalMessage("B", "", 1, true);
+
 	/* Save syncpoint */
 	sql = psprintf("insert into mtm.syncpoints values "
-				   "(%d, " UINT64_FORMAT ", " UINT64_FORMAT ", " UINT64_FORMAT ") "
+				   "(%d, '%s', %d, '%s') "
 				   "on conflict do nothing",
-				   node_id,
-				   origin_lsn,
-				   local_lsn,
-				   restart_lsn
+				   origin_node_id,
+				   pg_lsn_out_c(origin_lsn),
+				   Mtm->my_node_id,
+				   pg_lsn_out_c(receiver_lsn)
 		);
 	rc = SPI_execute(sql, false, 0);
-
 	if (rc < 0)
-		mtm_log(ERROR, "Failed to save syncpoint");
+		mtm_log(ERROR, "failed to save syncpoint");
 
-	/* restart_lsn is invalid for forwarded messages */
-	if (restart_lsn != InvalidXLogRecPtr && trim_lsn != InvalidXLogRecPtr)
-		AdvanceRecoverySlot(node_id, trim_lsn);
+	/*
+	 * Cleanup old entries. We'd better do that not only when we insert into
+	 * syncpoints table but on any insertion, however that's not easy since
+	 * deletion must be originated by me to broadcast it to others and avoid
+	 * conflicts (c.f. cleanup_old_syncpoints)
+	 */
+	rc = SPI_execute("select mtm.cleanup_old_syncpoints()", false, 0);
+	if (rc < 0)
+		mtm_log(ERROR, "failed to cleanup syncpoints: %d", rc);
 
 	/* Finish transaction */
 	SPI_finish();
 	PopActiveSnapshot();
 	CommitTransactionCommand();
 
+	/* outer code must have already acquired proper slot */
+	PhysicalConfirmReceivedLocation(receiver_lsn);
+
 	mtm_log(SyncpointApply,
-			"Syncpoint processed (node_id=%d, origin_lsn=%" INT64_MODIFIER "x, local_lsn=%" INT64_MODIFIER "x, trim_lsn=%" INT64_MODIFIER "x, restart_lsn=%" INT64_MODIFIER "x)",
-			node_id,
-			origin_lsn,
-			local_lsn,
-			trim_lsn,
-			restart_lsn
-		);
+			"syncpoint processed: node_id=%d, origin_lsn=%X/%X, receiver_lsn=%X/%X",
+			origin_node_id,
+			(uint32) (origin_lsn >> 32), (uint32) origin_lsn,
+			(uint32) (receiver_lsn >> 32), (uint32) receiver_lsn);
 }
 
 
 /*
- * Get latest syncpoint for a given node.
+ * Get our latest syncpoint for a given node (origin_lsn is 0/0, local_lsn is
+ * the curr position of the filter slot in case of absense).
  */
 Syncpoint
-SyncpointGetLatest(int node_id)
+SyncpointGetLatest(int origin_node_id)
 {
 	int			rc;
 	char	   *sql;
 	Syncpoint	sp;
 	MemoryContext oldcontext;
 
-	Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
+	Assert(origin_node_id > 0 && origin_node_id <= MTM_MAX_NODES);
 
 	memset(&sp, '\0', sizeof(Syncpoint));
 	sp.local_lsn = InvalidXLogRecPtr;
@@ -277,10 +214,9 @@ SyncpointGetLatest(int node_id)
 	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/* Load latest checkpoint for given node */
-	sql = psprintf("select origin_lsn, local_lsn "
-				   "from mtm.syncpoints where node_id=%d "
-				   "order by origin_lsn desc limit 1",
-				   node_id);
+	sql = psprintf("select origin_lsn, fill_filter_since from mtm.latest_syncpoints "
+				   "where origin_node_id = %d and receiver_node_id = %d",
+				   origin_node_id, Mtm->my_node_id);
 	rc = SPI_execute(sql, true, 0);
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
@@ -291,22 +227,22 @@ SyncpointGetLatest(int node_id)
 
 		Assert(SPI_processed == 1);
 
-		sp.origin_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 1, &isnull));
+		sp.origin_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 1, &isnull));
 		Assert(!isnull);
-		Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT8OID);
+		Assert(TupleDescAttr(tupdesc, 0)->atttypid == LSNOID);
 
-		sp.local_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 2, &isnull));
+		sp.local_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 2, &isnull));
 		Assert(!isnull);
-		Assert(TupleDescAttr(tupdesc, 1)->atttypid == INT8OID);
+		Assert(TupleDescAttr(tupdesc, 1)->atttypid == LSNOID);
 	}
 	else if (rc == SPI_OK_SELECT && SPI_processed == 0)
 	{
 		/* no saved syncpoints found, proceed as is */
-		mtm_log(MtmReceiverStart, "No saved syncpoints found");
+		mtm_log(MtmReceiverStart, "no saved syncpoints found");
 	}
 	else
 	{
-		mtm_log(ERROR, "Failed to load saved syncpoint");
+		mtm_log(ERROR, "no to load saved syncpoint");
 	}
 
 	/* Finish transaction */
@@ -321,13 +257,15 @@ SyncpointGetLatest(int node_id)
 
 
 /*
- * Get array of latest syncpoints for all nodes.
+ * Get array of *our* latest syncpoints for all nodes (technically we are
+ * interested only in local lsns to fill the filter).
  */
 Syncpoint *
-SyncpointGetAllLatest()
+SyncpointGetAllLatest(int sender_node_id)
 {
 	int			rc;
 	Syncpoint  *spvector;
+	char *sql;
 
 	spvector = (Syncpoint *) palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 
@@ -340,8 +278,11 @@ SyncpointGetAllLatest()
 	/*
 	 * Load latest checkpoints for all origins we have
 	 */
-	rc = SPI_execute("select * from mtm.latest_syncpoints",
-					 true, 0);
+	sql = psprintf("select origin_node_id, origin_lsn, fill_filter_since "
+				   "from mtm.latest_syncpoints "
+				   "where receiver_node_id = %d",
+				   Mtm->my_node_id);
+	rc = SPI_execute(sql, true, 0);
 
 	if (rc == SPI_OK_SELECT && SPI_processed > 0)
 	{
@@ -363,13 +304,13 @@ SyncpointGetAllLatest()
 			Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT4OID);
 			Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
 
-			origin_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 2, &isnull));
+			origin_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 2, &isnull));
 			Assert(!isnull);
-			Assert(TupleDescAttr(tupdesc, 1)->atttypid == INT8OID);
+			Assert(TupleDescAttr(tupdesc, 1)->atttypid == LSNOID);
 
-			local_lsn = DatumGetInt64(SPI_getbinval(tup, tupdesc, 3, &isnull));
+			local_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 3, &isnull));
 			Assert(!isnull);
-			Assert(TupleDescAttr(tupdesc, 2)->atttypid == INT8OID);
+			Assert(TupleDescAttr(tupdesc, 2)->atttypid == LSNOID);
 
 			spvector[node_id - 1].origin_lsn = origin_lsn;
 			spvector[node_id - 1].local_lsn = local_lsn;
@@ -378,11 +319,11 @@ SyncpointGetAllLatest()
 	else if (rc == SPI_OK_SELECT && SPI_processed == 0)
 	{
 		/* no saved syncpoints found, proceed as is */
-		mtm_log(MtmReceiverFilter, "No saved syncpoints found");
+		mtm_log(MtmReceiverFilter, "no saved syncpoints found");
 	}
 	else
 	{
-		mtm_log(ERROR, "Failed to load saved syncpoint");
+		mtm_log(ERROR, "failed to load saved syncpoint");
 	}
 
 	/* Finish transaction */
@@ -393,73 +334,50 @@ SyncpointGetAllLatest()
 	return spvector;
 }
 
-
 /*
- * Now get minimal lsn among syncpoints on the replication node
+ * Since which LSN we must request streaming from sender_node_id to get all
+ * origin changes? This is the same LSN we ack as flushed.
  */
 XLogRecPtr
-QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector)
+GetRecoveryHorizon(int sender_node_id)
 {
-	StringInfoData serialized_lsns;
-	int			i;
-	bool		nonzero = false;
-	XLogRecPtr	local_horizon = local_spvector[node_id - 1].origin_lsn;
-	XLogRecPtr	remote_horizon = InvalidXLogRecPtr;
+	int			rc;
+	char *sql;
+	bool inside_tx = IsTransactionOrTransactionBlock();
+	HeapTuple	tup;
+	bool		isnull;
+	XLogRecPtr	horizon;
 
-	/* serialize filter_vector */
-	initStringInfo(&serialized_lsns);
-	for (i = 0; i < MTM_MAX_NODES; i++)
-	{
-		if (local_spvector[i].origin_lsn != InvalidXLogRecPtr &&
-			i + 1 != node_id)
-		{
-			appendStringInfo(&serialized_lsns, "%d:" UINT64_FORMAT ",", i + 1,
-							 local_spvector[i].origin_lsn);
-			nonzero = true;
-		}
-	}
+	/*
+	 * Receiver calls this function when sending feedback, which may happen in
+	 * the middle of transaction (between records) or outside it.
+	 */
+	if (!inside_tx)
+		StartTransactionCommand();
 
-	if (nonzero)
-	{
-		char	   *sql;
-		PGresult   *res;
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	PushActiveSnapshot(GetTransactionSnapshot());
 
-		/* Find out minimal lsn of given syncpoints */
-		sql = psprintf(
-					   "select min(local_lsn) from regexp_split_to_table('%s', ',') as states "
-					   "join (select node_id || ':' || origin_lsn as state, * from mtm.syncpoints) "
-					   "local_states on states = local_states.state;", serialized_lsns.data);
-		res = PQexec(conn, sql);
-		pfree(sql);
+	sql = psprintf("select mtm.get_recovery_horizon(%d)", sender_node_id);
+	rc = SPI_execute(sql, true, 0);
 
-		if (PQresultStatus(res) != PGRES_TUPLES_OK)
-		{
-			mtm_log(ERROR, "SyncpointGetRecoveryHorizon: %s",
-					PQresultErrorMessage(res));
-		}
-		else if (PQnfields(res) != 1 ||
-				 (PQntuples(res) != 0 && PQntuples(res) != 1))
-		{
-			mtm_log(ERROR, "SyncpointGetRecoveryHorizon: refusing unexpected result from replication node");
-		}
+	if (rc != SPI_OK_SELECT && SPI_processed != 1)
+		mtm_log(ERROR, "mtm.get_recovery_horizon failed: rc=%d, SPI_processed=%ld",
+				rc, SPI_processed);
 
-		if (PQntuples(res) == 0)
-		{
-			mtm_log(MtmReceiverStart, "No saved syncpoints found on remote node");
-		}
-		else
-		{
-			remote_horizon = pg_strtouint64(PQgetvalue(res, 0, 0), NULL, 10);
-		}
-	}
+	tup = SPI_tuptable->vals[0];
+	horizon = DatumGetLSN(SPI_getbinval(tup, SPI_tuptable->tupdesc, 1, &isnull));
+	if (isnull)
+		mtm_log(ERROR, "GetRecoveryHorizon: node %d is not found",
+				sender_node_id);
 
-	mtm_log(MtmReceiverStart,
-			"QueryRecoveryHorizon (remote_horizon=%" INT64_MODIFIER "x, local_horizon=%" INT64_MODIFIER "x)",
-			remote_horizon,
-			local_horizon
-		);
+	SPI_finish();
+	PopActiveSnapshot();
 
-	return Min(remote_horizon, local_horizon);
+	if (!inside_tx)
+		CommitTransactionCommand();
+	return horizon;
 }
 
 
@@ -568,7 +486,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 			continue;
 
 		/* if asked collect records only for a given node */
-		if (filter_node_id != -1 && filter_node_id != node_id)
+		if (filter_node_id != MtmInvalidNodeId && filter_node_id != node_id)
 			continue;
 
 		/* XXX: also cover standalone messages */
@@ -585,6 +503,14 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 			switch (info & XLOG_XACT_OPMASK)
 			{
+ 				case XLOG_XACT_COMMIT:
+					{
+						xl_xact_parsed_commit parsed;
+
+						ParseCommitRecord(info, (xl_xact_commit *) XLogRecGetData(xlogreader), &parsed);
+						entry.origin_lsn = parsed.origin_lsn;
+						break;
+					}
 				case XLOG_XACT_PREPARE:
 					{
 						xl_xact_parsed_prepare parsed;

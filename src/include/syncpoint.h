@@ -34,11 +34,11 @@ typedef struct
 } FilterEntry;
 
 extern void MaybeLogSyncpoint(void);
-extern void SyncpointRegister(int node_id, XLogRecPtr origin_lsn, XLogRecPtr local_lsn,
-				  XLogRecPtr restart_lsn, XLogRecPtr trim_lsn);
-extern Syncpoint SyncpointGetLatest(int node_id);
-extern Syncpoint *SyncpointGetAllLatest(void);
-extern XLogRecPtr QueryRecoveryHorizon(PGconn *conn, int node_id, Syncpoint *local_spvector);
+extern void SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
+				  XLogRecPtr receiver_lsn);
+extern Syncpoint SyncpointGetLatest(int origin_node_id);
+extern Syncpoint *SyncpointGetAllLatest(int sender_node_id);
+extern XLogRecPtr GetRecoveryHorizon(int sender_node_id);
 extern HTAB *RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg);
 
 #endif							/* SYNCPOINT_H */

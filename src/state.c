@@ -3152,7 +3152,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	DmqDestinationId dest;
 	char	   *dmq_connstr,
 			   *slot,
-			   *recovery_slot,
+			   *filter_slot,
 			   *dmq_my_name,
 			   *dmq_node_name;
 	MemoryContext old_context;
@@ -3167,13 +3167,13 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 						   MtmNodeById(new_cfg, node_id)->conninfo,
 						   MULTIMASTER_BROADCAST_SERVICE);
 	slot = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
-	recovery_slot = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+	filter_slot = psprintf(MULTIMASTER_FILTER_SLOT_PATTERN, node_id);
 	dmq_my_name = psprintf(MTM_DMQNAME_FMT, new_cfg->my_node_id);
 	dmq_node_name = psprintf(MTM_DMQNAME_FMT, node_id);
 
 	if (MtmNodeById(new_cfg, node_id)->init_done)
 	{
-		if (!slot_exists(recovery_slot))
+		if (!slot_exists(filter_slot))
 			mtm_log(ERROR, "can't find recovery slot for node%d", node_id);
 
 		if (!slot_exists(slot))
@@ -3183,10 +3183,10 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	if (!MtmNodeById(new_cfg, node_id)->init_done)
 	{
 		/*
-		 * Create recovery slot to hold WAL files that we may need during
-		 * recovery.
+		 * Create filter slot to filter out already applied changes since the
+		 * last syncpoint during replication start
 		 */
-		ReplicationSlotCreate(recovery_slot, false, RS_PERSISTENT);
+		ReplicationSlotCreate(filter_slot, false, RS_PERSISTENT);
 		ReplicationSlotReserveWal();
 		/* Write this slot to disk */
 		ReplicationSlotMarkDirty();
@@ -3242,11 +3242,11 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 			mtm_log(ERROR, "could not connect using SPI");
 		PushActiveSnapshot(GetTransactionSnapshot());
 
-		query = psprintf("update " MTM_NODES " set init_done = 't' "
-						 "where id = %d", node_id);
+		query = psprintf("insert into mtm.nodes_init_done values (%d, true) ",
+						 node_id);
 		rc = SPI_execute(query, false, 0);
-		if (rc < 0 || rc != SPI_OK_UPDATE)
-			mtm_log(ERROR, "Failed to set init_done to true for node%d", node_id);
+		if (rc < 0 || rc != SPI_OK_INSERT)
+			mtm_log(ERROR, "failed to insert in mtm.nodes_init_done node%d", node_id);
 
 		if (SPI_finish() != SPI_OK_FINISH)
 			mtm_log(ERROR, "could not finish SPI");
@@ -3264,7 +3264,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
 	char	   *dmq_name;
 	char	   *logical_slot;
-	char	   *recovery_slot_name;
+	char	   *filter_slot_name;
 
 	Assert(!IsTransactionState());
 
@@ -3274,7 +3274,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 
 	dmq_name = psprintf(MTM_DMQNAME_FMT, node_id);
 	logical_slot = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
-	recovery_slot_name = psprintf(MULTIMASTER_RECOVERY_SLOT_PATTERN, node_id);
+	filter_slot_name = psprintf(MULTIMASTER_FILTER_SLOT_PATTERN, node_id);
 
 	/* detach incoming queues from this node */
 	dmq_detach_receiver(dmq_name);
@@ -3302,7 +3302,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	receivers[node_id - 1] = NULL;
 
 	/* delete recovery slot, was acquired by receiver */
-	ReplicationSlotDrop(recovery_slot_name, true);
+	ReplicationSlotDrop(filter_slot_name, true);
 
 	/* delete replication origin, was acquired by receiver */
 	replorigin_drop(replorigin_by_name(logical_slot, false), true);
@@ -3482,9 +3482,9 @@ MtmMonitor(Datum arg)
 		if (rc < 0 || rc != SPI_OK_DELETE)
 			mtm_log(ERROR, "Failed to clean up nodes after a basebackup");
 
-		rc = SPI_execute("delete from mtm.syncpoints", false, 0);
+		rc = SPI_execute("delete from mtm.nodes_init_done" , false, 0);
 		if (rc < 0 || rc != SPI_OK_DELETE)
-			mtm_log(ERROR, "Failed to clean up syncpoints after a basebackup");
+			mtm_log(ERROR, "Failed to clean up nodes_init_done after a basebackup");
 
 		SPI_finish();
 		PopActiveSnapshot();

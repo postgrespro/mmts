@@ -85,12 +85,11 @@ static bool query_cancel_allowed;
 static Relation read_rel(StringInfo s, LOCKMODE mode);
 static void read_tuple_parts(StringInfo s, Relation rel, TupleData *tup);
 static EState *create_rel_estate(Relation rel);
-static void process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
+static void process_remote_begin(StringInfo s,
 								 MtmReceiverWorkerContext *rwctx);
 static bool process_remote_message(StringInfo s,
 								   MtmReceiverWorkerContext *rwctx);
 static void process_remote_commit(StringInfo s,
-								  volatile GlobalTransactionId *current_gtid,
 								  MtmReceiverWorkerContext *rwctx);
 static void process_remote_insert(StringInfo s, Relation rel);
 static void process_remote_update(StringInfo s, Relation rel);
@@ -185,13 +184,12 @@ create_rel_estate(Relation rel)
 }
 
 static void
-process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
-					 MtmReceiverWorkerContext *rwctx)
+process_remote_begin(StringInfo s, MtmReceiverWorkerContext *rwctx)
 {
 	/* there is no need to send this, but since we do, check its sanity */
-	gtid->node = pq_getmsgint(s, 4);
-	Assert(rwctx->sender_node_id == gtid->node);
-	gtid->xid = pq_getmsgint64(s);
+	int sender_node_id = pq_getmsgint(s, 4);
+	Assert(rwctx->sender_node_id == sender_node_id);
+	rwctx->origin_xid = pq_getmsgint64(s);
 
 	InterruptPending = false;
 	QueryCancelPending = false;
@@ -201,15 +199,14 @@ process_remote_begin(StringInfo s, volatile GlobalTransactionId *gtid,
 //XXX:snapshot
 		pq_getmsgint64(s);
 //XXX:participantsMask
-		Assert(gtid->node > 0);
 
 	SetCurrentStatementStartTimestamp();
 
 	StartTransactionCommand();
 
 	/* ddd */
-	gtid->my_xid = GetCurrentTransactionId();
-	// MtmDeadlockDetectorAddXact(gtid->my_xid, gtid);
+	rwctx->my_xid = GetCurrentTransactionId();
+	// MtmDeadlockDetectorAddXact(rwctx->my_xid, gtid);
 
 	suppress_internal_consistency_checks = true;
 }
@@ -219,14 +216,12 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 {
 	int			rc;
 	int			origin_node;
-	XLogRecPtr	origin_lsn,
-				local_lsn,
-				restart_lsn = InvalidXLogRecPtr,
-				trim_lsn;
+	XLogRecPtr	origin_lsn;
+	XLogRecPtr	receiver_lsn;
 
 	Assert(MtmIsReceiver && !MtmIsPoolWorker);
 
-	mtm_log(SyncpointApply, "Syncpoint: await for parallel workers to finish");
+	mtm_log(SyncpointApply, "syncpoint: await for parallel workers to finish");
 	/*
 	 * Await for our pool workers to finish what they are currently doing.
 	 */
@@ -236,52 +231,24 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 					rwctx->txlist_pos);
 
 	/*
-	 * Load restart_lsn before taking local_lsn. Basically we need LSN which
-	 * is enough to decode commits since current insertion point, i.e.
-	 * restart_lsn of random consistent logical slot.
-	 * XXX: this just shouts that we can't use physical slots as logical and
-	 * must rework syncpoints.
-	 */
-	{
-		int			i;
-
-		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
-		for (i = 0; i < max_replication_slots; i++)
-		{
-			ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
-
-			if (s->in_use && SlotIsLogical(s) &&
-				s->data.confirmed_flush != InvalidXLogRecPtr)
-				restart_lsn = s->data.restart_lsn;
-		}
-		LWLockRelease(ReplicationSlotControlLock);
-
-		if (restart_lsn == InvalidXLogRecPtr)
-		{
-			/*
-			 * this might happen as we create slot later than start receiver,
-			 * c.f. start_node_workers
-			 */
-			mtm_log(SyncpointApply, "ignoring syncpoint as no logical slots are available yet");
-			return;
-		}
-	}
-
-	/*
 	 * Postgres decoding API doesn't disclose origin info about logical
 	 * messages, so we have to work around it. Any receiver of original
 	 * message writes it in slighly different format (prefixed with 'F' and
 	 * origin info) so the readers of forwarded messages can distinguish them
 	 * from original messages and set proper node_id and origin_lsn.
+	 *
+	 * (note that origin info still of course exists in the message and
+	 * decoding core uses it for filtering, so we don't get non-sender sps
+	 * during normal working)
 	 */
 	if (msg[0] == 'F')
 	{
 		Assert(rwctx->mode == REPLMODE_RECOVERY);
 
 		/* forwarded, parse and save as is */
-		rc = sscanf(msg, "F_%d_" UINT64_FORMAT "_" UINT64_FORMAT, &origin_node,
-					&origin_lsn, &trim_lsn);
-		if (rc != 3)
+		rc = sscanf(msg, "F_%d_%" INT64_MODIFIER "X",
+					&origin_node, &origin_lsn);
+		if (rc != 2)
 		{
 			Assert(false);
 			mtm_log(PANIC, "unexpected forwarded syncpoint message format");
@@ -291,7 +258,13 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		if (origin_node == Mtm->my_node_id)
 			return;
 
-		local_lsn = GetXLogInsertRecPtr();
+		/*
+		 * TODO: log syncpoint, but then we must 1) filter it out in
+		 * MtmFilterTransaction to prevent loops. Recovery loops are hardly
+		 * possible, but the danger nevertheless exists. 2) configure
+		 * proper origin session.
+		 */
+		receiver_lsn = GetXLogInsertRecPtr();
 	}
 	else
 	{
@@ -300,25 +273,36 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		/* direct, save with it lsn and 'F' prefix */
 		origin_lsn = received_end_lsn;
 		origin_node = rwctx->sender_node_id;
-		rc = sscanf(msg, UINT64_FORMAT, &trim_lsn);
-		if (rc != 1 || origin_node == Mtm->my_node_id)
-		{
-			Assert(false);
-			mtm_log(PANIC, "unexpected syncpoint messaged format");
-		}
 		Assert(origin_node != Mtm->my_node_id);
 
-		new_msg = psprintf("F_%d_" UINT64_FORMAT "_" UINT64_FORMAT,
-						   origin_node, origin_lsn, trim_lsn);
-		local_lsn = LogLogicalMessage("S", new_msg, strlen(new_msg) + 1, false);
+		new_msg = psprintf("F_%d_%" INT64_MODIFIER "X",
+						   origin_node, origin_lsn);
+		receiver_lsn = LogLogicalMessage("S", new_msg, strlen(new_msg) + 1, false);
 		pfree(new_msg);
 	}
 
-	Assert(rwctx->mode == REPLMODE_RECOVERY || rwctx->sender_node_id == origin_node);
+	Assert(rwctx->mode == REPLMODE_RECOVERY ||
+		   rwctx->sender_node_id == origin_node);
 
-	SyncpointRegister(origin_node, origin_lsn, local_lsn, restart_lsn, trim_lsn);
-
-	MtmUpdateLsnMapping(origin_node, origin_lsn);
+	/*
+	 * wear the hat of right filter slot if we are in recovery and thus
+	 * pulling syncpoints of various origins
+	 */
+	if (rwctx->mode == REPLMODE_RECOVERY)
+	{
+		ReplicationSlotAcquire(psprintf(MULTIMASTER_FILTER_SLOT_PATTERN,
+										origin_node),
+							   true);
+	}
+	/*
+	 * And note that info at which LSN we have processed the syncpoint is
+	 * *our* change which should be broadcast to all nodes, so reset
+	 * replorigin session.
+	 */
+	MtmEndSession(42, false);
+	SyncpointRegister(origin_node, origin_lsn, receiver_lsn);
+	if (rwctx->mode == REPLMODE_RECOVERY)
+		ReplicationSlotRelease();
 }
 
 /* TODO: make messaging layer for logical messages like existing dmq one */
@@ -429,17 +413,31 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 			/* create syncpoint */
 		case 'S':
 			{
-				mtm_log(MtmApplyMessage, "Executing syncpoint message from %d: %s",
+				mtm_log(MtmApplyMessage, "executing syncpoint message from %d: '%s'",
 						rwctx->sender_node_id, messageBody);
 
-				/*
-				 * XXX: during recovery end_lsn is wrong, as we receive
-				 * forwarded txes
-				 */
 				process_syncpoint(rwctx, messageBody, record_lsn);
 
 				/* XXX: clear filter_map */
 				standalone = true;
+				break;
+			}
+		case 'B':
+			{
+				/*
+				 * This xact ends with plain COMMIT, so remember we can't
+				 * ignore apply failure.
+				 *
+				 * An attentive pedant might notice that receiver might catch
+				 * ERROR (OOM of whatever) in the short window after begin
+				 * message but before this flag is set and still go ahead
+				 * applying after PG_CATCH. Well, that's really unlikely. If
+				 * desired, we could fix that by forcing receiver death
+				 * whenever it fails in that window between begin and first
+				 * change.
+				 *
+				 */
+				rwctx->bdr_like = true;
 				break;
 			}
 		default:
@@ -688,7 +686,6 @@ mtm_send_2a_reply(char *gid, GlobalTxStatus status,
 
 static void
 process_remote_commit(StringInfo in,
-					  volatile  GlobalTransactionId *current_gtid,
 					  MtmReceiverWorkerContext *rwctx)
 {
 	uint8		event;
@@ -791,7 +788,43 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_COMMIT:
 			{
-				Assert(false);
+				/*
+				 * Plain commits are used for bdr-like broadcast of syncpoint
+				 * table to provide nodes with apply progress info of each
+				 * other. Such modifications never conflict (node creates and
+				 * deletes only its own records, with minor exception of
+				 * drop_node) so full commit procedure is not needed.
+				 *
+				 * Empty commits are also streamed if xact modified only local
+				 * tables.
+				 */
+				Assert(IsTransactionState());
+
+				MtmBeginSession(origin_node);
+				CommitTransactionCommand();
+				mtm_log(MtmTxFinish, "finished plain commit %d-" XID_FMT " at %X/%X, replorigin_session_lsn=%X/%X, end_lsn=%X/%X, origin_lsn=%X/%X, origin_node=%d",
+						origin_node, rwctx->origin_xid,
+						(uint32) (XactLastCommitEnd >> 32),
+						(uint32) (XactLastCommitEnd),
+						(uint32) (replorigin_session_origin_lsn >> 32),
+						(uint32) replorigin_session_origin_lsn,
+						(uint32) (end_lsn >> 32),
+						(uint32) end_lsn,
+						(uint32) (origin_lsn >> 32),
+						(uint32) origin_lsn,
+						origin_node
+					);
+
+				MtmEndSession(origin_node, true);
+
+				rwctx->origin_xid = InvalidTransactionId;
+				rwctx->my_xid = InvalidTransactionId;
+
+				/* xxx why we need this */
+				InterruptPending = false;
+				QueryCancelPending = false;
+				query_cancel_allowed = false;
+
 				break;
 			}
 		case PGLOGICAL_PREPARE:
@@ -803,7 +836,7 @@ process_remote_commit(StringInfo in,
 				bool latch_set = false;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
-				Assert(xid == current_gtid->my_xid);
+				Assert(xid == rwctx->my_xid);
 
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 				prepare_gen_num = MtmGidParseGenNum(gid); /* xxx user 2pc */
@@ -919,7 +952,7 @@ process_remote_commit(StringInfo in,
 
 				if (rwctx->mode == REPLMODE_NORMAL)
 				{
-					mtm_send_prepare_reply(current_gtid->xid,
+					mtm_send_prepare_reply(rwctx->origin_xid,
 										   rwctx->sender_node_id,
 										   true, NULL);
 				}
@@ -929,9 +962,8 @@ process_remote_commit(StringInfo in,
 				 * throw an error that we should propagate to the originating
 				 * node.
 				 */
-				current_gtid->node = 0;
-				current_gtid->xid = InvalidTransactionId;
-				current_gtid->my_xid = InvalidTransactionId;
+				rwctx->origin_xid = InvalidTransactionId;
+				rwctx->my_xid = InvalidTransactionId;
 				// MtmDeadlockDetectorRemoveXact(xid);
 
 				/*
@@ -1442,7 +1474,10 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	int			save_cursor = 0;
 	int			save_len = 0;
 	MemoryContext old_context;
-	volatile GlobalTransactionId current_gtid = {0, InvalidTransactionId, InvalidTransactionId};
+
+	rwctx->origin_xid = InvalidTransactionId;
+	rwctx->my_xid = InvalidTransactionId;
+	rwctx->bdr_like = false;
 
 	s.data = work;
 	s.len = size;
@@ -1497,14 +1532,13 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			{
 					/* BEGIN */
 				case 'B':
-					process_remote_begin(&s, &current_gtid,
-										 rwctx);
+					process_remote_begin(&s, rwctx);
 					inside_transaction = true;
 					break;
 					/* COMMIT */
 				case 'C':
 					close_rel(rel);
-					process_remote_commit(&s, &current_gtid, rwctx);
+					process_remote_commit(&s, rwctx);
 					inside_transaction = false;
 					break;
 					/* INSERT */
@@ -1624,7 +1658,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 
 		/* log error immediately, before the cleanup */
 		MemoryContextSwitchTo(MtmApplyContext);
-
 		edata = CopyErrorData();
 		EmitErrorReport();
 		FlushErrorState();
@@ -1639,13 +1672,13 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 * handle only prepare errors here
 		 * XXX reply to 2a also, though its failure is unlikely
 		 */
-		if (TransactionIdIsValid(current_gtid.my_xid))
+		if (TransactionIdIsValid(rwctx->origin_xid))
 		{
 			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (rwctx->mode == REPLMODE_NORMAL)
-				mtm_send_prepare_reply(current_gtid.xid,
-								   rwctx->sender_node_id,
-								   false, edata);
+				mtm_send_prepare_reply(rwctx->origin_xid,
+									   rwctx->sender_node_id,
+									   false, edata);
 		}
 
 		/*
@@ -1665,13 +1698,20 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 * might purge WAL with it and later respond with 'dunno, this is an
 		 * old xact and if there was a commit you should had already got it,
 		 * so just abort it'.
+		 *
+		 * There is one more scenario where we can't ignore the error and
+		 * continue applying even if we applied xact in normal mode: it is
+		 * bdr-like transaction on which 3PC is not performed -- it is already
+		 * committed at origin. Currently only syncpoint table records are
+		 * broadcast in this way.
 		 */
 		if (rwctx->mode == REPLMODE_RECOVERY ||
-			!TransactionIdIsValid(current_gtid.my_xid))
+			!TransactionIdIsValid(rwctx->origin_xid) ||
+			rwctx->bdr_like)
 		{
 			if (rwctx->mode == REPLMODE_RECOVERY)
 				mtm_log(WARNING, "got ERROR while applying in recovery, origin_xid=" XID_FMT,
-						current_gtid.xid);
+						rwctx->origin_xid);
 			/*
 			 * We already did FlushErrorState, so EmitErrorReport in
 			 * bgworker.c would confuse elog machinery. Die on our own instead
@@ -1691,7 +1731,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		MtmDDLResetApplyState();
 
 		mtm_log(MtmApplyError, "abort transaction origin_xid=" XID_FMT,
-				current_gtid.xid);
+				rwctx->origin_xid);
 
 		FreeErrorData(edata);
 		AbortCurrentTransaction();
