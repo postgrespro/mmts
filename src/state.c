@@ -196,7 +196,8 @@ static void MtmSetReceiveMode(uint32 mode);
 
 static void AcquirePBByHolder(void);
 
-static nodemask_t MtmGetConnectivityClique(nodemask_t *connected_mask_with_me);
+static bool MtmIsConnectivityClique(nodemask_t mask);
+static nodemask_t MtmGetConnectivityClique(bool locked);
 
 /* serialization functions */
 static void MtmStateSave(void);
@@ -781,7 +782,7 @@ MtmGetCurrentStatus(bool gen_locked, bool vote_locked)
 		 * the shop to the client.
 		 */
 		if (!is_submask(mtm_state->current_gen_members,
-						MtmGetConnectivityClique(NULL)) ||
+						MtmGetConnectivityClique(false)) ||
 			mtm_state->campaigner_on_tour)
 			res = MTM_ISOLATED;
 		else if (status_in_gen == MTM_GEN_RECOVERY)
@@ -989,6 +990,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 {
 	nodemask_t connected_mask_with_me;
 	nodemask_t clique;
+	bool	   is_curr_gen_connected;
 
 	/*
 	 * Basebackup'ed node must recover from donor until it obtains syncpoints
@@ -1010,9 +1012,13 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	LWLockAcquire(mtm_state->vote_lock, LW_EXCLUSIVE);
 
-	clique = MtmGetConnectivityClique(&connected_mask_with_me);
+	LWLockAcquire(mtm_state->connectivity_lock, LW_SHARED);
+	connected_mask_with_me = MtmGetConnectedMaskWithMe(true);
+	clique = MtmGetConnectivityClique(true);
+	is_curr_gen_connected = MtmIsConnectivityClique(mtm_state->current_gen_members);
+	LWLockRelease(mtm_state->connectivity_lock);
 
-	mtm_log(MtmStateDebug, "CampaignMyself: current_gen.num=" UINT64_FORMAT ", current_gen.members=%s, current_gen.configured=%s, StatusInGen=%s, last_online_in=" UINT64_FORMAT ", last_vote.num=" UINT64_FORMAT ", clique=%s, connected_mask_with_me=%s",
+	mtm_log(MtmStateDebug, "CampaignMyself: current_gen.num=" UINT64_FORMAT ", current_gen.members=%s, current_gen.configured=%s, StatusInGen=%s, last_online_in=" UINT64_FORMAT ", last_vote.num=" UINT64_FORMAT ", clique=%s, connected_mask_with_me=%s, is_curr_gen_connected=%d",
 			pg_atomic_read_u64(&mtm_state->current_gen_num),
 			maskToString(mtm_state->current_gen_members),
 			maskToString(mtm_state->current_gen_configured),
@@ -1020,7 +1026,31 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 			mtm_state->last_online_in,
 			mtm_state->last_vote.num,
 			maskToString(clique),
-			maskToString(connected_mask_with_me));
+			maskToString(connected_mask_with_me),
+			is_curr_gen_connected);
+
+	/*
+	 * If I am online in curr gen (definitely its member) and all members are
+	 * interconnected, the situation is fine for me: don't ballot. This
+	 * shorthack is caused by 'majority clique always elects its gen' rule
+	 * which is necessary for xact resolution liveness (see below). Without
+	 * it, there is a small chance offline node turn on might temporarily
+	 * throw out live node(s) from the cluster because there could be several
+	 * cliques. For example,
+	 * - nodes 23 online in its gen, 1 is down
+	 * - 1 gets up. For a short period of time, 2 sees two cliques
+	 *   12 and 23 as 1<->3 connection is not yet established/gossiped.
+	 *   Clique must be chosen deterministically to avoid flip-flopping in
+	 *   sausage-like topologies, 2 picks 12 and ballots 12 & 23,
+	 *   exluding 3 from the cluster.
+	 * The only reason for 2 balloting at all here, while 1 is not
+	 * recovered yet is xact resolution liveness, c.f. handle_1a.
+	 */
+	if (MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE && is_curr_gen_connected)
+	{
+		mtm_log(MtmStateDebug, "not campaigning as curr gen is connected and I am online");
+		goto no_interesting_candidates;
+	}
 
 	/*
 	 * No point to campaign if there is no quorum clique with me at all. But
@@ -1145,6 +1175,11 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 * stable live connecitivity clique forming majority eventually elects
 	 * generation with its members (unless previous was already the same)
 	 * regardless of recovery progress; c.f. handle_1a for details.
+	 * (note that we need this weirdness only for >4 nodes, as with less
+	 * nodes xact resolution cannot deadlock (at least one of
+	 * coordinators of two conflicting xacts is member of live majority, and
+	 * coordinator may unconditionally abort his prepares before PC), so we
+	 * may avoid balloting for <=3 nodes.)
 	 *
 	 * This might seem to have a downside though: in case of short flip
 	 * flopping like
@@ -1666,7 +1701,7 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 {
 	StringInfo	packed_msg;
 	MtmGenVoteResponse resp;
-	nodemask_t clique = MtmGetConnectivityClique(NULL);
+	nodemask_t clique = MtmGetConnectivityClique(false);
 
 	mtm_log(MtmStateDebug, "HandleGenVoteRequest: got '%s' from %d",
 			MtmMesageToString((MtmMessage *) req), sender_node_id);
@@ -2039,12 +2074,45 @@ MtmOnDmqSenderDisconnect(char *node_name)
 }
 
 /*
+ * Do all nodes from mask see each other? The clique is not neccesarily
+ * maximal.
+ */
+static bool
+MtmIsConnectivityClique(nodemask_t mask)
+{
+	int i, j;
+	nodemask_t connected_mask;
+
+	Assert(LWLockHeldByMe(mtm_state->connectivity_lock));
+	connected_mask = MtmGetConnectedMask(true);
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (!BIT_CHECK(mask, i))
+			continue;
+		for (j = 0; j < MTM_MAX_NODES; j++)
+		{
+			if (i == j)
+				continue;
+			if (i + 1 == Mtm->my_node_id)
+			{
+				if (!BIT_CHECK(connected_mask, j))
+					return false;
+			}
+			else
+			{
+				if (!BIT_CHECK(mtm_state->connectivity_matrix[i], j))
+					return false;
+			}
+		}
+	}
+	return true;
+}
+
+/*
  * The largest subset of nodes where each member sees each other.
- * If connected_mask_with_me is not NULL, additionally fills it with
- * MtmGetConnectedMaskWithMe.
  */
 static nodemask_t
-MtmGetConnectivityClique(nodemask_t *connected_mask_with_me)
+MtmGetConnectivityClique(bool locked)
 {
 	nodemask_t	matrix[MTM_MAX_NODES];
 	nodemask_t	clique;
@@ -2061,8 +2129,6 @@ MtmGetConnectivityClique(nodemask_t *connected_mask_with_me)
 	memcpy(matrix, mtm_state->connectivity_matrix, sizeof(nodemask_t) * MTM_MAX_NODES);
 	matrix[me - 1] = MtmGetConnectedMaskWithMe(true);
 	LWLockRelease(mtm_state->connectivity_lock);
-	if (connected_mask_with_me != NULL)
-		*connected_mask_with_me = matrix[me - 1];
 
 	/* make matrix symmetric, required by Bron–Kerbosch algorithm */
 	for (i = 0; i < MTM_MAX_NODES; i++)
@@ -2804,7 +2870,6 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 		 * said above, all other <n xacts are aborted 2) xacts of n can't be
 		 * prepared before getting all prepares of n. After that, resolving
 		 * proceeds normally as majority has PREPAREs.
-		 *
 		 */
 
 		/* xact obviously could appear after fast path check */

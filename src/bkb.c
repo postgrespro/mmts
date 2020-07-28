@@ -72,8 +72,8 @@ _list_to_nodemask(NodeList *list)
  *     4
  *
  * 2 and 4 must calculate the same clique, or we won't converge.
- * To this end, we compare biggest max cliques by nodemask and pick the
- * largest one.
+ * To this end, we compare max cliques by nodemask and pick the
+ * smallest one.
  */
 static void
 extend(NodeList* cur, NodeList* result, nodemask_t* graph, int* oldSet, int ne, int ce)
