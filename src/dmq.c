@@ -53,6 +53,19 @@
 /*  XXX: move to common */
 #define BIT_CLEAR(mask, bit) ((mask) &= ~((uint64)1 << (bit)))
 #define BIT_CHECK(mask, bit) (((mask) & ((uint64)1 << (bit))) != 0)
+static int
+first_set_bit(uint64 mask)
+{
+	int i;
+
+	for (i = 0; i < DMQ_N_MASK_POS; i++)
+	{
+		if (BIT_CHECK(mask, i))
+			return i;
+	}
+	return -1;
+}
+
 
 /*
  * Shared data structures to hold current connections topology.
@@ -818,6 +831,10 @@ dmq_sender_main(Datum main_arg)
 					if (!PQisBusy(conns[conn_id].pgconn))
 					{
 						int8 mask_pos = conns[conn_id].mask_pos;
+
+						/*
+						 * XXX check here that dmq_receiver_loop not failed?
+						 */
 
 						conns[conn_id].state = Active;
 						DeleteWaitEvent(set, event.pos);
@@ -1993,6 +2010,7 @@ dmq_pop_nb(int8 *sender_mask_pos, StringInfo msg, uint64 mask, bool *wait)
 {
 	shm_mq_result res;
 	int			i;
+	uint64 unchecked_participants = mask;
 
 	*wait = true;
 	*sender_mask_pos = -1;
@@ -2035,6 +2053,22 @@ dmq_pop_nb(int8 *sender_mask_pos, StringInfo msg, uint64 mask, bool *wait)
 
 			return false;
 		}
+
+		/*
+		 * Found this participant. XXX it would be simpler just index
+		 * inhandles by mask_pos...
+		 */
+		BIT_CLEAR(unchecked_participants, dmq_local.inhandles[i].mask_pos);
+	}
+
+	/*
+	 * return error if we checked all inhandles but failed to find at least
+	 * one counterparty from given mask: it means we were requested to get msg
+	 * from not attached receiver.
+	 */
+	if (unchecked_participants != 0)
+	{
+		*sender_mask_pos = first_set_bit(unchecked_participants);
 	}
 
 	return false;

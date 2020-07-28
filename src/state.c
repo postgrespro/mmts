@@ -1600,18 +1600,6 @@ CampaignerMain(Datum main_arg)
 
 		CHECK_FOR_INTERRUPTS();
 
-		/* do the job */
-		tour = CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in);
-
-		/*
-		 * XXX: Doing this here, *after* cohort is formed, is somewhat
-		 * important: otherwise new node might be added after config reload,
-		 * but fast enough to be included in the clique, in which case gather
-		 * would hang waiting for reply from new node infinitely as we hadn't
-		 * done dmq_attach_receiver. A better way would be to make dmq_pop_nb
-		 * iterate over participants and error out when handle can't be found
-		 * -- that would render all this irrelevant.
-		 */
 		AcceptInvalidationMessages();
 		if (!config_valid)
 		{
@@ -1621,6 +1609,9 @@ CampaignerMain(Datum main_arg)
 		}
 		/* xact in MtmReloadConfig could've knocked down our ctx */
 		MemoryContextSwitchTo(campaigner_ctx);
+
+		/* do the job */
+		tour = CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in);
 
 		if (tour)
 		{
