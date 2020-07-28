@@ -1167,8 +1167,6 @@ mtm_join_node(PG_FUNCTION_ARGS)
 		while (!MtmAllApplyWorkersFinished())
 			MtmSleep(USECS_PER_SEC / 10);
 
-		curr_lsn = GetXLogWriteRecPtr();
-
 		for (i = 0; i < cfg->n_nodes; i++)
 		{
 			char	   *ro_name;
@@ -1183,7 +1181,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			ro_id = replorigin_by_name(ro_name, false);
 			olsn = replorigin_get_progress(ro_id, false);
 
-			msg = psprintf("F_%d_" UINT64_FORMAT,
+			msg = psprintf("F_%d_%" INT64_MODIFIER "X",
 						   cfg->nodes[i].node_id, olsn);
 
 			replorigin_session_origin = cfg->nodes[i].origin_id;
@@ -1225,7 +1223,11 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	}
 	ConditionVariableBroadcast(&Mtm->receiver_barrier_cv);
 
-	/* as we going to write that lsn on a new node, let's sync it */
+	/*
+	 * Ensure new node will get 'Z' only after eating all syncpoints written
+	 * above.
+	 */
+	curr_lsn = GetXLogWriteRecPtr();
 	XLogFlush(curr_lsn);
 
 	/* fill MTM_NODES with a adjusted list of nodes */

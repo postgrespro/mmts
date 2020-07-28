@@ -1,6 +1,8 @@
 package Cluster;
+
 use strict;
 use warnings;
+
 use PostgresNode;
 use TestLib;
 use Test::More;
@@ -191,6 +193,14 @@ sub safe_psql
 	my ($self, $node_off, $query) = @_;
 	my $node = $self->{nodes}->[$node_off];
 	return $node->safe_psql($node->{dbname}, $query);
+}
+
+sub poll_query_until
+{
+	my ($self, $node_off, $query) = @_;
+	my $node = $self->{nodes}->[$node_off];
+	note("polling query $query");
+	return $node->poll_query_until($node->{dbname}, $query);
 }
 
 sub connstr

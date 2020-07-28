@@ -280,8 +280,8 @@ ALTER TABLE mtm.syncpoints ENABLE ALWAYS TRIGGER syncpoints_trigger;
  *    just a mark that node have applied everything up to origin_lsn.
  * 2) emitpoint: means all origin_node transactions with start_lsn >= origin_lsn
  *    at receiver have or will have start_lsn >= receiver_lsn. So recovering
- *    nodes should translate origin_lsn they need to the appropriate emitpoint of
- *    donor and request streaming since it.
+ *    node should translate origin_lsn it needs to the appropriate emitpoint of
+ *    donor and request streaming since it (and ack it in its reports).
  * In the current blocking implementation single record represents both
  * absorbpoint and emitpoint. To make future development easier, hints are put
  * in places where the distinction would matter.

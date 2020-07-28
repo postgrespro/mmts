@@ -232,7 +232,9 @@ SyncpointGetLatest(int origin_node_id)
 		Assert(TupleDescAttr(tupdesc, 0)->atttypid == LSNOID);
 
 		sp.local_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 2, &isnull));
-		Assert(!isnull);
+		/* xxx c.f. similar in SyncpointGetAllLatest */
+		if (isnull)
+			mtm_log(ERROR, "fill_filter_since is null for node %d", origin_node_id);
 		Assert(TupleDescAttr(tupdesc, 1)->atttypid == LSNOID);
 	}
 	else if (rc == SPI_OK_SELECT && SPI_processed == 0)
@@ -307,12 +309,18 @@ SyncpointGetAllLatest(int sender_node_id)
 			origin_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 2, &isnull));
 			Assert(!isnull);
 			Assert(TupleDescAttr(tupdesc, 1)->atttypid == LSNOID);
+			spvector[node_id - 1].origin_lsn = origin_lsn;
 
 			local_lsn = DatumGetLSN(SPI_getbinval(tup, tupdesc, 3, &isnull));
-			Assert(!isnull);
 			Assert(TupleDescAttr(tupdesc, 2)->atttypid == LSNOID);
-
-			spvector[node_id - 1].origin_lsn = origin_lsn;
+			/*
+			 * XXX: there is no barrier between filter slot creation and
+			 * receiver start, so in theory (really unlikely) fastest receiver
+			 * may spin up before some slot is created by monitor and
+			 * fill_filter_since would be null. Shout in this case.
+			 */
+			if (isnull)
+				mtm_log(ERROR, "fill_filter_since is null for node %d", node_id);
 			spvector[node_id - 1].local_lsn = local_lsn;
 		}
 	}
@@ -392,8 +400,15 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	HTAB	   *filter_map;
 	int			estimate_size;
 	XLogRecPtr	start_lsn = PG_UINT64_MAX;
-	XLogRecPtr	current_last_lsn = GetFlushRecPtr();
+	XLogRecPtr	current_last_lsn;
 	int			i;
+
+	/*
+	 * ensure we will scan everything written up to this point
+	 * (if xact was empty it hadn't performed flush on commit)
+	 */
+	XLogFlush(GetXLogWriteRecPtr());
+	current_last_lsn = GetFlushRecPtr();
 
 	Assert(current_last_lsn != InvalidXLogRecPtr);
 

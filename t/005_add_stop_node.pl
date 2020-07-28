@@ -1,5 +1,7 @@
 use strict;
 use warnings;
+
+use Carp;
 use PostgresNode;
 use Cluster;
 use TestLib;
@@ -101,8 +103,10 @@ if ($concurrent_load)
 {
 	$cluster->pgbench(0, ('-N', '-n', -t => '100') );
 }
-sleep(2); # XXX sleep a bit to ensure monitor creates slot for new node on donor
-          #  which will be used by basebackup
+# ensure monitor creates slot for new node on donor which will be used by
+# basebackup before proceeding
+$cluster->poll_query_until(0, "select exists(select * from pg_replication_slots where slot_name = 'mtm_filter_slot_${new_node_id}');")
+    or croak "timed out waiting for slot creation";
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
 $cluster->release_socket($sock);
 $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''

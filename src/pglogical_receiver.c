@@ -305,7 +305,8 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 			default:
 				Assert(false);
 		}
-	} else if (msgtype == 'M')
+	}
+	else if (msgtype == 'M')
 	{
 		char		action = pq_getmsgbyte(&s);
 		int			messageSize;
@@ -671,6 +672,8 @@ pglogical_receiver_main(Datum main_arg)
 			 */
 			if (receiver_mtm_cfg->backup_node_id > 0)
 			{
+				int i;
+
 				spvector = palloc0(MTM_MAX_NODES * sizeof(Syncpoint));
 				/*
 				 * Immediately after basebackup we don't have any
@@ -681,6 +684,15 @@ pglogical_receiver_main(Datum main_arg)
 				 */
 				spvector[sender - 1] = SyncpointGetLatest(sender);
 				remote_start = receiver_mtm_cfg->backup_end_lsn;
+				/*
+				 * all other origins are also filtered from filter position
+				 * to donor
+				 */
+				for (i = 0; i < receiver_mtm_cfg->n_nodes; i++)
+				{
+					spvector[receiver_mtm_cfg->nodes[i].node_id - 1].local_lsn =
+						spvector[sender - 1].local_lsn;
+				}
 				/*
 				 * we must filter out all xacts since sp to donor in this
 				 * special add_node case, so MtmInvalidNodeId
@@ -721,7 +733,11 @@ pglogical_receiver_main(Datum main_arg)
 			appendStringInfo(message, ", syncpoint_vector (origin/local) = {");
 			for (i = 0; i < MTM_MAX_NODES; i++)
 			{
-				if (spvector[i].origin_lsn != InvalidXLogRecPtr || spvector[i].local_lsn != InvalidXLogRecPtr)
+				/*
+				 * local_lsn must be always (even before first syncpoint)
+				 * non-zero in used cell; it is filter slot position.
+				 */
+				if (spvector[i].local_lsn != InvalidXLogRecPtr)
 				{
 					appendStringInfo(message, "%d: " LSN_FMT "/" LSN_FMT ", ",
 									 i + 1,
