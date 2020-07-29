@@ -403,10 +403,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	XLogRecPtr	current_last_lsn;
 	int			i;
 
-	/*
-	 * ensure we will scan everything written up to this point
-	 * (if xact was empty it hadn't performed flush on commit)
-	 */
+	/* ensure we will scan everything written up to this point, just in case */
 	XLogFlush(GetXLogWriteRecPtr());
 	current_last_lsn = GetFlushRecPtr();
 
@@ -568,9 +565,19 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 			mtm_log(MtmReceiverFilter, "load_filter_map: add {%d, %" INT64_MODIFIER "x } xact_opmask=%d local_lsn=%" INT64_MODIFIER "x, gid=%s",
 					entry.node_id, entry.origin_lsn, info & XLOG_XACT_OPMASK, xlogreader->EndRecPtr, gid);
 			hash_search(filter_map, &entry, HASH_ENTER, &found);
-			Assert(!found);
+			/*
+			 * Note: we used to have Assert(!found) here, but tests showed
+			 * that empty (without changes) transaction commit does *not*
+			 * advance GetFlushRecPtr, though physically written if xid was
+			 * issued (and applier always acquired xid). This means such xact
+			 * sometimes doesn't get into filter as we read WAL only up to
+			 * GetFlushRecPtr, so later we get it second time. This is
+			 * harmless as applying empty xact does nothing to the database,
+			 * but the assertion would be violated. And empty xacts
+			 * replication became quite common since plain commits streaming
+			 * was enabled for syncpoints sake; e.g. vacuum creates one.
+			 */
 		}
-
 	} while (xlogreader->EndRecPtr < current_last_lsn);
 
 	XLogReaderFree(xlogreader);

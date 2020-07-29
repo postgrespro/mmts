@@ -260,7 +260,7 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	XLogRecPtr	tx_lsn;
 	int			origin_node;
 	uint8		event = 0;
-	char const *gid = "";
+	char const *gid = "null";
 	char		msgtype;
 
 	s.data = record;
@@ -342,7 +342,15 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	 * said we support membership changes under load?
 	 */
 	if (origin_node == MtmInvalidNodeId)
+	{
+		mtm_log(MtmReceiverFilter,
+				"skipping transaction gid=%s event=%x origin_node=%d origin_lsn=%X/%X as origin is unknown",
+				gid, event, origin_node,
+				(uint32) (tx_lsn >> 32),
+				(uint32) tx_lsn);
 		return true;
+	}
+
 	/*
 	 * Similarly, if we don't know since which LSN to filter out changes for
 	 * this origin it means we don't have filter slot and thus have no idea
@@ -357,18 +365,36 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	 * yet)
 	 */
 	if (spvector[origin_node - 1].local_lsn == InvalidXLogRecPtr)
+	{
+		mtm_log(MtmReceiverFilter,
+				"skipping transaction gid=%s event=%x origin_node=%d origin_lsn=%X/%X as there is no filter slot",
+				gid, event, origin_node,
+				(uint32) (tx_lsn >> 32),
+				(uint32) tx_lsn);
 		return true;
+	}
 
 	/* Skip all transactions from our node */
 	if (origin_node == Mtm->my_node_id)
+	{
+		mtm_log(MtmReceiverFilter,
+				"skipping transaction gid=%s event=%x origin_node=%d origin_lsn=%X/%X as it is my own",
+				gid, event, origin_node,
+				(uint32) (tx_lsn >> 32),
+				(uint32) tx_lsn);
 		return true;
+	}
 
 	if (tx_lsn <= spvector[origin_node - 1].origin_lsn)
 	{
 		mtm_log(MtmReceiverFilter,
-				"Filter transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%" INT64_MODIFIER "x)",
-				gid, rctx->w.sender_node_id, event,
-				spvector[origin_node - 1].origin_lsn, tx_lsn);
+				"skipping transaction gid=%s event=%x origin_node=%d origin_lsn=%X/%X sp.origin_lsn=%X/%X as it is beyond syncpoint",
+				gid, event, origin_node,
+				(uint32) (tx_lsn >> 32),
+				(uint32) tx_lsn,
+				(uint32) (spvector[origin_node - 1].origin_lsn >> 32),
+				(uint32) spvector[origin_node - 1].origin_lsn
+			);
 		return true;
 	}
 	else
@@ -383,10 +409,13 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 		hash_search(filter_map, &entry, HASH_FIND, &found);
 
 		mtm_log(MtmReceiverFilter,
-				"Filter (map) transaction %s from node %d event=%x (restrt=%" INT64_MODIFIER "x, tx=%d/%" INT64_MODIFIER "x), found=%d",
-				gid, rctx->w.sender_node_id, event,
-				spvector[origin_node - 1].origin_lsn, origin_node, tx_lsn, found);
-
+				"filter (map) transaction gid=%s event=%x origin_node=%d origin_lsn=%X/%X sp.origin_lsn=%X/%X: found=%d",
+				gid, event, origin_node,
+				(uint32) (tx_lsn >> 32),
+				(uint32) tx_lsn,
+				(uint32) (spvector[origin_node - 1].origin_lsn >> 32),
+				(uint32) spvector[origin_node - 1].origin_lsn,
+				found);
 		return found;
 	}
 }
