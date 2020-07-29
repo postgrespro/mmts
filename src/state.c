@@ -217,6 +217,8 @@ static bool pb_holders_incremented = false;
 
 static bool config_valid = false;
 
+static bool	campaign_requested;
+
 /*
  * -----------------------------------
  * Startup
@@ -829,9 +831,20 @@ CampaignerStart(Oid db_id, Oid user_id)
 static void
 CampaignerWake(void)
 {
-	/* using latch would be nicer */
 	if (mtm_state->campaigner_pid != 0)
-		kill(mtm_state->campaigner_pid, SIGUSR1);
+		kill(mtm_state->campaigner_pid, SIGHUP);
+}
+
+/* campaigner never rereads PG config, but it currently it hardly needs to */
+static void
+CampaignerSigHupHandler(SIGNAL_ARGS)
+{
+	int			save_errno = errno;
+
+	campaign_requested = true;
+	SetLatch(MyLatch);
+
+	errno = save_errno;
 }
 
 static void
@@ -1183,7 +1196,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 *
 	 * This might seem to have a downside though: in case of short flip
 	 * flopping like
-	 * - AB working normally, C if offline and in deep recovery
+	 * - AB working normally, C is offline and in deep recovery
 	 * - AC becomes the clique for a short time, generation with the only
 	 *   member A is elected by AC
 	 * - AB now the clique again and B is forced into recovery as it skipped
@@ -1376,6 +1389,10 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 	{
 		if (max_last_vote_num > mtm_state->last_vote.num)
 		{
+			/*
+			 * no need to +1 here as we set members and configured to 0 and so
+			 * vote definitely won't be reused the next time we ballot
+			 */
 			mtm_state->last_vote.num = max_last_vote_num;
 			mtm_state->last_vote.members = 0;
 			mtm_state->last_vote.configured = 0;
@@ -1571,6 +1588,7 @@ CampaignerMain(Datum main_arg)
 														  "CampaignerContext",
 														  ALLOCSET_DEFAULT_SIZES);
 	static unsigned short drandom_seed[3] = {0, 0, 0};
+	TimestampTz last_campaign_at = 0;
 
 	MtmBackgroundWorker = true;
 	mtm_log(MtmStateMessage, "campaigner bgw started");
@@ -1583,6 +1601,7 @@ CampaignerMain(Datum main_arg)
 	 */
 	/* die gracefully not in signal handler but in CHECK_FOR_INTERRUPTS */
 	pqsignal(SIGTERM, die);
+	pqsignal(SIGHUP, CampaignerSigHupHandler);
 	BackgroundWorkerUnblockSignals();
 
 	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
@@ -1628,7 +1647,8 @@ CampaignerMain(Datum main_arg)
 		MtmGeneration candidate_gen;
 		nodemask_t cohort;
 		uint64 my_last_online_in;
-		bool	tour;
+		int campaign_retry_interval = 3000; /* 3s */
+		TimestampTz now;
 
 		/* cleanup message pack/unpack allocations */
 		MemoryContextReset(campaigner_ctx);
@@ -1645,24 +1665,33 @@ CampaignerMain(Datum main_arg)
 		/* xact in MtmReloadConfig could've knocked down our ctx */
 		MemoryContextSwitchTo(campaigner_ctx);
 
-		/* do the job */
-		tour = CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in);
-
-		if (tour)
+		/*
+		 * do the job; campaign as requested and retry regularly, but not more
+		 * often than once in campaign_retry_interval.
+		 */
+		now = GetCurrentTimestamp();
+		if (campaign_requested ||
+			TimestampDifferenceExceeds(last_campaign_at, now,
+									   campaign_retry_interval))
 		{
-			if (!IS_REFEREE_GEN(candidate_gen.members, candidate_gen.configured))
+			campaign_requested = false;
+			last_campaign_at = now;
+			if (CampaignMyself(mtm_cfg, &candidate_gen, &cohort, &my_last_online_in))
 			{
-				/* normal case, poll neighbours */
-				CampaignTour(campaigner_ctx, &mtm_cfg, candidate_gen, cohort,
-							 my_last_online_in);
-			}
-			else
-			{
-				/*
-				 * we are in referee mode and this gen requires only referee
-				 * permission for election; request it
-				 */
-				CampaignReferee(candidate_gen);
+				if (!IS_REFEREE_GEN(candidate_gen.members, candidate_gen.configured))
+				{
+					/* normal case, poll neighbours */
+					CampaignTour(campaigner_ctx, &mtm_cfg, candidate_gen, cohort,
+								 my_last_online_in);
+				}
+				else
+				{
+					/*
+					 * we are in referee mode and this gen requires only referee
+					 * permission for election; request it
+					 */
+					CampaignReferee(candidate_gen);
+				}
 			}
 		}
 
@@ -1675,11 +1704,15 @@ CampaignerMain(Datum main_arg)
 		 * explicitly on network changes. However, campaign might fail to
 		 * other reasons, e.g. two nodes might want to add themselves at the
 		 * same time under the same gen num. To reduce voting contention, add
-		 * randomized retry timeout like in Raft.
+		 * randomized retry timeout like in Raft. (Actually, the usefulness of
+		 * this is very dubious; in Raft, a member ever votes for himself
+		 * only, so two campaigns for the same term always conflict. OTOH,
+		 * here nodes will mostly propose the same set of candidates,
+		 * supporting each other)
 		 */
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   3000 * pg_erand48(drandom_seed),
+					   campaign_retry_interval * pg_erand48(drandom_seed),
 					   PG_WAIT_EXTENSION);
 
 		/* Emergency bailout if postmaster has died */
