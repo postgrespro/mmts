@@ -809,16 +809,12 @@ process_remote_commit(StringInfo in,
 
 				MtmBeginSession(origin_node);
 				CommitTransactionCommand();
-				mtm_log(MtmTxFinish, "finished plain commit %d-" XID_FMT " at %X/%X, replorigin_session_lsn=%X/%X, end_lsn=%X/%X, origin_lsn=%X/%X, origin_node=%d",
+				mtm_log(MtmTxFinish, "finished plain commit %d-" XID_FMT " at %X/%X, replorigin_session_lsn=%X/%X, origin_node=%d",
 						origin_node, rwctx->origin_xid,
 						(uint32) (XactLastCommitEnd >> 32),
 						(uint32) (XactLastCommitEnd),
 						(uint32) (replorigin_session_origin_lsn >> 32),
 						(uint32) replorigin_session_origin_lsn,
-						(uint32) (end_lsn >> 32),
-						(uint32) end_lsn,
-						(uint32) (origin_lsn >> 32),
-						(uint32) origin_lsn,
 						origin_node
 					);
 
