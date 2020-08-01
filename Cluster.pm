@@ -272,6 +272,7 @@ sub await_nodes()
 			print("Polled node$i\n");
 		}
 	}
+	sleep 3;
 }
 
 sub pgbench()
