@@ -38,6 +38,7 @@
 #include "utils/memutils.h"
 #include "executor/spi.h"
 #include "replication/origin.h"
+#include "replication/walreceiver.h"
 #include "replication/slot.h"
 #include "utils/portal.h"
 #include "tcop/pquery.h"
@@ -86,7 +87,6 @@ bool		receiver_mtm_cfg_valid;
 static volatile sig_atomic_t got_sighup = false;
 
 /* Stream functions */
-static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
 
 static void MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo);
@@ -108,12 +108,35 @@ receiver_raw_sighup(SIGNAL_ARGS)
 /*
  * Send a Standby Status Update message to server.
  */
-static bool
-sendFeedback(PGconn *conn, int64 now, int node_id)
+static void
+sendFeedback(MtmReceiverContext *rctx, bool force)
 {
-	char		replybuf[1 + 8 + 8 + 8 + 8 + 1];
-	int			len = 0;
-	XLogRecPtr	output_flushed_lsn = GetRecoveryHorizon(node_id);
+	char		replybuf[1 + 8 + 8 + 8 + 8 + 1 + 1];
+	StringInfoData str;
+	XLogRecPtr	flush_pos;
+	static TimestampTz send_time = 0;
+	TimestampTz now;
+
+	/*
+	 * If the user doesn't want status to be reported to the publisher, be
+	 * sure to exit before doing anything at all.
+	 */
+	if (!force && wal_receiver_status_interval <= 0)
+		return;
+
+	flush_pos = GetRecoveryHorizon(rctx->w.sender_node_id);
+
+	now = GetCurrentTimestamp();
+	/*
+	 * if we've already reported everything and time for another ping
+	 * hasn't come yet we're good
+	 */
+	if (!force &&
+		flush_pos == rctx->last_reported_flush &&
+		!TimestampDifferenceExceeds(send_time, now,
+									wal_receiver_status_interval * 1000))
+		return;
+	send_time = now;
 
 	/*
 	 * In multimaster flush and apply are the same as we can't handle 2PC
@@ -125,31 +148,26 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 	 * receiver has just passed to workers as written would be, well, unfair.
 	 */
 
-	replybuf[len] = 'r';
-	len += 1;
-	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* write */
-	len += 8;
-	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* flush */
-	len += 8;
-	fe_sendint64(output_flushed_lsn, &replybuf[len]);	/* apply */
-	len += 8;
-	fe_sendint64(now, &replybuf[len]);	/* sendTime */
-	len += 8;
+	str.data = replybuf;
+	resetStringInfo(&str);
+	str.maxlen = sizeof(replybuf);
 
-	/* No reply requested from server */
-	replybuf[len] = 0;
-	len += 1;
+	pq_sendbyte(&str, 'r');
+	pq_sendint64(&str, flush_pos);	/* write */
+	pq_sendint64(&str, flush_pos);	/* flush */
+	pq_sendint64(&str, flush_pos);	/* apply */
+	pq_sendint64(&str, now);	/* sendTime */
+	pq_sendbyte(&str, 0);	/* replyRequested */
 
 	mtm_log(MtmReceiverFeedback, "acking flush of LSN %X/%X",
-			(uint32) (output_flushed_lsn >> 32),
-			(uint32) output_flushed_lsn);
-	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
+			(uint32) (flush_pos >> 32),
+			(uint32) flush_pos);
+	if (PQputCopyData(rctx->conn, replybuf, str.len) <= 0 || PQflush(rctx->conn))
 	{
-		mtm_log(ERROR, "could not send feedback packet: %s", PQerrorMessage(conn));
-		return false;
+		mtm_log(ERROR, "could not send feedback packet: %s",
+				PQerrorMessage(rctx->conn));
 	}
-
-	return true;
+	rctx->last_reported_flush = flush_pos;
 }
 
 /*
@@ -191,25 +209,6 @@ MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
 	pfree(sql);
 	PQfinish(rctx->conn);
 	rctx->conn = NULL;
-}
-
-/*
- * Converts an int64 to network byte order.
- */
-static void
-fe_sendint64(int64 i, char *buf)
-{
-	uint32		n32;
-
-	/* High order half first, since we're doing MSB-first */
-	n32 = (uint32) (i >> 32);
-	n32 = pg_hton32(n32);
-	memcpy(&buf[0], &n32, 4);
-
-	/* Now the low order half */
-	n32 = (uint32) i;
-	n32 = pg_hton32(n32);
-	memcpy(&buf[4], &n32, 4);
 }
 
 /*
@@ -919,7 +918,6 @@ pglogical_receiver_main(Datum main_arg)
 				{
 					int			pos;
 					bool		replyRequested;
-					int64		now;
 
 					/*
 					 * Parse the keepalive message, enclosed in the CopyData
@@ -937,14 +935,7 @@ pglogical_receiver_main(Datum main_arg)
 					}
 					replyRequested = copybuf[pos];
 
-					/*
-					 * TODO: send feedback ony if requested or once in
-					 * wal_receiver_status_interval
-					 */
-					now = feGetCurrentTimestamp();
-
-					/* Leave if feedback is not sent properly */
-					sendFeedback(rctx->conn, now, sender);
+					sendFeedback(rctx, replyRequested);
 					continue;
 				}
 				else if (copybuf[0] != 'w')
@@ -1119,9 +1110,7 @@ pglogical_receiver_main(Datum main_arg)
 							 NULL, NULL, timeoutptr, PQisRsocket(rctx->conn));
 				if (r == 0)
 				{
-					int64		now = feGetCurrentTimestamp();
-
-					sendFeedback(rctx->conn, now, sender);
+					sendFeedback(rctx, false);
 				}
 				else if (r < 0 && errno == EINTR)
 
