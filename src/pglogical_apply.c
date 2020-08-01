@@ -302,7 +302,14 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 	MtmEndSession(42, false);
 	SyncpointRegister(origin_node, origin_lsn, receiver_lsn);
 	if (rwctx->mode == REPLMODE_RECOVERY)
+	{
 		ReplicationSlotRelease();
+		/*
+		 * if we are in recovery, ping non-donor receivers that they might
+		 * succeed in advancing the slot.
+		 */
+		ConditionVariableBroadcast(&Mtm->receivers_cv);
+	}
 }
 
 /* TODO: make messaging layer for logical messages like existing dmq one */

@@ -67,17 +67,10 @@ bool		MtmIsReceiver;
 
 typedef struct
 {
-	MtmReceiverWorkerContext	w;
-	PGconn	   			*conn;
+	MtmReceiverWorkerContext w;
+	XLogRecPtr last_reported_flush;
+	PGconn *conn;
 } MtmReceiverContext;
-
-typedef struct MtmFlushPosition
-{
-	dlist_node	node;
-	int			node_id;
-	XLogRecPtr	local_end;
-	XLogRecPtr	remote_end;
-} MtmFlushPosition;
 
 char const *const MtmReplicationModeMnem[] =
 {
@@ -95,6 +88,9 @@ static volatile sig_atomic_t got_sighup = false;
 /* Stream functions */
 static void fe_sendint64(int64 i, char *buf);
 static int64 fe_recvint64(char *buf);
+
+static void MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo);
+static PGconn *receiver_connect(char *conninfo);
 
 void		pglogical_receiver_main(Datum main_arg);
 
@@ -154,6 +150,47 @@ sendFeedback(PGconn *conn, int64 now, int node_id)
 	}
 
 	return true;
+}
+
+/*
+ * pg_replication_slot_advance sender slot if we can do that further last
+ * advancement. Note that decoding session startup is quite heavy operation as
+ * we must read all unacked WAL + earlier chunk up to suitable snapshot
+ * serialization point (which is created mostly each
+ * LOG_SNAPSHOT_INTERVAL_MS).
+ */
+static void
+MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
+{
+	XLogRecPtr upto = GetRecoveryHorizon(rctx->w.sender_node_id);
+	char *upto_text;
+	char *sql;
+	PGresult   *res;
+
+	/* already acked this */
+	if (upto <= rctx->last_reported_flush)
+		return;
+
+	rctx->conn = receiver_connect(conninfo);
+
+	upto_text = pg_lsn_out_c(upto);
+	sql = psprintf("select pg_replication_slot_advance('" MULTIMASTER_SLOT_PATTERN	"', '%s');",
+				   Mtm->my_node_id,
+				   upto_text);
+
+	res = PQexec(rctx->conn, sql);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+	{
+		mtm_log(ERROR, "%s at node %d failed: %s",
+				sql, rctx->w.sender_node_id, PQresultErrorMessage(res));
+	}
+	rctx->last_reported_flush = upto;
+	mtm_log(MtmReceiverFeedback, "advanced slot to %s", upto_text);
+
+	pfree(upto_text);
+	pfree(sql);
+	PQfinish(rctx->conn);
+	rctx->conn = NULL;
 }
 
 /*
@@ -549,6 +586,7 @@ void
 pglogical_receiver_main(Datum main_arg)
 {
 	/* Variables for replication connection */
+	char	   *conninfo;
 	PQExpBuffer query;
 	PGresult   *res;
 	MtmReceiverContext *rctx;
@@ -607,6 +645,7 @@ pglogical_receiver_main(Datum main_arg)
 	ActivePortal->sourceText = "";
 
 	receiver_mtm_cfg = MtmLoadConfig();
+	conninfo = MtmNodeById(receiver_mtm_cfg, sender)->conninfo;
 
 	/* Keep us informed about subscription changes. */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
@@ -621,7 +660,6 @@ pglogical_receiver_main(Datum main_arg)
 		XLogRecPtr	remote_start;
 		Syncpoint  *spvector = NULL;
 		HTAB	   *filter_map = NULL;
-		char	   *conninfo;
 		nodemask_t	connected_mask;
 
 		/*
@@ -651,6 +689,14 @@ pglogical_receiver_main(Datum main_arg)
 			if (rctx->w.mode != REPLMODE_DISABLED)
 				break; /* success */
 
+			/*
+			 * So this receiver can't work which usually means we are in
+			 * recovery and donor is not our sender. Attempt to advance our
+			 * sender slot then -- this allows to trim WAL on non-donors
+			 * during recovery which may be very long.
+			 */
+			MtmMaybeAdvanceSlot(rctx, conninfo);
+
 			ConditionVariableSleep(&Mtm->receivers_cv, PG_WAIT_EXTENSION);
 		}
 		ConditionVariableCancelSleep();
@@ -678,7 +724,6 @@ pglogical_receiver_main(Datum main_arg)
 		}
 
 		/* Establish connection to the remote server */
-		conninfo = MtmNodeById(receiver_mtm_cfg, sender)->conninfo;
 		rctx->conn = receiver_connect(conninfo);
 
 		/* Create new slot if needed */
@@ -819,8 +864,8 @@ pglogical_receiver_main(Datum main_arg)
 			if (got_sighup)
 			{
 				/* Process config file */
-				ProcessConfigFile(PGC_SIGHUP);
 				got_sighup = false;
+				ProcessConfigFile(PGC_SIGHUP);
 				ereport(LOG, (MTM_ERRMSG("%s: processed SIGHUP",
 										   MyBgworkerEntry->bgw_name)));
 			}

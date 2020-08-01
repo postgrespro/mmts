@@ -106,7 +106,7 @@ MaybeLogSyncpoint(void)
 }
 
 /* copied from pg_lsn_out */
-static char*
+char*
 pg_lsn_out_c(XLogRecPtr lsn)
 {
 	char		buf[32];
