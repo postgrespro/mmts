@@ -84,7 +84,7 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
  * recovery.
  */
 void
-MaybeLogSyncpoint()
+MaybeLogSyncpoint(void)
 {
 	/* do unlocked check first */
 	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MULTIMASTER_SYNCPOINT_INTERVAL)

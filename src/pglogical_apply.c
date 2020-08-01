@@ -1150,11 +1150,8 @@ process_remote_commit(StringInfo in,
 			Assert(false);
 	}
 
-	if (rwctx->mode == REPLMODE_NORMAL)
-	{
-		Assert(replorigin_session_origin == InvalidRepOriginId);
-		MaybeLogSyncpoint();
-	}
+	Assert(replorigin_session_origin == InvalidRepOriginId);
+	MaybeLogSyncpoint();
 }
 
 static int
