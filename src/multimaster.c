@@ -1875,7 +1875,7 @@ MtmMessageUnpack(StringInfo s)
 			msg->node_id = pq_getmsgint(s, 4);
 			msg->prepared = pq_getmsgbyte(s);
 			msg->errcode = pq_getmsgint(s, 4);
-			msg->errmsg = pq_getmsgrawstring(s);
+			msg->errmsg = pstrdup(pq_getmsgrawstring(s));
 			msg->xid = pq_getmsgint64(s);
 
 			anymsg = (MtmMessage *) msg;
@@ -1892,8 +1892,8 @@ MtmMessageUnpack(StringInfo s)
 			msg->accepted_term.ballot = pq_getmsgint(s, 4);
 			msg->accepted_term.node_id = pq_getmsgint(s, 4);
 			msg->errcode = pq_getmsgint(s, 4);
-			msg->errmsg = pq_getmsgrawstring(s);
-			msg->gid = pq_getmsgrawstring(s);
+			msg->errmsg = pstrdup(pq_getmsgrawstring(s));
+			msg->gid = pstrdup(pq_getmsgrawstring(s));
 
 			anymsg = (MtmMessage *) msg;
 			break;
@@ -1907,7 +1907,7 @@ MtmMessageUnpack(StringInfo s)
 			msg->type = pq_getmsgbyte(s);
 			msg->term.ballot = pq_getmsgint(s, 4);
 			msg->term.node_id = pq_getmsgint(s, 4);
-			msg->gid = pq_getmsgrawstring(s);
+			msg->gid = pstrdup(pq_getmsgrawstring(s));
 			msg->coordinator_end_lsn = pq_getmsgint64(s);
 
 			anymsg = (MtmMessage *) msg;
@@ -1925,7 +1925,7 @@ MtmMessageUnpack(StringInfo s)
 			msg->state.proposal.node_id = pq_getmsgint(s, 4);
 			msg->state.accepted.ballot = pq_getmsgint(s, 4);
 			msg->state.accepted.node_id = pq_getmsgint(s, 4);
-			msg->gid = pq_getmsgrawstring(s);
+			msg->gid = pstrdup(pq_getmsgrawstring(s));
 
 			anymsg = (MtmMessage *) msg;
 			break;
