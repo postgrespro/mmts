@@ -42,15 +42,13 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     @classmethod
     def tearDownClass(cls):
         print('tearDown')
+
+        # ohoh
+        th = TestHelper()
+        th.client = cls.client
+
+        th.assertDataSync()
         cls.client.stop()
-
-        time.sleep(TEST_STOP_DELAY)
-
-        if not cls.client.is_data_identic():
-            raise AssertionError('Different data on nodes')
-
-        if cls.client.no_prepared_tx() != 0:
-            raise AssertionError('There are some uncommitted tx')
 
     def setUp(self):
         warnings.simplefilter("ignore", ResourceWarning)
@@ -66,99 +64,48 @@ class RecoveryTest(unittest.TestCase, TestHelper):
                                     "name ~ '^[0-9A-F]+$' ORDER BY "
                                     "name DESC LIMIT 1")[0][0]
 
+    def _get_last_wals(self, dsns):
+        return [self._get_last_wal(dsn) for dsn in dsns]
+
     # Returns the oldest existing wal
     def _get_first_wal(self, dsn):
+        # recycle old segments
+        self.nodeExecute(dsn, ["CHECKPOINT"])
         return self.nodeSelect(dsn, "SELECT name FROM pg_ls_waldir() WHERE "
                                     "name ~ '^[0-9A-F]+$' ORDER BY "
                                     "name LIMIT 1")[0][0]
 
-    # If running in not degraded mode (i.e. degraded_node == 0), the function
-    # returns the file name of wal where the most recent restart_lsn for
-    # neighbour nodes.
-    #
-    # In degraded mode (degraded_node != 0), the function returns the file name
-    # of restart_lsn of node that does not currently exist in the cluster.
-    # This file must not be removed until the node returns to cluster.
-    def _get_restart_lsn_wal(self, dsn, degraded_node=0):
-        if degraded_node == 0:
-            wals = self.nodeSelect(dsn, "SELECT pg_walfile_name(restart_lsn) "
-                                        "FROM pg_replication_slots WHERE "
-                                        "slot_name LIKE 'mtm_recovery_slot_%'")
-            latest_wal = '000000000000000000000000'
-            for wal in wals:
-                if wal[0] > latest_wal:
-                    latest_wal = wal[0]
-            return latest_wal
-        else:
-            return self.nodeSelect(dsn, "SELECT pg_walfile_name(restart_lsn) "
-                                        "FROM pg_replication_slots WHERE "
-                                        "slot_name='mtm_recovery_slot_%i'" %
-                                   degraded_node)[0][0]
+    def _get_first_wals(self, dsns):
+        return [self._get_first_wal(dsn) for dsn in dsns]
 
-    # Returns two arrays.
-    # For each node in dsns, the first one contains the most recent wal
-    # segment name, the second result of  _get_restart_lsn_wal
-    def _get_wals(self, dsns, degraded_node=0):
-        lastwal_begin = []
-        firsttwal_begin = []
-        for i in range(len(dsns)):
-            lastwal_begin.append(self._get_last_wal(dsns[i]))
-            firsttwal_begin.append(
-                self._get_restart_lsn_wal(dsns[i], degraded_node))
-        return [lastwal_begin, firsttwal_begin]
+    # get restart_lsn segment of slot to the given node
+    def _get_slot_wal(self, dsn, recepient):
+        return self.nodeSelect(dsn, """
+        SELECT pg_walfile_name(restart_lsn)
+        FROM pg_replication_slots WHERE slot_name = 'mtm_slot_{}'
+        """.format(recepient))[0][0]
+
+    def _get_slot_wals(self, dsns, recepient):
+        return [self._get_slot_wal(dsn, recepient) for dsn in dsns]
 
     # Waits (up to iterations * iteration_sleep seconds)
-    # until at least wals_to_pass segments appear on each node since
-    # lastwal_begin positions.
-    # Then returns True if firstwal_begin wal segment at each node was
-    # removed. Returns False if all these segments are kept.
-    # Raises exception in other cases.
-    def _is_wal_trimmed(self, dsns, lastwal_begin, firsttwal_begin,
-                        wals_to_pass=5,
-                        iteration_sleep=20,
-                        iterations=1000):
-
-        print(lastwal_begin)
-        print(firsttwal_begin)
-        lastwalp = lastwal_begin.copy()
-        timeout = True
+    # until at least wals_to_pass segments appear on each node
+    def _wait_wal(self, dsns, wals_to_pass=5,
+                  iteration_sleep=20,
+                  iterations=1000):
+        last_wals_initial = self._get_last_wals(dsns)
+        print("waiting for wal, last_wals_initial={}, first_wals={}".format(last_wals_initial, self._get_first_wals(dsns)))
         for j in range(iterations):
             time.sleep(iteration_sleep)
-            wal_passed = True
-            for i in range(len(dsns)):
-                lw = self._get_last_wal(dsns[i])
-                wal_passed = wal_passed and (
-                        int(lw, 16) - int(lastwal_begin[i],
-                                          16) >= wals_to_pass)
-                if lw > lastwalp[i]:
-                    self.nodeExecute(dsns[i], ['CHECKPOINT'])
-                    print('node%i: %s\t%s\t%i\t%s' % (
-                        i + 1, lw, self._get_first_wal(dsns[i]),
-                        int(lw, 16) - int(lastwal_begin[i], 16),
-                        lastwal_begin[i]))
-                    lastwalp[i] = lw
-            if wal_passed:
-                timeout = False
-                print('%i wals passed!' % wals_to_pass)
-                break
-        if timeout:
-            raise AssertionError('Time is out')
-        all_wals_trimmed = True
-        all_wals_untrimmed = True
-        trimmed_node = []
-        for i in range(len(dsns)):
-            trimmed_node.append(
-                firsttwal_begin[i] < self._get_first_wal(dsns[i]))
-            all_wals_trimmed = all_wals_trimmed and trimmed_node[i]
-            all_wals_untrimmed = all_wals_untrimmed and not trimmed_node[i]
-        if all_wals_trimmed == all_wals_untrimmed == False:
-            for i in range(len(trimmed_node)):
-                print('node%i: %r' % (i + 1, trimmed_node[i]))
-            raise AssertionError('Some wals was trimmed, but some was not')
-        elif all_wals_trimmed == all_wals_untrimmed == True:
-            raise AssertionError('Unexpected error')
-        else:
-            return all_wals_trimmed
+            last_wals = self._get_last_wals(dsns)
+            print("waiting for wal, last_wals={}, first_wals={}".format(last_wals, self._get_first_wals(dsns)))
+            # xxx: this is only correct for first 4GB of WAL due to the hole in
+            # WAL file naming
+            if all(int(lw, 16) - int(lw_i, 16) >= wals_to_pass
+                   for (lw_i, lw) in zip(last_wals_initial, last_wals)):
+                return
+
+        raise AssertionError('timed out while waiting for wal')
 
     def test_syncpoints(self):
         print('### test_syncpoints ###')
@@ -173,22 +120,37 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.nodeExecute(dsn, ["ALTER SYSTEM SET fsync = 'off'",
                                    "SELECT pg_reload_conf()",
                                    "CHECKPOINT"])
-        print('Fsync is turned off')
+        print('fsync is turned off')
         time.sleep(5)
 
         # check that wals are trimmed when everyone is online
-        (lastwal_begin, firsttwal_begin) = self._get_wals(self.dsns)
+        first_wals_before = self._get_first_wals(self.dsns)
         self.client.bgrun()
-        if not self._is_wal_trimmed(self.dsns, lastwal_begin, firsttwal_begin):
-            raise AssertionError('Wals are not trimmed in normal mode')
+        # Note that _get_first_wals called inside for logging purposes has
+        # useful side effect: checkpoint recycles WAL and at the same time logs
+        # xl_running_xacts for future advancement. With default settings
+        # checkpoints may occur too rarely to pass assert.
+        self._wait_wal(self.dsns)
+        first_wals_after = self._get_first_wals(self.dsns)
+        if not all(b < a for (b, a) in zip(first_wals_before, first_wals_after)):
+            raise AssertionError('segments on some nodes were not trimmed in normal mode: before={}, after={}'.format(first_wals_before, first_wals_after))
 
+
+        # now check that wal is preserved if some node is offline
         self.client.stop()
         failure = CrashRecoverNode('node3')
+        print('putting node 3 down')
         failure.start()
-        (lastwal_begin, firsttwal_begin) = self._get_wals(self.dsns[:2], 3)
+        # getting first_wals here would be too strict -- unlikely, but probably
+        # there is some WAL which is not needed by offline node
+        slot_wals_before = self._get_slot_wals(self.dsns[:2], 3)
         self.client.bgrun()
-        if self._is_wal_trimmed(self.dsns[:2], lastwal_begin, firsttwal_begin):
-            raise AssertionError('Wals are trimmed in degraded mode')
+        self._wait_wal(self.dsns[:2])
+        first_wals_after = self._get_first_wals(self.dsns[:2])
+        if not all(b >= a for (b, a) in zip(slot_wals_before, first_wals_after)):
+            raise AssertionError('segments on some nodes were trimmed in degraded mode: before={}, after={}'.format(slot_wals_before, first_wals_after))
+
+        print('getting node 3 up')
         failure.stop()
         time.sleep(20)
         self.client.stop()
