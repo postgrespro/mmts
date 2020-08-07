@@ -644,6 +644,8 @@ pglogical_receiver_main(Datum main_arg)
 	ActivePortal->sourceText = "";
 
 	receiver_mtm_cfg = MtmLoadConfig();
+	if (MtmNodeById(receiver_mtm_cfg, sender) == NULL)
+		proc_exit(0); /* our node was excluded */
 	conninfo = MtmNodeById(receiver_mtm_cfg, sender)->conninfo;
 
 	/* Keep us informed about subscription changes. */
@@ -1155,36 +1157,4 @@ pglogical_receiver_main(Datum main_arg)
 	}
 
 	Assert(false);
-}
-
-
-BackgroundWorkerHandle *
-MtmStartReceiver(int nodeId, Oid db_id, Oid user_id, pid_t monitor_pid)
-{
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
-	pid_t		pid;
-	BgwHandleStatus status;
-
-	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART;
-	worker.bgw_main_arg = Int32GetDatum(nodeId);
-	worker.bgw_notify_pid = monitor_pid;
-
-	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
-	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
-
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "pglogical_receiver_main");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d", Mtm->my_node_id, nodeId);
-
-	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
-		elog(ERROR, "Failed to start receiver worker");
-
-	status = WaitForBackgroundWorkerStartup(handle, &pid);
-	if (status != BGWH_STARTED)
-		mtm_log(ERROR,  "could not start background process");
-	return handle;
 }

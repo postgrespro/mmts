@@ -137,6 +137,10 @@ extern void MtmOnDmqSenderDisconnect(char *node_name);
 extern void AcquirePBByPreparer(void);
 extern void ReleasePB(void);
 
+/* bgws */
+extern void CampaignerMain(Datum main_arg);
+extern void ReplierMain(Datum main_arg);
+extern void MtmMonitor(Datum arg);
 extern void MtmMonitorStart(Oid db_id, Oid user_id);
 
 /* not cleaned up yet */

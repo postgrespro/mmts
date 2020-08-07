@@ -2136,6 +2136,7 @@ dmq_destination_add(char *connstr, char *sender_name, char *receiver_name,
 		return dest_id;
 }
 
+/* if receiver_name is NULL, drop all destinations */
 void
 dmq_destination_drop(char *receiver_name)
 {
@@ -2148,10 +2149,12 @@ dmq_destination_drop(char *receiver_name)
 		DmqDestination *dest = &(dmq_state->destinations[dest_id]);
 
 		if (dest->active &&
-			strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)
+			((receiver_name == NULL) ||
+			 (strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)))
 		{
 			dest->active = false;
-			break;
+			if (receiver_name)
+				break;
 		}
 	}
 	sender_pid = dmq_state->sender_pid;

@@ -31,7 +31,6 @@
 #include "global_tx.h"
 #include "messaging.h"
 
-static bool config_valid;
 static MtmConfig *mtm_cfg = NULL;
 static bool		send_requests;
 
@@ -42,30 +41,6 @@ static void handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg);
  * Initialization
  *
  *****************************************************************************/
-
-BackgroundWorkerHandle *
-ResolverStart(Oid db_id, Oid user_id)
-{
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
-
-	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART;
-
-	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
-	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
-
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "ResolverMain");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-resolver");
-
-	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
-		elog(ERROR, "Failed to start resolver worker");
-
-	return handle;
-}
 
 void
 ResolverWake()
@@ -378,7 +353,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 			gtx->resolver_stage = GTRS_AwaitStatus;
 
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "mon",
+			scatter(mtm_cfg, connected, "reqresp",
 					MtmMessagePack((MtmMessage *) &status_msg));
 		}
 	}
@@ -582,7 +557,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				InvalidXLogRecPtr
 			};
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "mon",
+			scatter(mtm_cfg, connected, "reqresp",
 					MtmMessagePack((MtmMessage *) &request_msg));
 		}
 	}
@@ -629,7 +604,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				gid
 			};
 			connected = MtmGetConnectedMask(false);
-			scatter(mtm_cfg, connected, "mon",
+			scatter(mtm_cfg, connected, "reqresp",
 					MtmMessagePack((MtmMessage *) &request_msg));
 			return;
 		}
@@ -637,34 +612,6 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 	GlobalTxRelease(gtx);
 }
-
-static void
-subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
-{
-	config_valid = false;
-}
-
-static void
-attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
-}
-
-static void
-detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	/* detach incoming queues from this node */
-	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
-}
-
-static void
-sigUsr1Handler(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-	SetLatch(MyLatch);
-	errno = save_errno;
-}
-
 
 void
 ResolverMain(Datum main_arg)
@@ -675,7 +622,6 @@ ResolverMain(Datum main_arg)
 	/* init this worker */
 	pqsignal(SIGHUP, ResolverSigHupHandler);
 	pqsignal(SIGTERM, die);
-	pqsignal(SIGUSR1, sigUsr1Handler);
 
 	BackgroundWorkerUnblockSignals();
 
@@ -689,7 +635,7 @@ ResolverMain(Datum main_arg)
 
 	/* Keep us informed about subscription changes. */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
-								  subscription_change_cb,
+								  mtm_pubsub_change_cb,
 								  (Datum) 0);
 
 	on_shmem_exit(resolver_at_exit, (Datum) 0);
@@ -699,7 +645,7 @@ ResolverMain(Datum main_arg)
 	Mtm->resolver_pid = MyProcPid;
 	LWLockRelease(Mtm->lock);
 
-	mtm_log(ResolverState, "Resolver started");
+	mtm_log(ResolverState, "resolver started");
 
 	send_requests = true;
 
@@ -709,17 +655,15 @@ ResolverMain(Datum main_arg)
 
 		CHECK_FOR_INTERRUPTS();
 
-		/* XXX: add tx start/commit to free memory? */
-
 		AcceptInvalidationMessages();
-		if (!config_valid)
+		if (!mtm_config_valid)
 		{
-			mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
+			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node, (Datum) NULL);
 
 			if (mtm_cfg->my_node_id == 0)
 				proc_exit(0);
 
-			config_valid = true;
+			mtm_config_valid = true;
 		}
 		Assert(mtm_cfg);
 

@@ -198,6 +198,8 @@ typedef struct
 	/* for debugging/monitoring purposes */
 	nodemask_t	walsenders_mask;
 	nodemask_t	walreceivers_mask;
+
+	bool	monitor_loaded;
 } MtmShared;
 
 extern MtmShared *Mtm;
@@ -255,5 +257,11 @@ extern bool gather(nodemask_t participants,
 				   struct MtmMessage **messages, int *senders, int *msg_count,
 				   gather_hook_t msg_ok, Datum msg_ok_arg,
 				   int *sendconn_cnt, uint64 gen_num);
+
+/* boilerplate for config updates in bgws */
+extern bool mtm_config_valid;
+extern void mtm_pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue);
+extern void mtm_attach_node(int node_id, MtmConfig *new_cfg, Datum arg);
+extern void mtm_detach_node(int node_id, MtmConfig *new_cfg, Datum arg);
 
 #endif							/* MULTIMASTER_H */

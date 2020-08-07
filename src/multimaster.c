@@ -137,6 +137,7 @@ bool		MtmBreakConnection;
 bool		MtmWaitPeerCommits;
 bool		MtmNo3PC;
 
+bool mtm_config_valid;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
@@ -689,19 +690,19 @@ check_config(int node_id, int n_nodes)
 	}
 
 	/*
-	 * There are 4 constant bgws (launcher, monitor, resolver, campaigner)
-	 * and, for (n - 1) neighbours 1 main receiver + up to MtmMaxWorkers
+	 * There are 5 constant bgws (launcher + monitor, resolver, campaigner,
+	 * replier) and, for (n - 1) neighbours 1 main receiver + up to MtmMaxWorkers
 	 * dynamic workers. Setting max_worker_processes too low might lead to one
 	 * receiver hogging the covers and occupying all slots with its workers
 	 * while another one wouldn't be able to spin even one, thus hanging the
 	 * cluster.
 	 */
-	workers_required = 4 + (n_nodes - 1) * (MtmMaxWorkers + 1);
+	workers_required = 5 + (n_nodes - 1) * (MtmMaxWorkers + 1);
 	if (max_worker_processes < workers_required)
 	{
 		mtm_log(WARNING,
 				"multimaster requires max_worker_processes at least "
-				"4 + (num_nodes - 1) * (multimaster.max_workers + 1), "
+				"5 + (num_nodes - 1) * (multimaster.max_workers + 1), "
 				"which is %d in your configuration, but it is set to %d",
 				workers_required, max_worker_processes);
 		ok = false;
@@ -1747,6 +1748,28 @@ gather(nodemask_t participants,
 	}
 	return true;
 }
+
+/* boilerplate for config updates in bgws */
+
+void
+mtm_pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
+{
+	mtm_config_valid = false;
+}
+
+void
+mtm_attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
+}
+
+void
+mtm_detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
+{
+	/* detach incoming queues from this node */
+	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
+}
+
 
 
 /*****************************************************************************

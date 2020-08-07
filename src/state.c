@@ -189,7 +189,6 @@ struct MtmState
 	MtmNodeStatus status;
 }		   *mtm_state;
 
-void CampaignerMain(Datum main_arg);
 static void CampaignerWake(void);
 
 static void MtmSetReceiveMode(uint32 mode);
@@ -203,8 +202,6 @@ static nodemask_t MtmGetConnectivityClique(bool locked);
 static void MtmStateSave(void);
 static void MtmStateLoad(void);
 
-static void pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue);
-
 static void GetLoggedPreparedXactState(HTAB *txset);
 
 PG_FUNCTION_INFO_V1(mtm_node_info);
@@ -214,8 +211,6 @@ PG_FUNCTION_INFO_V1(mtm_get_logged_prepared_xact_state);
 
 static bool pb_preparers_incremented = false;
 static bool pb_holders_incremented = false;
-
-static bool config_valid = false;
 
 static bool	campaign_requested;
 
@@ -804,30 +799,6 @@ MtmGetCurrentStatus(bool gen_locked, bool vote_locked)
  * The campaigner bgw, responsible for rising new generation elections.
  */
 
-static BackgroundWorkerHandle *
-CampaignerStart(Oid db_id, Oid user_id)
-{
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
-
-	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_NEVER_RESTART;
-
-	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
-	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
-
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "CampaignerMain");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-campaigner");
-
-	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
-		elog(ERROR, "failed to start campaigner worker");
-
-	return handle;
-}
-
 static void
 CampaignerWake(void)
 {
@@ -851,20 +822,6 @@ static void
 CampaignerOnExit(int code, Datum arg)
 {
 	mtm_state->campaigner_pid = 0;
-}
-
-/* xxx we have 3 copies now, time to unite them */
-static void
-attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
-}
-
-static void
-detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	/* detach incoming queues from this node */
-	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
 }
 
 /* TODO: unite with resolver.c */
@@ -1296,7 +1253,7 @@ CampaignerGatherHook(MtmMessage *anymsg, Datum arg)
  * checked it forms majority).
  */
 static void
-CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
+CampaignTour(MtmConfig *mtm_cfg,
 			 MtmGeneration candidate_gen, nodemask_t cohort, uint64 my_last_online_in)
 {
 	int		   sconn_cnt[DMQ_N_MASK_POS];
@@ -1319,7 +1276,7 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 
 	request_msg.tag = T_MtmGenVoteRequest;
 	request_msg.gen = candidate_gen;
-	scatter(*mtm_cfg, cohort, "mon",
+	scatter(mtm_cfg, cohort, "reqresp",
 			MtmMessagePack((MtmMessage *) &request_msg));
 
 	gather(cohort, (MtmMessage **) messages, senders, &n_messages,
@@ -1363,7 +1320,7 @@ CampaignTour(MemoryContext campaigner_ctx, MtmConfig **mtm_cfg,
 			max_last_vote_num = msg->last_vote_num;
 	}
 
-	if (MtmQuorum(*mtm_cfg, nvotes)) /* victory */
+	if (MtmQuorum(mtm_cfg, nvotes)) /* victory */
 	{
 		mtm_log(MtmStateSwitch, "won election of gen num=" UINT64_FORMAT ", members=%s, configured=%s, donors=%s",
 				candidate_gen.num,
@@ -1591,7 +1548,7 @@ CampaignerMain(Datum main_arg)
 	TimestampTz last_campaign_at = 0;
 
 	MtmBackgroundWorker = true;
-	mtm_log(MtmStateMessage, "campaigner bgw started");
+	mtm_log(MtmStateMessage, "campaigner started");
 	before_shmem_exit(CampaignerOnExit, (Datum) 0);
 	mtm_state->campaigner_pid = MyProcPid;
 
@@ -1611,11 +1568,9 @@ CampaignerMain(Datum main_arg)
 
 	/* Keep us informed about subscription changes. */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
-								  pubsub_change_cb,
+								  mtm_pubsub_change_cb,
 								  (Datum) 0);
 
-	mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
-	config_valid = true;
 	dmq_stream_subscribe("genvoteresp");
 
 	/* maskToString also eats memory */
@@ -1650,19 +1605,19 @@ CampaignerMain(Datum main_arg)
 		int campaign_retry_interval = 3000; /* 3s */
 		TimestampTz now;
 
-		/* cleanup message pack/unpack allocations */
-		MemoryContextReset(campaigner_ctx);
-
 		CHECK_FOR_INTERRUPTS();
 
 		AcceptInvalidationMessages();
-		if (!config_valid)
+		MemoryContextSwitchTo(TopMemoryContext); /* alloc mtm_cfg in top */
+		if (!mtm_config_valid)
 		{
-			mtm_log(LOG, "reloading config");
-			mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
-			config_valid = true;
+			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
+									  (Datum) NULL);
+			mtm_config_valid = true;
 		}
-		/* xact in MtmReloadConfig could've knocked down our ctx */
+
+		/* cleanup message pack/unpack allocations */
+		MemoryContextReset(campaigner_ctx);
 		MemoryContextSwitchTo(campaigner_ctx);
 
 		/*
@@ -1681,7 +1636,7 @@ CampaignerMain(Datum main_arg)
 				if (!IS_REFEREE_GEN(candidate_gen.members, candidate_gen.configured))
 				{
 					/* normal case, poll neighbours */
-					CampaignTour(campaigner_ctx, &mtm_cfg, candidate_gen, cohort,
+					CampaignTour(mtm_cfg, candidate_gen, cohort,
 								 my_last_online_in);
 				}
 				else
@@ -1911,7 +1866,7 @@ MtmGetConnectedMaskWithMe(bool locked)
 	return res;
 }
 
-void*
+void *
 MtmOnDmqReceiverConnect(char *node_name)
 {
 	int			node_id;
@@ -1923,6 +1878,10 @@ MtmOnDmqReceiverConnect(char *node_name)
 		mtm_log(FATAL, "[STATE] node %d not found", node_id);
 	else
 		mtm_log(MtmStateMessage, "[STATE] dmq receiver from node %d connected", node_id);
+
+	/* make sure monitor already restored generation state */
+	if (!Mtm->monitor_loaded)
+		mtm_log(FATAL, "mtm-monitor is not loaded yet");
 
 	/* do not hold lock for mtm.cluster_nodes */
 	ResourceOwnerRelease(TopTransactionResourceOwner,
@@ -2736,45 +2695,10 @@ MtmStateLoad(void)
 			maskToString(mtm_state->last_vote.members));
 }
 
-
-/*****************************************************************************
- *
- * Mtm monitor
- *
- *****************************************************************************/
-
-
-#include "storage/latch.h"
-#include "postmaster/bgworker.h"
-#include "utils/guc.h"
-#include "pgstat.h"
-
-void		MtmMonitor(Datum arg);
-
-bool		MtmIsMonitorWorker;
-
-void
-MtmMonitorStart(Oid db_id, Oid user_id)
-{
-	BackgroundWorker worker;
-	BackgroundWorkerHandle *handle;
-
-	MemSet(&worker, 0, sizeof(BackgroundWorker));
-	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
-	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = 1;
-	worker.bgw_main_arg = Int32GetDatum(0);
-
-	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
-	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
-
-	sprintf(worker.bgw_library_name, "multimaster");
-	sprintf(worker.bgw_function_name, "MtmMonitor");
-	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-monitor");
-
-	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
-		elog(ERROR, "Failed to start monitor worker");
-}
+/*---------------------------------------------------------------------------
+ * Replier bgw gets and replies to messages from resolver and campaigner.
+ *---------------------------------------------------------------------------
+ */
 
 /*
  * Workhorse for handle_1a when PREPARE exists: change its state and fill
@@ -3065,8 +2989,8 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 	 * them at once. Other messages are processed immediately.
 	 *
 	 * XXX possibility of blocking generation election by long WAL scan still
-	 * doesn't look appealing. It would be probably better to split tx
-	 * resolution responder to yet another process.
+	 * doesn't look appealing. It might be better to delegate GenVoteRequests
+	 * to monitor.
 	 */
 	MemSet(&txset_hash_ctl, 0, sizeof(txset_hash_ctl));
 	txset_hash_ctl.keysize = GIDSIZE;
@@ -3164,10 +3088,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 
 got_message:
 		n_received_msgs++;
-		/*
-		 * prevent potential infinite spinning in this function; monitor has
-		 * other jobs to do
-		 */
+		/* prevent potential infinite spinning in this function */
 		if (n_received_msgs >= max_batch_size)
 		{
 			*job_pending = true; /* probably there are more messages */
@@ -3184,6 +3105,195 @@ got_message:
 	handle_1a_batch(txset);
 }
 
+void
+ReplierMain(Datum main_arg)
+{
+	Oid			db_id,
+				user_id;
+	MtmConfig  *mtm_cfg = NULL;
+	/* for message packing/unpacking and maskToString */
+	MemoryContext replier_ctx =	AllocSetContextCreate(TopMemoryContext,
+													  "ReplierContext",
+													  ALLOCSET_DEFAULT_SIZES);
+	bool	job_pending;
+
+	MtmBackgroundWorker = true;
+	mtm_log(MtmStateMessage, "replier started");
+
+	/*
+	 * Note that StartBackgroundWorker already set reasonable handlers,
+	 * e.g. SIGUSR1 sets latch.
+	 */
+	/* die gracefully not in signal handler but in CHECK_FOR_INTERRUPTS */
+	pqsignal(SIGTERM, die);
+	BackgroundWorkerUnblockSignals();
+
+	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
+	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
+	/* Connect to a database */
+	BackgroundWorkerInitializeConnectionByOid(db_id, user_id, 0);
+
+	/* Keep us informed about subscription changes. */
+	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
+								  mtm_pubsub_change_cb,
+								  (Datum) 0);
+
+	dmq_stream_subscribe("reqresp");
+
+	for (;;)
+	{
+		int rc;
+
+		CHECK_FOR_INTERRUPTS();
+
+		AcceptInvalidationMessages();
+		MemoryContextSwitchTo(TopMemoryContext); /* alloc mtm_cfg in top */
+		if (!mtm_config_valid)
+		{
+			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
+									  (Datum) NULL);
+			mtm_config_valid = true;
+		}
+
+		/* cleanup message pack/unpack allocations */
+		MemoryContextReset(replier_ctx);
+		MemoryContextSwitchTo(replier_ctx);
+
+		job_pending = false;
+		check_status_requests(mtm_cfg, &job_pending);
+
+		if (!job_pending)
+		{
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT,
+						   10000, PG_WAIT_EXTENSION);
+
+			/* Emergency bailout if postmaster has died */
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
+
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+		}
+	}
+}
+
+
+/*****************************************************************************
+ *
+ * Mtm monitor
+ *
+ *****************************************************************************/
+
+
+#include "storage/latch.h"
+#include "postmaster/bgworker.h"
+#include "utils/guc.h"
+#include "pgstat.h"
+
+void
+MtmMonitorStart(Oid db_id, Oid user_id)
+{
+	BackgroundWorker worker;
+	BackgroundWorkerHandle *handle;
+
+	MemSet(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_restart_time = 1;
+	worker.bgw_main_arg = Int32GetDatum(0);
+
+	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
+	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
+
+	sprintf(worker.bgw_library_name, "multimaster");
+	sprintf(worker.bgw_function_name, "MtmMonitor");
+	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-monitor");
+
+	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
+		elog(ERROR, "Failed to start monitor worker");
+}
+
+/* number of single instance bgws */
+#define MTM_SINGLE_BGWS_NUM 3
+
+typedef struct
+{
+	char name[BGW_MAXLEN];
+	char function_name[BGW_MAXLEN];
+	Datum arg;
+	BackgroundWorkerHandle *handle;
+	TimestampTz last_start_time;
+} MtmBgw;
+
+/*
+ * Kill and wait for shutdown of all our children before getting out: we
+ * e.g. don't want to duplicate them when new monitor starts.
+ */
+static void
+MtmMonitorOnExit(int status, Datum arg)
+{
+	MtmBgw *bgws = (MtmBgw *) DatumGetPointer(arg);
+	int i;
+
+	/*
+	 * monitor must take all his wards with himself; otherwise e.g. new
+	 * instance will duplicate them if only monitor was killed
+	 */
+	for (i = 0; i < MTM_SINGLE_BGWS_NUM + MTM_MAX_NODES; i++)
+	{
+		if (bgws[i].handle == NULL)
+			continue;
+		TerminateBackgroundWorker(bgws[i].handle);
+		WaitForBackgroundWorkerShutdown(bgws[i].handle);
+		pfree(bgws[i].handle);
+		bgws[i].handle = NULL;
+	}
+
+	/*
+	 * TODO: for extra paranoia it would be nice to kill here all dmq
+	 * receivers and walsenders (and prevent start of new ones) to
+	 * e.g. prevent old processes running after mtm re-initialization.
+	 */
+}
+
+static void
+MtmBgwStart(MtmBgw *bgw)
+{
+	Oid db_id = MyDatabaseId;
+	Oid user_id = GetUserId();
+	BackgroundWorker worker;
+	BgwHandleStatus status;
+	pid_t		pid;
+
+	MemSet(&worker, 0, sizeof(BackgroundWorker));
+	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
+	worker.bgw_start_time = BgWorkerStart_ConsistentState;
+	worker.bgw_restart_time = BGW_NEVER_RESTART;
+	worker.bgw_main_arg = bgw->arg;
+	worker.bgw_notify_pid = MyProcPid; /* monitor */
+
+	memcpy(worker.bgw_extra, &db_id, sizeof(Oid));
+	memcpy(worker.bgw_extra + sizeof(Oid), &user_id, sizeof(Oid));
+
+	sprintf(worker.bgw_library_name, "multimaster");
+	strncpy(worker.bgw_function_name, bgw->function_name, BGW_MAXLEN);
+	strncpy(worker.bgw_name, bgw->name, BGW_MAXLEN);
+
+	if (bgw->handle != NULL)
+		pfree(bgw->handle);
+	if (!RegisterDynamicBackgroundWorker(&worker, &bgw->handle))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_RESOURCES),
+				 errmsg("could not register background process %s",
+						bgw->name),
+				 errhint("You may need to increase max_worker_processes.")));
+
+	status = WaitForBackgroundWorkerStartup(bgw->handle, &pid);
+	if (status != BGWH_STARTED)
+		mtm_log(ERROR,	"failed to start background process %s", bgw->name);
+	bgw->last_start_time = GetCurrentTimestamp();
+}
 
 static bool
 slot_exists(char *name)
@@ -3236,7 +3346,8 @@ is_basebackuped(MtmConfig *mtm_cfg)
 static void
 start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
+	MtmBgw *bgws = (MtmBgw *) arg;
+	MtmBgw *bgw;
 	LogicalDecodingContext *ctx;
 	DmqDestinationId dest;
 	char	   *dmq_connstr,
@@ -3244,7 +3355,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 			   *filter_slot,
 			   *dmq_my_name,
 			   *dmq_node_name;
-	MemoryContext old_context;
+	MemoryContext old_ctx;
 
 	/*
 	 * Transaction is needed for logical slot and replication origin creation.
@@ -3291,21 +3402,23 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	Mtm->peers[node_id - 1].dmq_dest_id = dest;
 	LWLockRelease(Mtm->lock);
 
-	/* Attach receiver so we can collect tx requests */
-	dmq_attach_receiver(dmq_node_name, node_id - 1);
-
 	/*
-	 * Finally start receiver. bgw handle should be allocated in TopMcxt.
+	 * Finally start receiver. bgw handle must be allocated in TopMcxt.
 	 *
 	 * Start receiver before logical slot creation, as during start after a
 	 * basebackup logical stot creation will wait for all in-progress
 	 * transactions to finish (including prepared ones). And to finish them we
 	 * need to start receiver.
 	 */
-	old_context = MemoryContextSwitchTo(TopMemoryContext);
-	receivers[node_id - 1] = MtmStartReceiver(node_id, MyDatabaseId,
-											  GetUserId(), MyProcPid);
-	MemoryContextSwitchTo(old_context);
+	bgw = &bgws[node_id - 1];
+	MemSet(bgw, '\0', sizeof(MtmBgw));
+	snprintf(bgw->name, BGW_MAXLEN, "mtm-logrep-receiver-%d-%d",
+			 Mtm->my_node_id, node_id);
+	snprintf(bgw->function_name, BGW_MAXLEN, "pglogical_receiver_main");
+	bgw->arg = Int32GetDatum(node_id);
+	old_ctx = MemoryContextSwitchTo(TopMemoryContext);
+	MtmBgwStart(bgw);
+	MemoryContextSwitchTo(old_ctx);
 
 	if (!MtmNodeById(new_cfg, node_id)->init_done)
 	{
@@ -3350,7 +3463,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 static void
 stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 {
-	BackgroundWorkerHandle **receivers = (BackgroundWorkerHandle **) arg;
+	MtmBgw *bgws = (MtmBgw *) arg;
 	char	   *dmq_name;
 	char	   *logical_slot;
 	char	   *filter_slot_name;
@@ -3385,10 +3498,10 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	 * Stop corresponding receiver. Also await for termination, so that we can
 	 * drop slots and origins that were acquired by receiver.
 	 */
-	TerminateBackgroundWorker(receivers[node_id - 1]);
-	WaitForBackgroundWorkerShutdown(receivers[node_id - 1]);
-	pfree(receivers[node_id - 1]);
-	receivers[node_id - 1] = NULL;
+	TerminateBackgroundWorker(bgws[node_id - 1].handle);
+	WaitForBackgroundWorkerShutdown(bgws[node_id - 1].handle);
+	pfree(bgws[node_id - 1].handle);
+	bgws[node_id - 1].handle = NULL;
 
 	/* delete recovery slot, was acquired by receiver */
 	ReplicationSlotDrop(filter_slot_name, true);
@@ -3407,34 +3520,20 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	mtm_log(NodeMgmt, "stopped workers for node %d", node_id);
 }
 
-static void
-pubsub_change_cb(Datum arg, int cacheid, uint32 hashvalue)
-{
-	config_valid = false;
-}
-
 void
 MtmMonitor(Datum arg)
 {
 	Oid			db_id,
 				user_id;
 	MtmConfig  *mtm_cfg = NULL;
-	BackgroundWorkerHandle *receivers[MTM_MAX_NODES];
-	BackgroundWorkerHandle *resolver = NULL;
-	BackgroundWorkerHandle *campaigner = NULL;
-	MemoryContext mon_loop_ctx = AllocSetContextCreate(TopMemoryContext,
-													   "MonitorContext",
-													   ALLOCSET_DEFAULT_SIZES);
-	bool	job_pending;
-	TimestampTz last_start_time = 0;
-
-	memset(receivers, '\0', MTM_MAX_NODES * sizeof(BackgroundWorkerHandle *));
+	MtmBgw *bgws = palloc0(sizeof(MtmBgw) * (MTM_SINGLE_BGWS_NUM + MTM_MAX_NODES));
 
 	pqsignal(SIGTERM, die);
 	pqsignal(SIGHUP, PostgresSigHupHandler);
 
 	MtmBackgroundWorker = true;
-	MtmIsMonitorWorker = true;
+	before_shmem_exit(MtmMonitorOnExit, PointerGetDatum(bgws));
+	mtm_log(MtmStateMessage, "monitor started");
 
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
@@ -3531,6 +3630,8 @@ MtmMonitor(Datum arg)
 
 	/* now that we know our node id, restore generation state */
 	MtmStateStartup();
+	/* now dmq receivers are allowed to start */
+	Mtm->monitor_loaded = true;
 
 	StartTransactionCommand();
 	GlobalTxLoadAll();
@@ -3588,13 +3689,15 @@ MtmMonitor(Datum arg)
 	 */
 	pfree(mtm_cfg);
 	mtm_cfg = NULL;
+	/* if previous instance of monitor configured something, drop it */
+	dmq_destination_drop(NULL);
 
 	/*
 	 * Keep us informed about subscription changes, so we can react on node
 	 * addition or deletion.
 	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONNAME,
-								  pubsub_change_cb,
+								  mtm_pubsub_change_cb,
 								  (Datum) 0);
 
 	/*
@@ -3602,16 +3705,16 @@ MtmMonitor(Datum arg)
 	 * after our node was dropped.
 	 */
 	CacheRegisterSyscacheCallback(PUBLICATIONNAME,
-								  pubsub_change_cb,
+								  mtm_pubsub_change_cb,
 								  (Datum) 0);
 
-	dmq_stream_subscribe("mon"); /* use single stream for xact and gen reqs */
-
-	/* Launch resolver */
-	Assert(resolver == NULL);
-	resolver = ResolverStart(db_id, user_id);
-	campaigner = CampaignerStart(db_id, user_id);
-	mtm_log(MtmStateMessage, "MtmMonitor started");
+	/* single instance bgws */
+	snprintf(bgws[MTM_MAX_NODES].name, BGW_MAXLEN, "mtm-resolver");
+	snprintf(bgws[MTM_MAX_NODES].function_name, BGW_MAXLEN, "ResolverMain");
+	snprintf(bgws[MTM_MAX_NODES + 1].name, BGW_MAXLEN, "mtm-campaigner");
+	snprintf(bgws[MTM_MAX_NODES + 1].function_name, BGW_MAXLEN, "CampaignerMain");
+	snprintf(bgws[MTM_MAX_NODES + 2].name, BGW_MAXLEN, "mtm-replier");
+	snprintf(bgws[MTM_MAX_NODES + 2].function_name, BGW_MAXLEN, "ReplierMain");
 
 	for (;;)
 	{
@@ -3620,10 +3723,7 @@ MtmMonitor(Datum arg)
 		pid_t		pid;
 		long		wait_time = 2000; /* milliseconds */
 		TimestampTz	now;
-		bool		restart_workers;
-		long		next_restart_after = 0;
 
-		job_pending = false;
 		CHECK_FOR_INTERRUPTS();
 
 		if (ConfigReloadPending)
@@ -3634,26 +3734,23 @@ MtmMonitor(Datum arg)
 
 		/* check wheter we need to update config */
 		AcceptInvalidationMessages();
-		if (!config_valid)
+		if (!mtm_config_valid)
 		{
+			/*
+			 * Note that if for some reason monitor wasn't running
+			 * (e.g. process killed) during node drop, cleanup in
+			 * stop_node_workers will be skipped. Very unlikely, but not nice.
+			 */
 			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
-									  stop_node_workers, (Datum) receivers);
+									  stop_node_workers, PointerGetDatum(bgws));
 
-			/* we were excluded from cluster */
+			/*
+			 * we were excluded from cluster
+			 * xxx: add function for wiping out mtm traces and do that here
+			 */
 			if (mtm_cfg->my_node_id == MtmInvalidNodeId)
 			{
-				int			i;
 				int			rc;
-
-				for (i = 0; i < MTM_MAX_NODES; i++)
-				{
-					if (receivers[i] != NULL)
-						stop_node_workers(i + 1, NULL, (Datum) receivers);
-				}
-				TerminateBackgroundWorker(resolver);
-				TerminateBackgroundWorker(campaigner);
-
-				Mtm->my_node_id = MtmInvalidNodeId;
 
 				StartTransactionCommand();
 				if (SPI_connect() != SPI_OK_CONNECT)
@@ -3669,118 +3766,63 @@ MtmMonitor(Datum arg)
 				PopActiveSnapshot();
 				CommitTransactionCommand();
 
-				/* XXX: kill myself somehow? */
+				/* postmaster won't restart us after exit code 0 anymore */
 				proc_exit(0);
 			}
 
-			config_valid = true;
+			mtm_config_valid = true;
 		}
 
 		/*
-		 * Check and restart resolver, campaigner and receivers if they were
-		 * stopped by any error.
+		 * Check and restart bgws if they were stopped. Limit the start retry
+		 * to once a wal_retrieve_retry_interval. Usage of this GUC is
+		 * slightly weird, but we follow vanilla LR here.
 		 */
 		now = GetCurrentTimestamp();
-		/*
-		 * Limit the start retry to once a wal_retrieve_retry_interval. Usage
-		 * of this GUC is slightly weird, but we follow vanilla LR here.
-		 *
-		 * We are using single last_start_time for all workers; thus restart
-		 * may grab worker for which the interval hasn't passed yet along with
-		 * one for which it did happen, making restarts possibly more frequent
-		 * than wal_retrieve_retry_interval. OTOH, if immediately after worker
-		 * 1 start worker 2 fails, we would need to wait for the interval to
-		 * pass before restarting it. That's all shouldn't matter much.
-		 *
-		 * TODO: these 3 copies of identic code ask for unification.
-		 */
-		restart_workers = TimestampDifferenceExceeds(last_start_time, now,
-													 wal_retrieve_retry_interval);
-		if (!restart_workers)
-			next_restart_after = last_start_time / 1000 + wal_retrieve_retry_interval - now / 1000;
-		if (GetBackgroundWorkerPid(resolver, &pid) == BGWH_STOPPED)
+		for (i = 0; i < MTM_SINGLE_BGWS_NUM + MTM_MAX_NODES; i++)
 		{
-			if (restart_workers)
-			{
-				mtm_log(MtmStateMessage, "resolver is dead, restarting it");
-				pfree(resolver);
-				resolver = ResolverStart(db_id, user_id);
-				last_start_time = now;
-			}
-			/*
-			 * if we should restart but the interval hasn't passed yet, wake
-			 * up when it does
-			 */
-			else
-			{
-				wait_time = Min(wait_time, next_restart_after);
-			}
-		}
-		if (GetBackgroundWorkerPid(campaigner, &pid) == BGWH_STOPPED)
-		{
-			if (restart_workers)
-			{
-				mtm_log(MtmStateMessage, "campaigner is dead, restarting it");
-				pfree(campaigner);
-				campaigner = CampaignerStart(db_id, user_id);
-				last_start_time = now;
-			}
-			else
-			{
-				wait_time = Min(wait_time, next_restart_after);
-			}
-		}
-
-		for (i = 0; i < MTM_MAX_NODES; i++)
-		{
-			if (receivers[i] == NULL)
+			if (bgws[i].name[0] == '\0') /* free slot */
 				continue;
+			if (bgws[i].handle != NULL &&
+				GetBackgroundWorkerPid(bgws[i].handle, &pid) != BGWH_STOPPED)
+				continue; /* worker is healthy */
 
-			if (GetBackgroundWorkerPid(receivers[i], &pid) == BGWH_STOPPED)
+			if (TimestampDifferenceExceeds(bgws[i].last_start_time, now,
+										   wal_retrieve_retry_interval) ||
+				/*
+				 * Restart receiver immediately if his last reported mode is
+				 * not the one he should be currently working in: we don't
+				 * want to have wait interval in recovery<->normal transition.
+				 */
+				(strstr(bgws[i].name, "logrep-receiver") &&
+				 Mtm->peers[i].receiver_mode != MtmGetReceiverMode(i + 1)))
 			{
-				if (restart_workers ||
-					/*
-					 * Restart worker immediately if his last reported mode is
-					 * not the one he should be currently working in; e.g. we
-					 * don't want to have wait interval in recovery->normal
-					 * transition.
-					 */
-					Mtm->peers[i].receiver_mode != MtmGetReceiverMode(i + 1))
-				{
-					mtm_log(MtmStateMessage,
-							"receiver for node %d is dead, restarting it", i + 1);
-					/* Receiver has finished by some kind of mistake. Start it. */
-					pfree(receivers[i]);
-					receivers[i] = MtmStartReceiver(i + 1, MyDatabaseId,
-													GetUserId(), MyProcPid);
-					last_start_time = now;
-				}
-				else
-				{
-					wait_time = Min(wait_time, next_restart_after);
-				}
+				/* restart the worker */
+				mtm_log(MtmStateMessage, "%s is dead, restarting it", bgws[i].name);
+				MtmBgwStart(&bgws[i]);
+			}
+			else
+			{
+				/*
+				 * if we should restart but the interval hasn't passed yet,
+				 * wake up when it does
+				 */
+				long next_restart_after = bgws[i].last_start_time / 1000 +
+					wal_retrieve_retry_interval - now / 1000;
+				wait_time = Min(wait_time, next_restart_after);
 			}
 		}
 
-		/* reset once per monitor loop, mainly for messages pack/unpack */
-		MemoryContextReset(mon_loop_ctx);
-		MemoryContextSwitchTo(mon_loop_ctx);
-		check_status_requests(mtm_cfg, &job_pending);
-		MemoryContextSwitchTo(TopMemoryContext);
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   wait_time, PG_WAIT_EXTENSION);
 
-		if (!job_pending)
-		{
-			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
-						   wait_time, PG_WAIT_EXTENSION);
+		/* Emergency bailout if postmaster has died */
+		if (rc & WL_POSTMASTER_DEATH)
+			proc_exit(1);
 
-			/* Emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
-
-			if (rc & WL_LATCH_SET)
-				ResetLatch(MyLatch);
-		}
+		if (rc & WL_LATCH_SET)
+			ResetLatch(MyLatch);
 	}
 }
 
