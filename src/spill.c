@@ -19,7 +19,7 @@ MtmSpillToFile(int fd, char const *data, size_t size)
 
 		if (written <= 0)
 		{
-			CloseTransientFile(fd);
+			close(fd);
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 MTM_ERRMSG("pglogical_recevier failed to spill transaction to file: %m")));
@@ -48,6 +48,7 @@ MtmCreateSpillDirectory(int node_id)
 				 MTM_ERRMSG("pglogical_receiver failed to create spill directory \"%s\": %m",
 							path)));
 	}
+	/* cleanup old files in case of previous crash */
 	while ((spill_de = ReadDir(spill_dir, path)) != NULL)
 	{
 		if (strncmp(spill_de->d_name, "txn", 3) == 0)
@@ -74,8 +75,8 @@ MtmCreateSpillFile(int node_id, int *file_id)
 
 	sprintf(path, "pg_mtm/%d/txn-%d.snap",
 			node_id, ++spill_file_id);
-	fd = OpenTransientFile(path,
-						   O_CREAT | O_TRUNC | O_WRONLY | O_APPEND | PG_BINARY);
+	fd = BasicOpenFile(path,
+					   O_CREAT | O_TRUNC | O_WRONLY | O_APPEND | PG_BINARY);
 	if (fd < 0)
 	{
 		ereport(PANIC,
@@ -136,5 +137,8 @@ MtmReadSpillFile(int fd, char *data, size_t size)
 void
 MtmCloseSpillFile(int fd)
 {
-	CloseTransientFile(fd);
+	if (close(fd) < 0)
+		ereport(ERROR,
+				(errcode_for_file_access(),
+				 MTM_ERRMSG("pglogical_recevier failed to close spill file: %m")));
 }
