@@ -701,6 +701,16 @@ commit_tour_done:
 		mtm_log(MtmTxTrace, "%s unsubscribed for %s",
 				mtm_commit_state.gid, dmq_stream_name);
 		mtm_commit_state.inside_commit_sequence = false;
+		/*
+		 * If MtmTwoPhaseCommit happened in COMMIT's ProcessUtility hook,
+		 * (explicit tblock), MtmTwoPhaseCommit will be again called later on
+		 * postgres.c's CommitTransactionCommand without MtmBeginTransaction
+		 * cleaning up things first as we prevent nested mm hooks entry. So
+		 * command future MtmTwoPhaseCommit not perform 3PC: the last xact is
+		 * empty, it is only needed to avoid confusing xact.c machinery --
+		 * CommitTransactionCommand must find valid transaction.
+		 */
+		MtmTx.distributed = false;
 	}
 	PG_CATCH();
 	{
