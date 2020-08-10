@@ -70,7 +70,8 @@ typedef struct
 {
 	MtmReceiverWorkerContext w;
 	XLogRecPtr last_reported_flush;
-	PGconn *conn;
+	TimestampTz last_send_time;
+	WalReceiverConn *wrconn;
 } MtmReceiverContext;
 
 char const *const MtmReplicationModeMnem[] =
@@ -80,30 +81,29 @@ char const *const MtmReplicationModeMnem[] =
 	"normal"
 };
 
+/*
+ * Unfortunately libpqwalreceiver doesn't allow to pass arbitrary
+ * START_REPLICATION options, so expose its internals to exec it manually.
+ */
+typedef struct
+{
+	/* Current connection to the primary, if any */
+	PGconn	   *streamConn;
+	/* Used to remember if the connection is logical or physical */
+	bool		logical;
+	/* Buffer for currently read records */
+	char	   *recvBuf;
+} MyWalReceiverConn;
+
 MtmConfig  *receiver_mtm_cfg;
 bool		receiver_mtm_cfg_valid;
-
-/* Signal handling */
-static volatile sig_atomic_t got_sighup = false;
 
 /* Stream functions */
 static int64 fe_recvint64(char *buf);
 
 static void MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo);
-static PGconn *receiver_connect(char *conninfo);
 
 void		pglogical_receiver_main(Datum main_arg);
-
-static void
-receiver_raw_sighup(SIGNAL_ARGS)
-{
-	int			save_errno = errno;
-
-	got_sighup = true;
-	if (MyProc)
-		SetLatch(&MyProc->procLatch);
-	errno = save_errno;
-}
 
 /*
  * Send a Standby Status Update message to server.
@@ -114,7 +114,6 @@ sendFeedback(MtmReceiverContext *rctx, bool force)
 	char		replybuf[1 + 8 + 8 + 8 + 8 + 1 + 1];
 	StringInfoData str;
 	XLogRecPtr	flush_pos;
-	static TimestampTz send_time = 0;
 	TimestampTz now;
 
 	/*
@@ -133,10 +132,10 @@ sendFeedback(MtmReceiverContext *rctx, bool force)
 	 */
 	if (!force &&
 		flush_pos == rctx->last_reported_flush &&
-		!TimestampDifferenceExceeds(send_time, now,
+		!TimestampDifferenceExceeds(rctx->last_send_time, now,
 									wal_receiver_status_interval * 1000))
 		return;
-	send_time = now;
+	rctx->last_send_time = now;
 
 	/*
 	 * In multimaster flush and apply are the same as we can't handle 2PC
@@ -162,11 +161,7 @@ sendFeedback(MtmReceiverContext *rctx, bool force)
 	mtm_log(MtmReceiverFeedback, "acking flush of LSN %X/%X",
 			(uint32) (flush_pos >> 32),
 			(uint32) flush_pos);
-	if (PQputCopyData(rctx->conn, replybuf, str.len) <= 0 || PQflush(rctx->conn))
-	{
-		mtm_log(ERROR, "could not send feedback packet: %s",
-				PQerrorMessage(rctx->conn));
-	}
+	walrcv_send(rctx->wrconn, replybuf, str.len);
 	rctx->last_reported_flush = flush_pos;
 }
 
@@ -184,19 +179,28 @@ MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
 	char *upto_text;
 	char *sql;
 	PGresult   *res;
+	char	*err;
 
 	/* already acked this */
 	if (upto <= rctx->last_reported_flush)
 		return;
 
-	rctx->conn = receiver_connect(conninfo);
+	/*
+	 * it would be nice for libpqwalreceiver to expose interruptable
+	 * libpqrcv_PQexec and use it here
+	 */
+	rctx->wrconn = walrcv_connect(conninfo, true, MyBgworkerEntry->bgw_name,
+								  &err);
+	if (rctx->wrconn == NULL)
+		ereport(ERROR,
+				(errmsg("could not connect to the sender: %s", err)));
 
 	upto_text = pg_lsn_out_c(upto);
 	sql = psprintf("select pg_replication_slot_advance('" MULTIMASTER_SLOT_PATTERN	"', '%s');",
 				   Mtm->my_node_id,
 				   upto_text);
 
-	res = PQexec(rctx->conn, sql);
+	res = PQexec(((MyWalReceiverConn *) rctx->wrconn)->streamConn, sql);
 	if (PQresultStatus(res) != PGRES_TUPLES_OK)
 	{
 		mtm_log(ERROR, "%s at node %d failed: %s",
@@ -207,8 +211,8 @@ MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
 
 	pfree(upto_text);
 	pfree(sql);
-	PQfinish(rctx->conn);
-	rctx->conn = NULL;
+	walrcv_disconnect(rctx->wrconn);
+	rctx->wrconn = NULL;
 }
 
 /*
@@ -231,40 +235,6 @@ fe_recvint64(char *buf)
 	result |= l32;
 
 	return result;
-}
-
-static int64
-feGetCurrentTimestamp(void)
-{
-	int64		result;
-	struct timeval tp;
-
-	gettimeofday(&tp, NULL);
-
-	result = (int64) tp.tv_sec -
-		((POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY);
-
-	result = (result * USECS_PER_SEC) + tp.tv_usec;
-
-	return result;
-}
-
-static void
-feTimestampDifference(int64 start_time, int64 stop_time,
-					  long *secs, int *microsecs)
-{
-	int64		diff = stop_time - start_time;
-
-	if (diff <= 0)
-	{
-		*secs = 0;
-		*microsecs = 0;
-	}
-	else
-	{
-		*secs = (long) (diff / USECS_PER_SEC);
-		*microsecs = (int) (diff % USECS_PER_SEC);
-	}
 }
 
 static void
@@ -487,27 +457,6 @@ MtmEndSession(int nodeId, bool unlock)
 	}
 }
 
-/* On failure bails out with ERROR. */
-static PGconn *
-receiver_connect(char *conninfo)
-{
-	PGconn	   *conn;
-	ConnStatusType status;
-	const char *keys[] = {"dbname", "replication", NULL};
-	const char *vals[] = {conninfo, "database", NULL};
-
-	conn = PQconnectdbParams(keys, vals, /* expand_dbname = */ true);
-	status = PQstatus(conn);
-	if (status != CONNECTION_OK)
-	{
-		char	   *err = strdup(PQerrorMessage(conn));
-
-		mtm_log(ERROR, "Could not establish connection to '%s': %s", conninfo, err);
-	}
-
-	return conn;
-}
-
 static void
 subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 {
@@ -558,7 +507,8 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	 */
 	BgwPoolCancel(&Mtm->pools[rctx->w.sender_node_id - 1]);
 
-	PQfinish(rctx->conn);
+	if (rctx->wrconn)
+		walrcv_disconnect(rctx->wrconn);
 	if (MyReplicationSlot != NULL)
 		ReplicationSlotRelease();
 
@@ -593,8 +543,6 @@ pglogical_receiver_main(Datum main_arg)
 
 	ByteBuffer	buf;
 
-	/* Buffer for COPY data */
-	char	   *copybuf = NULL;
 	int			spill_file = -1;
 	StringInfoData spill_info;
 	static PortalData fakePortal;
@@ -626,13 +574,19 @@ pglogical_receiver_main(Datum main_arg)
 	initStringInfo(&spill_info);
 
 	/* Register functions for SIGTERM/SIGHUP management */
-	pqsignal(SIGHUP, receiver_raw_sighup);
+	pqsignal(SIGHUP, PostgresSigHupHandler);
 	pqsignal(SIGTERM, die);
 
 	MtmCreateSpillDirectory(sender);
 
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
+
+	/*
+	 * Load the libpq wrappers simplifying life a bit + making all (but
+	 * sending) calls interruptable
+	 */
+	load_file("libpqwalreceiver", false);
 
 	memcpy(&db_id, MyBgworkerEntry->bgw_extra, sizeof(Oid));
 	memcpy(&user_id, MyBgworkerEntry->bgw_extra + sizeof(Oid), sizeof(Oid));
@@ -662,6 +616,8 @@ pglogical_receiver_main(Datum main_arg)
 		Syncpoint  *spvector = NULL;
 		HTAB	   *filter_map = NULL;
 		nodemask_t	connected_mask;
+		char	   *err;
+		PGconn	   *conn;
 
 		/*
 		 * Determine how we should pull and ensure we won't interfere with
@@ -725,7 +681,12 @@ pglogical_receiver_main(Datum main_arg)
 		}
 
 		/* Establish connection to the remote server */
-		rctx->conn = receiver_connect(conninfo);
+		rctx->wrconn = walrcv_connect(conninfo, true, MyBgworkerEntry->bgw_name,
+									  &err);
+		if (rctx->wrconn == NULL)
+			ereport(ERROR,
+					(errmsg("could not connect to the sender: %s", err)));
+
 
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
@@ -838,10 +799,11 @@ pglogical_receiver_main(Datum main_arg)
 						  (uint32) remote_start,
 						  MtmReplicationModeMnem[rctx->w.mode]
 			);
-		res = PQexec(rctx->conn, query->data);
+		conn = ((MyWalReceiverConn *) rctx->wrconn)->streamConn;
+		res = PQexec(conn, query->data);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
-			elog(ERROR, "START_REPLICATION_SLOT to node%d failed, shutting down receiver: %s",
+			elog(ERROR, "START_REPLICATION SLOT to node%d failed, shutting down receiver: %s",
 				 sender, PQresultErrorMessage(res));
 		}
 		PQclear(res);
@@ -849,42 +811,40 @@ pglogical_receiver_main(Datum main_arg)
 
 		for (;;)				/* main loop, jump out only with ERROR */
 		{
-			int			rc,
-						hdr_len;
+			pgsocket	fd = PGINVALID_SOCKET;
+			long		wait_time;
+			int			rc;
 
-			/* Wait necessary amount of time */
-			rc = WaitLatchOrSocket(MyLatch,
-								   WL_LATCH_SET | WL_SOCKET_READABLE |
-								   WL_TIMEOUT | WL_POSTMASTER_DEATH,
-								   PQsocket(rctx->conn),
-								   PQisRsocket(rctx->conn),
-								   100.0, PG_WAIT_EXTENSION);
-			ResetLatch(&MyProc->procLatch);
+			CHECK_FOR_INTERRUPTS();
 
-			/* Process signals */
-			if (got_sighup)
+			sendFeedback(rctx, false);
+
+			if (ConfigReloadPending)
 			{
-				/* Process config file */
-				got_sighup = false;
+				ConfigReloadPending = false;
 				ProcessConfigFile(PGC_SIGHUP);
-				ereport(LOG, (MTM_ERRMSG("%s: processed SIGHUP",
-										   MyBgworkerEntry->bgw_name)));
 			}
-
-			/* Emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-			{
-				proc_exit(1);
-			}
-
-			AcceptInvalidationMessages(); /* what this is doing here? */
 
 			/*
-			 * Receive data.
+			 * this is currently trivially true as we always apply only after
+			 * getting commit (or prepare)
 			 */
-			while (true)
+			if (!IsTransactionState())
 			{
-				char	   *stmt;
+				/*
+				 * If we didn't get any transactions for a while there might
+				 * be unconsumed invalidation messages in the queue, consume
+				 * them now.
+				 */
+				AcceptInvalidationMessages();
+			}
+
+			for (;;) /* spin tightly while there is data */
+			{
+				char	   *copybuf = NULL;
+				int			len;
+				int			hdr_len;
+				bool		isRsocket = false;
 
 				CHECK_FOR_INTERRUPTS();
 				/*
@@ -901,16 +861,18 @@ pglogical_receiver_main(Datum main_arg)
 					proc_exit(0);
 				}
 
-				/* Some cleanup */
-				if (copybuf != NULL)
-				{
-					PQfreemem(copybuf);
-					copybuf = NULL;
-				}
+				len = walrcv_receive(rctx->wrconn, &copybuf, &fd, &isRsocket);
 
-				rc = PQgetCopyData(rctx->conn, &copybuf, 1);
-				if (rc <= 0)
-					break;
+				if (len == 0)
+				{
+					break; /* WOULDBLOCK */
+				}
+				else if (len < 0)
+				{
+					ereport(LOG,
+							(errmsg("data stream from sender has ended")));
+					proc_exit(0);
+				}
 
 				/*
 				 * Check message received from server: - 'k', keepalive
@@ -930,10 +892,10 @@ pglogical_receiver_main(Datum main_arg)
 
 					pos += 8;  /* skip so-called walEnd (actually the last LSN sent) */
 					pos += 8;	/* skip sendTime */
-					if (rc < pos + 1)
+					if (len < pos + 1)
 					{
 						ereport(ERROR, (MTM_ERRMSG("%s: streaming header too small: %d",
-												   MyBgworkerEntry->bgw_name, rc)));
+												   MyBgworkerEntry->bgw_name, len)));
 					}
 					replyRequested = copybuf[pos];
 
@@ -953,14 +915,14 @@ pglogical_receiver_main(Datum main_arg)
 				hdr_len += 8;	/* WALEnd */
 				hdr_len += 8;	/* sendTime */
 
-				mtm_log(LOG, "receive message %c length %d",
-						copybuf[hdr_len], rc - hdr_len);
+				/* mtm_log(LOG, "receive message %c length %d", copybuf[hdr_len], len - hdr_len); */
 
-				Assert(rc >= hdr_len);
+				Assert(len >= hdr_len);
 
-				if (rc > hdr_len)
+				if (len > hdr_len)
 				{
-					int			msg_len = rc - hdr_len;
+					int			msg_len = len - hdr_len;
+					char	   *stmt;
 
 					stmt = copybuf + hdr_len;
 
@@ -1072,86 +1034,29 @@ pglogical_receiver_main(Datum main_arg)
 				}
 			}
 
-			/* No data, move to next loop */
-			if (rc == 0)
-			{
-				/*
-				 * In async mode, and no data available. We block on reading
-				 * but not more than the specified timeout, so that we can
-				 * send a response back to the client.
-				 */
-				int			r;
-				fd_set		input_mask;
-				int64		message_target = 0;
-				int64		fsync_target = 0;
-				struct timeval timeout;
-				struct timeval *timeoutptr = NULL;
-				int64		targettime;
-				long		secs;
-				int			usecs;
-				int64		now;
-
-				FD_ZERO(&input_mask);
-				FD_SET(PQsocket(rctx->conn), &input_mask);
-
-				/* Now compute when to wakeup. */
-				targettime = message_target;
-
-				if (fsync_target > 0 && fsync_target < targettime)
-					targettime = fsync_target;
-				now = feGetCurrentTimestamp();
-				feTimestampDifference(now, targettime, &secs, &usecs);
-				if (secs <= 0)
-					timeout.tv_sec = 1; /* Always sleep at least 1 sec */
-				else
-					timeout.tv_sec = secs;
-				timeout.tv_usec = usecs;
-				timeoutptr = &timeout;
-
-				r = PQselect(PQsocket(rctx->conn) + 1, &input_mask,
-							 NULL, NULL, timeoutptr, PQisRsocket(rctx->conn));
-				if (r == 0)
-				{
-					sendFeedback(rctx, false);
-				}
-				else if (r < 0 && errno == EINTR)
-
-					/*
-					 * Got a timeout or signal. Continue the loop and either
-					 * deliver a status packet to the server or just go back
-					 * into blocking.
-					 */
-					continue;
-
-				else if (r < 0)
-				{
-					mtm_log(ERROR, "select failed");
-				}
-
-				/*
-				 * Else there is actually data on the socket, so read and we
-				 * should be able to read it.
-				 */
-				if (PQconsumeInput(rctx->conn) == 0)
-				{
-					mtm_log(ERROR, "could not receive data from WAL stream: %s",
-							PQerrorMessage(rctx->conn));
-				}
+			/* pedantically wake up when time for ping comes */
+			wait_time = (long) (rctx->last_send_time +
+								wal_receiver_status_interval * USECS_PER_SEC -
+								GetCurrentTimestamp());
+			if (wait_time <= 0)
 				continue;
+			/* no data, wait for it */
+			rc = WaitLatchOrSocket(MyLatch,
+								   WL_LATCH_SET | WL_SOCKET_READABLE |
+								   WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								   fd,
+								   PQisRsocket(fd),
+								   wait_time, PG_WAIT_EXTENSION);
+
+			/* Emergency bailout if postmaster has died */
+			if (rc & WL_POSTMASTER_DEATH)
+			{
+				proc_exit(1);
 			}
 
-			/* End of copy stream */
-			if (rc == -1)
+			if (rc & WL_LATCH_SET)
 			{
-				ereport(ERROR, (MTM_ERRMSG("%s: COPY Stream has abruptly ended...",
-										   MyBgworkerEntry->bgw_name)));
-			}
-
-			/* Failure when reading copy stream, leave */
-			if (rc == -2)
-			{
-				ereport(ERROR, (MTM_ERRMSG("%s: Failure while receiving changes...",
-										   MyBgworkerEntry->bgw_name)));
+				ResetLatch(MyLatch);
 			}
 		}
 	}
