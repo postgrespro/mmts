@@ -1075,7 +1075,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	 * XXX: there used to be per-subscription support for dropping messages if
 	 * queue is full, created for xact resolving requests which may took very
 	 * long due to WAL scan. I've (mostly) ported it but disabled because
-	 * monitor now answers to both generation election and xact resolution
+	 * replier now answers to both generation election and xact resolution
 	 * requests, and silently dropping the former might lead to inifinite
 	 * waiting of the remote campaigner. We could deal with that by moving
 	 * xact resolution requests to yet another bgw.
@@ -1091,8 +1091,8 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	{
 		res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
 		if (res == SHM_MQ_DETACHED)
-			mtm_log(COMMERROR, "[DMQ] queue %d is detached, dropping message",
-					sub.procno);
+			mtm_log(COMMERROR, "[DMQ] queue %d is detached, dropping message (stream=%s)",
+					sub.procno, stream_name);
 	}
 }
 

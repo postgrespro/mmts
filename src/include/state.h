@@ -125,6 +125,7 @@ extern void MtmReportReceiverCaughtup(int node_id);
 extern MtmReplicationMode MtmGetReceiverMode(int nodeId);
 
 /* connectivity */
+extern nodemask_t MtmGetDmqReceiversMask(void);
 extern nodemask_t MtmGetConnectedMask(bool locked);
 extern nodemask_t MtmGetConnectedMaskWithMe(bool locked);
 extern void *MtmOnDmqReceiverConnect(char *node_name);

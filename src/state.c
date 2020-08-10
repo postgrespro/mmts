@@ -1834,6 +1834,20 @@ MtmGetReceiverMode(int nodeId)
  */
 
 /*
+ * Who has connected to me.
+ */
+nodemask_t
+MtmGetDmqReceiversMask(void)
+{
+	nodemask_t res;
+
+	LWLockAcquire(mtm_state->connectivity_lock, LW_SHARED);
+	res = mtm_state->dmq_receivers_mask;
+	LWLockRelease(mtm_state->connectivity_lock);
+	return res;
+}
+
+/*
  * Whom I see currently, i.e. have bidirectional dmq connection with.
  * Does *not* include myself.
  */
@@ -1849,7 +1863,6 @@ MtmGetConnectedMask(bool locked)
 	if (!locked)
 		LWLockRelease(mtm_state->connectivity_lock);
 	return res;
-
 }
 
 /* MtmGetConnectedMask + me */
@@ -1889,13 +1902,25 @@ MtmOnDmqReceiverConnect(char *node_name)
 						 true, true);
 
 	/*
-	 * We set dmq_receivers_mask bit not here but on first heartbeat because
-	 * 1) dmq calls dmq_receiver_stop_hook *after* releasing its handle
-	 *    (which prevents reconnection of the same sender), so there is a
-	 *    race -- old dying receiver might clear bit set by new one.
-	 * 2) Until the first heartbeat we don't know visibility mask of the node,
-	 *    so set bit would not be of much use anyway.
+	 * Setting dmq_receivers_mask bit before first heartbeat is not as useful
+	 * as it could be since we don't carry visibility mask here, but it is
+	 * essential to inform subscribers from which nodes they should attempt
+	 * dmp_pop_nb: otherwise we might get message, create mq for and wake the
+	 * subscriber in vain, as he won't attempt receival without bit set.
 	 */
+	LWLockAcquire(mtm_state->connectivity_lock, LW_EXCLUSIVE);
+	/*
+	 * This sorta duplicates check in dmq.c, however it is important due to a
+	 * race: dmq intentionally calls dmq_receiver_stop_hook *after* releasing
+	 * its handle (which prevents reconnection of the same sender), so without
+	 * check old dying receiver might clear bit set by new one.
+	 */
+	if (BIT_CHECK(mtm_state->dmq_receivers_mask, node_id - 1))
+		mtm_log(ERROR, "dmq receiver from node %d already connected", node_id);
+	BIT_SET(mtm_state->dmq_receivers_mask, node_id - 1);
+	LWLockRelease(mtm_state->connectivity_lock);
+
+	CampaignerWake();
 
 	return AllocSetContextCreate(TopMemoryContext,
 								 "MtmDmqHeartBeatContext",
@@ -1910,7 +1935,6 @@ MtmOnDmqReceiverHeartbeat(char *node_name, StringInfo msg, void *extra)
 	MemoryContext oldcontext;
 	MtmHeartbeat *parsed_msg;
 	bool changed = false;
-	nodemask_t old_connected_mask;
 
 	/*
 	 * We could actually make the func alloc-free if MtmMessageUnpack hadn't
@@ -1934,10 +1958,6 @@ MtmOnDmqReceiverHeartbeat(char *node_name, StringInfo msg, void *extra)
 	/* finally, update connectivity state */
 	LWLockAcquire(mtm_state->connectivity_lock, LW_EXCLUSIVE);
 
-	old_connected_mask = MtmGetConnectedMask(true);
-	BIT_SET(mtm_state->dmq_receivers_mask, node_id - 1);
-	if (old_connected_mask != MtmGetConnectedMask(true))
-		changed = true; /* sender is already fine and receiver just emerged */
 	if (mtm_state->connectivity_matrix[node_id - 1] != parsed_msg->connected_mask)
 		changed = true; /* neighbour's connectivity mask changed */
 	mtm_state->connectivity_matrix[node_id - 1] = parsed_msg->connected_mask;
@@ -2999,7 +3019,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 	txset = hash_create("txset", max_batch_size, &txset_hash_ctl,
 						HASH_ELEM | HASH_CONTEXT);
 
-	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetConnectedMask(false), &wait))
+	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetDmqReceiversMask(), &wait))
 	{
 		MtmMessage *raw_msg = MtmMessageUnpack(&packed_msg);
 		int			sender_node_id;
@@ -3165,8 +3185,8 @@ ReplierMain(Datum main_arg)
 		if (!job_pending)
 		{
 			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_POSTMASTER_DEATH | WL_TIMEOUT,
-						   10000, PG_WAIT_EXTENSION);
+						   WL_LATCH_SET | WL_POSTMASTER_DEATH,
+						   0, PG_WAIT_EXTENSION);
 
 			/* Emergency bailout if postmaster has died */
 			if (rc & WL_POSTMASTER_DEATH)
