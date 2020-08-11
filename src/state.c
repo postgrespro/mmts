@@ -1344,7 +1344,7 @@ CampaignTour(MtmConfig *mtm_cfg,
 	/* if anyone complained about our last_vote being too low, bump it */
 	if (max_last_vote_num != MtmInvalidGenNum)
 	{
-		if (max_last_vote_num > mtm_state->last_vote.num)
+		if (max_last_vote_num >= mtm_state->last_vote.num)
 		{
 			/*
 			 * no need to +1 here as we set members and configured to 0 and so
@@ -2086,7 +2086,7 @@ MtmOnDmqSenderDisconnect(char *node_name)
 }
 
 /*
- * Do all nodes from mask see each other? The clique is not neccesarily
+ * Do all nodes from the mask see each other? The clique is not neccesarily
  * maximal.
  */
 static bool
@@ -2104,6 +2104,8 @@ MtmIsConnectivityClique(nodemask_t mask)
 		for (j = 0; j < MTM_MAX_NODES; j++)
 		{
 			if (i == j)
+				continue;
+			if (!BIT_CHECK(mask, j))
 				continue;
 			if (i + 1 == Mtm->my_node_id)
 			{
