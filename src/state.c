@@ -871,7 +871,8 @@ MtmReportReceiverCaughtup(int node_id)
  * Set receive_mode to recover from random most advanced node (having greatest
  * last_online_in) among given connected ones.
  */
-static uint64 SetCatchupDonor(nodemask_t connected)
+static uint64
+SetCatchupDonor(nodemask_t connected)
 {
 	int i;
 	int most_advanced_node = MtmInvalidNodeId;
@@ -1023,15 +1024,9 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	}
 
 	/*
-	 * No point to campaign if there is no quorum clique with me at all. But
-	 * if we are in dead gen and thus need recovery, tell receivers to catchup
-	 * from the most advanced node if we see the majority (this is what
-	 * e.g. allows non-clique-members to keep up in stable sausage case) -- or
-	 * declare we don't know to recover from whom if we aren't. The latter
-	 * really doesn't changes anything signficant but useful for monitoring.
-	 *
+	 * No point to campaign if there is no quorum clique with me at all.
 	 * Campaigning also has little sense if the calculated clique doesn't
-	 * contain us. This might happen as we obtain others connectivity masks
+	 * contain me. This might happen as we obtain others connectivity masks
 	 * from dmq heartbeats, so mask existence means dmq receiver is certainly
 	 * live, but dmq sender is not necessarily.
 	 *
@@ -1048,18 +1043,15 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 		!(IS_REFEREE_ENABLED() && MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE))
 	{
 		/*
-		 * Don't change receive_mode though when we are in recovery/online as
-		 * peers might get back again without changing the gen, and nobody
-		 * would restore receive_mode to correct value. We know donors in
-		 * recovery and don't need them at all in online anyway.
+		 * If I'm dead, i.e. need recovery and don't know from whom yet,
+		 * declare so for monitoring purposes. Don't change receive_mode
+		 * though when we are in recovery/online as peers might get back again
+		 * without changing the gen, and nobody would restore receive_mode to
+		 * correct value. We know donors in recovery and don't need them at
+		 * all in online anyway.
 		 */
 		if (MtmGetCurrentStatusInGen() == MTM_GEN_DEAD)
-		{
-			if (MtmQuorum(mtm_cfg, popcount(connected_mask_with_me)))
-				SetCatchupDonor(connected_mask_with_me);
-			else
-				MtmSetReceiveMode(RECEIVE_MODE_DISABLED);
-		}
+			MtmSetReceiveMode(RECEIVE_MODE_DISABLED);
 		mtm_log(MtmStateDebug, "not campaigning as there is no quorum connectivity clique with me");
 		goto no_interesting_candidates;
 	}
@@ -1069,10 +1061,10 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 		uint64 donor_loi;
 
 		/*
-		 * So I can't ever participate in this gen; ensure I am catching up
-		 * from right donor. This is useful even if I am member of current
-		 * gen, e.g. if it its minority gen and I am not the most advanced
-		 * node.
+		 * So I see the clique (and I am part of it), but can't ever
+		 * participate in this gen; ensure I am catching up from the right
+		 * donor. This is useful even if I am member of current gen, e.g. if
+		 * it its minority gen and I am not the most advanced node.
 		 */
 		donor_loi = SetCatchupDonor(connected_mask_with_me);
 
