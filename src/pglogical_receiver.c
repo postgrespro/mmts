@@ -213,6 +213,16 @@ MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
 	pfree(sql);
 	walrcv_disconnect(rctx->wrconn);
 	rctx->wrconn = NULL;
+
+	/*
+	 * This function is called inside ConditionVariableSleep loop. However,
+	 * libpqwalreceiver calls above have WaitLatch inside, and if someone had
+	 * ConditionVariableBroadcast us while we were waiting there, of course we
+	 * won't requeue us into cv wakeup list as loop in ConditionVariableSleep
+	 * does, which means next cv sleep will be eternal. Force requeuing to
+	 * avoid this.
+	 */
+	ConditionVariableCancelSleep();
 }
 
 /*
