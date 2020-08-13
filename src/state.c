@@ -1682,6 +1682,9 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	StringInfo	packed_msg;
 	MtmGenVoteResponse resp;
 	nodemask_t clique = MtmGetConnectivityClique(false);
+	MtmStatusInGen old_status_in_gen;
+	nodemask_t curr_gen_members_and_proposer;
+	bool is_curr_gen_connected;
 
 	mtm_log(MtmStateDebug, "HandleGenVoteRequest: got '%s' from %d",
 			MtmMesageToString((MtmMessage *) req), sender_node_id);
@@ -1708,70 +1711,105 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	 */
 	if (MtmGetCurrentGenNum() >= req->gen.num)
 	{
+		mtm_log(MtmStateDebug, "refusing the vote for num " UINT64_FORMAT " as my current gen num " UINT64_FORMAT,
+				req->gen.num, MtmGetCurrentGenNum());
 		resp.vote_ok = false;
+		goto voted;
 	}
 	/* already voted for exactly this gen, can safely confirm it again */
-	else if (EQUAL_GENS(mtm_state->last_vote, req->gen))
+	if (EQUAL_GENS(mtm_state->last_vote, req->gen))
 	{
 		resp.vote_ok = true;
 		resp.last_online_in = mtm_state->last_online_in;
+		goto voted;
 	}
-	else if (mtm_state->last_vote.num >= req->gen.num)
+	if (mtm_state->last_vote.num >= req->gen.num)
 	{
 		/* already voted for lower gen, can't do that again */
 		resp.vote_ok = false;
 		resp.last_vote_num = mtm_state->last_vote.num;
+		goto voted;
 	}
-	else
+	/*
+	 * Ok, we can vote for the proposed gen. Let's check if it makes sense:
+	 *	1) We would like to adhere to the rule 'node can add only itself
+	 *	   to new gen' to prevent election of lagging nodes. This is
+	 *	   already checked by the proposer, but his info could be stale,
+	 *	   so it seems useful to verify it at the voter side, c.f.
+	 *	   generations2.md.
+	 *	2) It should conform to our idea of the clique.
+	 *	3) Set of configured nodes should match.
+	 */
+	curr_gen_members_and_proposer = mtm_state->current_gen_members;
+	BIT_SET(curr_gen_members_and_proposer, sender_node_id - 1);
+	if (!is_submask(req->gen.members, curr_gen_members_and_proposer) ||
+		!is_submask(req->gen.members, clique) ||
+		req->gen.configured != mtm_cfg->mask)
 	{
-		/*
-		 * Ok, we can vote for the proposed gen. Let's check if it makes sense:
-		 *  1) We would like to adhere to the rule 'node can add only  itself
-		 *     to new gen' to prevent election of lagging nodes. This is
-		 *     already checked by the proposer, but his info could be stale,
-		 *     so it seems useful to verify it at the voter side, c.f.
-		 *     generations2.md.
-		 *  2) It should conform to our idea of the clique.
-		 *  3) Set of configured nodes should match.
-		 */
-		nodemask_t curr_gen_members_and_proposer = mtm_state->current_gen_members;
-
-		BIT_SET(curr_gen_members_and_proposer, sender_node_id - 1);
-		if (is_submask(req->gen.members, curr_gen_members_and_proposer) &&
-			is_submask(req->gen.members, clique) &&
-			req->gen.configured == mtm_cfg->mask)
-		{
-			MtmStatusInGen old_status_in_gen = MtmGetCurrentStatusInGen();
-
-			resp.vote_ok = true;
-			resp.last_online_in = mtm_state->last_online_in;
-
-			/* persist the vote */
-			mtm_state->last_vote = req->gen;
-			MtmStateSave();
-
-			/*
-			 * If we are not online in current generation, probably after
-			 * giving this vote we are forbidden to ever become so -- this
-			 * allows the generation campaigner to use last_online_in in our
-			 * answer to reliably determine donors.
-			 */
-			if (old_status_in_gen == MTM_GEN_RECOVERY &&
-				MtmGetCurrentStatusInGen() == MTM_GEN_DEAD)
-			{
-				mtm_log(MtmStateMessage, "switched to dead in generation num=" UINT64_FORMAT "after giving vote for generation num=" UINT64_FORMAT,
-						MtmGetCurrentGenNum(),
-						req->gen.num);
-				MtmSetReceiveMode(RECEIVE_MODE_DISABLED);
-			}
-		}
-		else
-		{
-			resp.vote_ok = false;
-		}
-		resp.last_vote_num = MtmInvalidGenNum;
+		resp.vote_ok = false;
+		goto voted;
 	}
 
+	/*
+	 * And one more check: if I'm fine in current gen (ONLINE and all members
+	 * see each other), requester is not member of it -- he proposes to add
+	 * himself -- and the same time offers to exclude some existing member,
+	 * refuse. Motivated by the following: on the one hand, previously offline
+	 * node who wishes to join the cluster should never exclude any current
+	 * member in the absense of failures. Without this check this does
+	 * sometimes happen, e.g.
+	 * - 1 is offline, 23 work
+	 * - 1 goes up, establishes connection to 2 and recovers from it. 3 won't
+	 *   have good connection to 1 for some time because, for example, default
+	 *   TCP connection timeout is several minutes, so it might be still
+	 *   continuing to reach dead state.
+	 * - 1 fully recovers and ballots for 12. Without this check 2 would
+	 *   agree, thus excluding healthy 3.
+	 * On the other hand, to decrease the downtime working cluster should be
+	 * ready to remove failing node at the first call of any its member
+	 * without waiting for connectivity info gossip.
+	 *
+	 * Not absolutely sure this is a right thing and generally these liveness
+	 * optimization are always two-fold, but let's try it.
+	 */
+	LWLockAcquire(mtm_state->connectivity_lock, LW_SHARED);
+	is_curr_gen_connected = MtmIsConnectivityClique(mtm_state->current_gen_members);
+	LWLockRelease(mtm_state->connectivity_lock);
+	if (MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE &&
+		is_curr_gen_connected &&
+		!BIT_CHECK(mtm_state->current_gen_members, sender_node_id - 1) &&
+		!is_submask(mtm_state->current_gen_members, req->gen.members))
+	{
+		mtm_log(MtmStateDebug, "refusing the vote proposing to add new node instead of some existing member because I'm fine in current gen");
+		resp.vote_ok = false;
+		goto voted;
+	}
+
+	/* vote */
+	resp.vote_ok = true;
+	resp.last_online_in = mtm_state->last_online_in;
+
+	/* persist the vote */
+	old_status_in_gen = MtmGetCurrentStatusInGen();
+	mtm_state->last_vote = req->gen;
+	MtmStateSave();
+
+	/*
+	 * If we are not online in current generation, probably after
+	 * giving this vote we are forbidden to ever become so -- this
+	 * allows the generation campaigner to use last_online_in in our
+	 * answer to reliably determine donors.
+	 */
+	if (old_status_in_gen == MTM_GEN_RECOVERY &&
+		MtmGetCurrentStatusInGen() == MTM_GEN_DEAD)
+	{
+		mtm_log(MtmStateMessage, "switched to dead in generation num=" UINT64_FORMAT "after giving vote for generation num=" UINT64_FORMAT,
+				MtmGetCurrentGenNum(),
+				req->gen.num);
+		MtmSetReceiveMode(RECEIVE_MODE_DISABLED);
+	}
+
+voted:
 	LWLockRelease(mtm_state->vote_lock);
 	LWLockRelease(mtm_state->gen_lock);
 
