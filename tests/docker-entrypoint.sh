@@ -32,6 +32,8 @@ if [ "$1" = 'postgres' ]; then
 			shared_preload_libraries = 'multimaster'
 			multimaster.volkswagen_mode = off
                         multimaster.max_workers = 30
+
+			multimaster.connect_timeout = 10
 		EOF
 
 		if [ -n "$MAJOR" ]; then

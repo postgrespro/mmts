@@ -8,7 +8,7 @@ typedef int8 DmqDestinationId;
 
 #define DMQ_NAME_MAXLEN 32
 
-extern void dmq_init(int send_timeout);
+extern void dmq_init(int send_timeout, int connect_timeout);
 
 #define DMQ_N_MASK_POS 16 /* ought to be >= MTM_MAX_NODES */
 extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,

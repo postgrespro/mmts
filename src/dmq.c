@@ -96,6 +96,7 @@ typedef struct
 	int			recv_timeout;
 	PGconn	   *pgconn;
 	DmqConnState state;
+	double		conn_start_time;
 	int			pos;
 	int8		mask_pos;
 } DmqDestination;
@@ -367,7 +368,7 @@ dmq_shmem_size(void)
 }
 
 void
-dmq_init(int send_timeout)
+dmq_init(int send_timeout, int connect_timeout)
 {
 	BackgroundWorker worker;
 
@@ -385,7 +386,9 @@ dmq_init(int send_timeout)
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
 	worker.bgw_restart_time = 5;
 	worker.bgw_notify_pid = 0;
-	worker.bgw_main_arg = send_timeout;
+	memcpy(worker.bgw_extra, &send_timeout, sizeof(int));
+	memcpy(worker.bgw_extra + sizeof(int), &connect_timeout, sizeof(int));
+
 	sprintf(worker.bgw_library_name, "multimaster");
 	sprintf(worker.bgw_function_name, "dmq_sender_main");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "mtm-dmq-sender");
@@ -395,7 +398,6 @@ dmq_init(int send_timeout)
 	/* Register shmem hooks */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = dmq_shmem_startup_hook;
-
 }
 
 static Size
@@ -489,7 +491,8 @@ dmq_sender_main(Datum main_arg)
 	shm_mq_handle **mq_handles;
 	WaitEventSet *set;
 	DmqDestination conns[DMQ_MAX_DESTINATIONS];
-	int			heartbeat_send_timeout = DatumGetInt32(main_arg);
+	int			heartbeat_send_timeout;
+	int			connect_timeout;
 	StringInfoData heartbeat_buf; /* heartbeat data is accumulated here */
 	/*
 	 * Seconds dmq_state->sconn_cnt to save the counter value when
@@ -507,6 +510,9 @@ dmq_sender_main(Datum main_arg)
 	pqsignal(SIGHUP, dmq_sighup_handler);
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+
+	memcpy(&heartbeat_send_timeout, MyBgworkerEntry->bgw_extra, sizeof(int));
+	memcpy(&connect_timeout, MyBgworkerEntry->bgw_extra + sizeof(int), sizeof(int));
 
 	/* setup queue receivers */
 	seg = dsm_create(dmq_toc_size(), 0);
@@ -692,6 +698,7 @@ dmq_sender_main(Datum main_arg)
 					}
 					else
 					{
+						conns[conn_id].conn_start_time = dmq_now();
 						conns[conn_id].state = Connecting;
 						conns[conn_id].pos = AddWaitEventToSet(set, WL_SOCKET_CONNECTED,
 															   PQsocket(conns[conn_id].pgconn),
@@ -715,6 +722,20 @@ dmq_sender_main(Datum main_arg)
 						dmq_sender_heartbeat_hook(conns[conn_id].receiver_name,
 												  &heartbeat_buf);
 					dmq_send(conns, conn_id, heartbeat_buf.data, heartbeat_buf.len);
+				}
+				/*
+				 * Do we need to abort connection attempt due to timeout?
+				 */
+				else if (conns[conn_id].state == Connecting &&
+						 connect_timeout > 0 &&
+						 dmq_now() - conns[conn_id].conn_start_time >= connect_timeout * 1000)
+				{
+					conns[conn_id].state = Idle;
+					DeleteWaitEvent(set, conns[conn_id].pos);
+					mtm_log(DmqStateFinal,
+							"[DMQ] timed out establishing connection with %s (%s)",
+							conns[conn_id].receiver_name,
+							conns[conn_id].connstr);
 				}
 			}
 		}

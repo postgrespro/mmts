@@ -130,6 +130,7 @@ bool		MtmBackgroundWorker;
  */
 int			MtmTransSpillThreshold;
 
+int			MtmConnectTimeout;
 int			MtmHeartbeatSendTimeout;
 int			MtmHeartbeatRecvTimeout;
 char	   *MtmRefereeConnStr;
@@ -400,6 +401,21 @@ _PG_init(void)
 		return;
 
 	DefineCustomIntVariable(
+		"multimaster.connect_timeout",
+		"Maximum wait for peer connection establishment, in seconds. Semantic follows libpq connect_timeout option.",
+		NULL,
+		&MtmConnectTimeout,
+		0,
+		0,
+		INT_MAX,
+		PGC_POSTMASTER,
+		0,
+		NULL,
+		NULL,
+		NULL
+		);
+
+	DefineCustomIntVariable(
 							"multimaster.heartbeat_send_timeout",
 							"Timeout in milliseconds of sending heartbeat messages",
 							"Period of broadcasting heartbeat messages by arbiter to all nodes",
@@ -578,7 +594,7 @@ NULL);
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
 
-	dmq_init(MtmHeartbeatSendTimeout);
+	dmq_init(MtmHeartbeatSendTimeout, MtmConnectTimeout);
 	dmq_receiver_start_hook = MtmOnDmqReceiverConnect;
 	dmq_receiver_heartbeat_hook = MtmOnDmqReceiverHeartbeat;
 	dmq_receiver_stop_hook = MtmOnDmqReceiverDisconnect;
