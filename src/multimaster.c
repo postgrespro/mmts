@@ -350,11 +350,14 @@ MtmSharedShmemStartup()
 		ConditionVariableInit(&Mtm->receiver_barrier_cv);
 		ConditionVariableInit(&Mtm->receivers_cv);
 
+		Mtm->resolver_pid = InvalidPid;
+
 		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
 			Mtm->peers[i].walreceiver_pid = InvalidPid;
 			Mtm->peers[i].walsender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
+			Mtm->peers[i].dmq_receiver_pid = InvalidPid;
 
 			/*
 			 * XXX Assume that MaxBackends is the same at each node of

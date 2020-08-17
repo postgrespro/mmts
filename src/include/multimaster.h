@@ -191,6 +191,7 @@ typedef struct
 		pid_t		walsender_pid;
 		pid_t		walreceiver_pid;
 		int			dmq_dest_id;
+		pid_t		dmq_receiver_pid;
 	}			peers[MTM_MAX_NODES];
 	BgwPool		pools[MTM_MAX_NODES];	/* [Mtm->nAllNodes]: per-node data */
 
@@ -199,6 +200,7 @@ typedef struct
 	nodemask_t	walreceivers_mask;
 
 	bool	monitor_loaded;
+	bool	replier_loaded;
 } MtmShared;
 
 extern MtmShared *Mtm;

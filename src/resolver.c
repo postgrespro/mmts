@@ -49,7 +49,7 @@ ResolverWake()
 	LWLockAcquire(Mtm->lock, LW_SHARED);
 	resolver_pid = Mtm->resolver_pid;
 	LWLockRelease(Mtm->lock);
-	if (resolver_pid)
+	if (resolver_pid != InvalidPid)
 		kill(resolver_pid, SIGHUP);
 }
 

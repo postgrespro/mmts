@@ -1926,6 +1926,20 @@ MtmOnDmqReceiverConnect(char *node_name)
 	if (!Mtm->monitor_loaded)
 		mtm_log(FATAL, "mtm-monitor is not loaded yet");
 
+	/*
+	 * we can't function without replier as well: unprocessed messages will
+	 * perish and thus requester might wait for response infinitely long
+	 */
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	Mtm->peers[node_id - 1].dmq_receiver_pid = MyProcPid;
+	if (!Mtm->replier_loaded)
+	{
+		/* important, as dmq exit hook will fire before releasing all locks */
+		LWLockRelease(Mtm->lock);
+		mtm_log(FATAL, "mtm-replier is not loaded yet");
+	}
+	LWLockRelease(Mtm->lock);
+
 	/* do not hold lock for mtm.cluster_nodes */
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_LOCKS,
@@ -3157,6 +3171,28 @@ got_message:
 	handle_1a_batch(txset);
 }
 
+static void
+ReplierOnExit(int status, Datum arg)
+{
+	int i;
+
+	/*
+	 * kill all existing dmq receivers and forbid to start new ones: without
+	 * replier requests will be lost and so requester will hang waiting for
+	 * answer
+	 */
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	Mtm->replier_loaded = false;
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		pid_t pid = Mtm->peers[i].dmq_receiver_pid;
+		if (pid != InvalidPid)
+			kill(pid, SIGTERM);
+	}
+	LWLockRelease(Mtm->lock);
+	mtm_log(MtmStateMessage, "replier exiting");
+}
+
 void
 ReplierMain(Datum main_arg)
 {
@@ -3170,6 +3206,7 @@ ReplierMain(Datum main_arg)
 	bool	job_pending;
 
 	MtmBackgroundWorker = true;
+	before_shmem_exit(ReplierOnExit, (Datum) 0);
 	mtm_log(MtmStateMessage, "replier started");
 
 	/*
@@ -3191,6 +3228,8 @@ ReplierMain(Datum main_arg)
 								  (Datum) 0);
 
 	dmq_stream_subscribe("reqresp");
+	/* now that we are subscribed allow to start dmq receivers */
+	Mtm->replier_loaded = true;
 
 	for (;;)
 	{
