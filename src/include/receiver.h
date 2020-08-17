@@ -43,6 +43,8 @@ typedef struct
 	bool				bdr_like;
 } MtmReceiverWorkerContext;
 
+extern void MtmWakeupReceivers(void);
+
 extern void MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx);
 extern void ApplyCancelHandler(SIGNAL_ARGS);
 extern void MtmUpdateLsnMapping(int node_id, XLogRecPtr end_lsn);

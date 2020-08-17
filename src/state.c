@@ -1837,7 +1837,7 @@ MtmSetReceiveMode(uint32 mode)
 	pg_atomic_write_u32(&mtm_state->receive_mode, mode);
 	/* waking up receivers while disabled is not dangerous but pointless */
 	if (mode != RECEIVE_MODE_DISABLED)
-		ConditionVariableBroadcast(&Mtm->receivers_cv);
+		MtmWakeupReceivers();
 	mtm_log(MtmStateDebug, "receive mode set to %s", MtmReceiveModeMnem(mode));
 }
 
@@ -2024,7 +2024,7 @@ MtmOnDmqReceiverDisconnect(char *node_name)
 	int			node_id;
 	nodemask_t old_connected_mask;
 	bool changed = false;
-	pid_t walreceiver_pid;
+	pid_t walreceiver_pid = InvalidPid;
 
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
@@ -2049,10 +2049,11 @@ MtmOnDmqReceiverDisconnect(char *node_name)
 	 * doesn't even obey wal_receiver_timeout and might hang infinitely or,
 	 * more likely, until the kernel gives up sending the feedback ~ 15
 	 * minutes by default)
-	 *
 	 */
-	LWLockAcquire(Mtm->lock, LW_SHARED);
-	walreceiver_pid = Mtm->peers[node_id - 1].walreceiver_pid;
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	Mtm->peers[node_id - 1].dmq_receiver_pid = InvalidPid;
+	if (Mtm->peers[node_id - 1].walreceiver_proc)
+		walreceiver_pid = Mtm->peers[node_id - 1].walreceiver_proc->pid;
 	LWLockRelease(Mtm->lock);
 	if (walreceiver_pid != InvalidPid)
 		kill(walreceiver_pid, SIGTERM);
@@ -2301,7 +2302,6 @@ mtm_node_info(PG_FUNCTION_ARGS)
 	nodemask_t	connected = MtmGetConnectedMaskWithMe(false);
 
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
-
 	if (node_id == Mtm->my_node_id)
 		enabled = MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE;
 	else
@@ -2309,11 +2309,13 @@ mtm_node_info(PG_FUNCTION_ARGS)
 		uint64 loi = pg_atomic_read_u64(&mtm_state->others_last_online_in[node_id - 1]);
 		enabled = MtmGetCurrentGenNum() == loi;
 	}
+	LWLockRelease(mtm_state->gen_lock);
 
 	values[Anum_mtm_node_info_enabled - 1] = BoolGetDatum(enabled);
 	values[Anum_mtm_node_info_connected - 1] =
 		BoolGetDatum(BIT_CHECK(connected, node_id - 1));
 
+	LWLockAcquire(Mtm->lock, LW_SHARED);
 	if (Mtm->peers[node_id - 1].walsender_pid != InvalidPid)
 	{
 		values[Anum_mtm_node_info_sender_pid - 1] =
@@ -2324,10 +2326,10 @@ mtm_node_info(PG_FUNCTION_ARGS)
 		nulls[Anum_mtm_node_info_sender_pid - 1] = true;
 	}
 
-	if (Mtm->peers[node_id - 1].walreceiver_pid != InvalidPid)
+	if (Mtm->peers[node_id - 1].walreceiver_proc)
 	{
 		values[Anum_mtm_node_info_receiver_pid - 1] =
-			Int32GetDatum(Mtm->peers[node_id - 1].walreceiver_pid);
+			Int32GetDatum(Mtm->peers[node_id - 1].walreceiver_proc->pid);
 		values[Anum_mtm_node_info_n_workers - 1] =
 			Int32GetDatum(Mtm->pools[node_id - 1].nWorkers);
 		values[Anum_mtm_node_info_receiver_mode - 1] =
@@ -2339,8 +2341,7 @@ mtm_node_info(PG_FUNCTION_ARGS)
 		nulls[Anum_mtm_node_info_n_workers - 1] = true;
 		nulls[Anum_mtm_node_info_receiver_mode - 1] = true;
 	}
-
-	LWLockRelease(mtm_state->gen_lock);
+	LWLockRelease(Mtm->lock);
 
 	get_call_result_type(fcinfo, NULL, &desc);
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(desc, values, nulls)));

@@ -308,7 +308,7 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 		 * if we are in recovery, ping non-donor receivers that they might
 		 * succeed in advancing the slot.
 		 */
-		ConditionVariableBroadcast(&Mtm->receivers_cv);
+		MtmWakeupReceivers();
 	}
 }
 

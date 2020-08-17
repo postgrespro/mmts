@@ -348,13 +348,11 @@ MtmSharedShmemStartup()
 		pg_atomic_init_u64(&Mtm->configured_mask, 0);
 
 		ConditionVariableInit(&Mtm->receiver_barrier_cv);
-		ConditionVariableInit(&Mtm->receivers_cv);
 
 		Mtm->resolver_pid = InvalidPid;
 
 		for (i = 0; i < MTM_MAX_NODES; i++)
 		{
-			Mtm->peers[i].walreceiver_pid = InvalidPid;
 			Mtm->peers[i].walsender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
 			Mtm->peers[i].dmq_receiver_pid = InvalidPid;

@@ -215,14 +215,11 @@ MtmMaybeAdvanceSlot(MtmReceiverContext *rctx, char *conninfo)
 	rctx->wrconn = NULL;
 
 	/*
-	 * This function is called inside ConditionVariableSleep loop. However,
-	 * libpqwalreceiver calls above have WaitLatch inside, and if someone had
-	 * ConditionVariableBroadcast us while we were waiting there, of course we
-	 * won't requeue us into cv wakeup list as loop in ConditionVariableSleep
-	 * does, which means next cv sleep will be eternal. Force requeuing to
-	 * avoid this.
+	 * libpqwalreceiver calls above have WaitLatch/ResetLatch inside so we
+	 * could have swallowed SetLatch awaited by the outer code -- set it to
+	 * avoid infinite sleeping.
 	 */
-	ConditionVariableCancelSleep();
+	SetLatch(MyLatch);
 }
 
 /*
@@ -473,6 +470,22 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 	receiver_mtm_cfg_valid = false;
 }
 
+void
+MtmWakeupReceivers(void)
+{
+	int i;
+
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		PGPROC *proc = Mtm->peers[i].walreceiver_proc;
+
+		if (proc)
+			SetLatch(&proc->procLatch);
+	}
+	LWLockRelease(Mtm->lock);
+}
+
 static void
 pglogical_receiver_at_exit(int status, Datum arg)
 {
@@ -535,10 +548,10 @@ pglogical_receiver_at_exit(int status, Datum arg)
 		Mtm->nreceivers_recovery--;
 	else if (rctx->w.mode == REPLMODE_NORMAL)
 		Mtm->nreceivers_normal--;
-	Mtm->peers[rctx->w.sender_node_id - 1].walreceiver_pid = InvalidPid;
+	Mtm->peers[rctx->w.sender_node_id - 1].walreceiver_proc = NULL;
 	BIT_CLEAR(Mtm->walreceivers_mask, rctx->w.sender_node_id - 1);
 	LWLockRelease(Mtm->lock);
-	ConditionVariableBroadcast(&Mtm->receivers_cv);
+	MtmWakeupReceivers();
 }
 
 void
@@ -629,13 +642,20 @@ pglogical_receiver_main(Datum main_arg)
 		char	   *err;
 		PGconn	   *conn;
 
+		/* announce that we must be wakened in MtmWakeupReceivers */
+		LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+		Mtm->peers[sender - 1].walreceiver_proc = MyProc;
+		LWLockRelease(Mtm->lock);
+
 		/*
 		 * Determine how we should pull and ensure we won't interfere with
 		 * other receivers.
 		 */
 		for (;;)
 		{
+			int rc;
 			MtmReplicationMode mode = MtmGetReceiverMode(sender);
+
 			LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
 			if ((mode == REPLMODE_RECOVERY &&
 				 Mtm->nreceivers_recovery == 0 && Mtm->nreceivers_normal == 0) ||
@@ -645,7 +665,6 @@ pglogical_receiver_main(Datum main_arg)
 					Mtm->nreceivers_recovery++;
 				else
 					Mtm->nreceivers_normal++;
-				Mtm->peers[sender - 1].walreceiver_pid = MyProcPid;
 				Mtm->peers[sender - 1].receiver_mode = mode;
 				BIT_SET(Mtm->walreceivers_mask, rctx->w.sender_node_id - 1);
 				rctx->w.mode = mode;
@@ -664,9 +683,18 @@ pglogical_receiver_main(Datum main_arg)
 			 */
 			MtmMaybeAdvanceSlot(rctx, conninfo);
 
-			ConditionVariableSleep(&Mtm->receivers_cv, PG_WAIT_EXTENSION);
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_POSTMASTER_DEATH,
+						   0, PG_WAIT_EXTENSION);
+
+			/* Emergency bailout if postmaster has died */
+			if (rc & WL_POSTMASTER_DEATH)
+				proc_exit(1);
+
+			if (rc & WL_LATCH_SET)
+				ResetLatch(MyLatch);
+			mtm_log(LOG, "waked up while waiting for receiver mode");
 		}
-		ConditionVariableCancelSleep();
 		mtm_log(MtmReceiverStart, "registered as running in %s mode",
 				MtmReplicationModeMnem[rctx->w.mode]);
 
@@ -1045,9 +1073,9 @@ pglogical_receiver_main(Datum main_arg)
 			}
 
 			/* pedantically wake up when time for ping comes */
-			wait_time = (long) (rctx->last_send_time +
+			wait_time = (long) ((rctx->last_send_time +
 								wal_receiver_status_interval * USECS_PER_SEC -
-								GetCurrentTimestamp());
+								 GetCurrentTimestamp()) / 1000);
 			if (wait_time <= 0)
 				continue;
 			/* no data, wait for it */

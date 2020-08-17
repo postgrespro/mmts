@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "storage/lwlock.h"
+#include "storage/proc.h"
 #include "access/xact.h"
 
 #include "bgwpool.h"
@@ -169,13 +170,10 @@ typedef struct
 
 	/*
 	 * These 1) ensure that receiver in REPLMODE_RECOVERY excludes any other
-	 * receiver (to avoid applying the same record twice) 2) wake receivers
-	 * on mtm_state->receive_mode change.
-	 *
-	 * Counters are protected by Mtm->lock; it could be separate as well, but
-	 * there is no contention.
+	 * receiver (to avoid applying the same record twice). Counters are
+	 * protected by Mtm->lock; it could be separate as well, but there is no
+	 * contention.
 	 */
-	ConditionVariable receivers_cv;
 	int nreceivers_recovery;
 	int nreceivers_normal;
 
@@ -189,7 +187,7 @@ typedef struct
 		 */
 		MtmReplicationMode receiver_mode;
 		pid_t		walsender_pid;
-		pid_t		walreceiver_pid;
+		PGPROC		*walreceiver_proc;
 		int			dmq_dest_id;
 		pid_t		dmq_receiver_pid;
 	}			peers[MTM_MAX_NODES];
