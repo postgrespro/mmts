@@ -34,6 +34,8 @@ if [ "$1" = 'postgres' ]; then
                         multimaster.max_workers = 30
 
 			multimaster.connect_timeout = 10
+			wal_sender_timeout = 10min
+			wal_receiver_status_interval = 10s
 		EOF
 
 		if [ -n "$MAJOR" ]; then

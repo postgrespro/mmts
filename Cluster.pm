@@ -56,6 +56,7 @@ sub init
 			listen_addresses = '127.0.0.1'
 			max_connections = 50
 			log_line_prefix = '%m [%p] %i '
+			log_statement = all
 
 			shared_preload_libraries = 'multimaster, pg_pathman'
 
@@ -63,7 +64,17 @@ sub init
 			max_worker_processes = 320
 			max_wal_senders = 6
 			max_replication_slots = 12
-			wal_sender_timeout = 0
+
+			# walsender-walreceiver keepalives
+			wal_sender_timeout = 10min
+			wal_receiver_status_interval = 10s
+
+			# how often receivers restart
+			wal_retrieve_retry_interval = 2s
+
+			# uncomment to disable checkpoints
+			# checkpoint_timeout = 1d
+			# max_wal_size = 1TB
 
 			multimaster.heartbeat_send_timeout = 100
 			multimaster.heartbeat_recv_timeout = 5000
