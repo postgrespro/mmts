@@ -98,6 +98,7 @@ my $pid0 = $cluster->safe_psql(0, "SELECT pid FROM pg_stat_activity
 note("Simulate hard crash of a backend by SIGKILL to $pid0");
 kill -9, $pid0;
 
+$cluster->pgbench_await($pgb1);
 $cluster->await_nodes( (0,1,2) );
 is($cluster->is_data_identic( (0,1,2) ), 1, "check consistency after crash");
 
@@ -152,4 +153,3 @@ $cluster->safe_psql(0, "
 ");
 
 $cluster->stop();
-

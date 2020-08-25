@@ -1,4 +1,5 @@
-# run sql/multimaster.sql tests
+# run core regression tests on multimaster
+
 use Cluster;
 use File::Basename;
 use IPC::Run 'run';

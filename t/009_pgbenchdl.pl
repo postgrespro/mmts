@@ -1,5 +1,5 @@
-# Kinda bank test: on each node multiple clients transfer money from one acc to
-# another, another bunch of clients make sure sum is constant always.
+# Like pgbench.pl, but the probability of deadlocks is much higher; check that
+# they get detected.
 
 use strict;
 use warnings;
@@ -39,24 +39,26 @@ sub isalive {
 	return $any_alive;
 }
 
+# ensure num of successfull xacts steadily goes up, i.e. deadlocks are detected
+# in time.
 my $ptrans = 0;
 my $dead_count = 0;
 while (isalive(\@benches)) {
 	my $trans = $cluster->safe_psql(0,
 		"select count(*) from transactions");
-	if($ptrans == 0){
+	if ($ptrans == 0) {
 		$ptrans = $trans;
-	} elsif($ptrans == $trans){
+	} elsif ($ptrans == $trans) {
 		$dead_count++;
 	} else {
 		$dead_count = 0;
 		$ptrans = $trans;
 	}
-	if ($dead_count >=3){
+	if ($dead_count >=3) {
 		last;
 	}
 	sleep 2;
 }
 
-ok($dead_count<3);
+ok($dead_count < 3, 'at least one xact was committed during 6 seconds');
 $cluster->stop;

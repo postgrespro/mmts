@@ -1,5 +1,9 @@
-# PGPRO-2950
-# Simple test for restore pg_dump backups with psql
+# Simple test restoring single instance pg_dump backup into multimaster.
+#
+# Note that is was created after an extremely narrow PGPRO-2950 issue of setting
+# search_path to an empty string (which could actually be done in much simpler
+# test directly). Generally there shouldn't be anything specific in mm handling
+# of pg_dump dumps.
 
 use strict;
 use warnings;

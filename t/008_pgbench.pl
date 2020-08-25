@@ -40,6 +40,6 @@ is($out, 0, "there is nothing except zeros in reader_log");
 
 $out = $cluster->safe_psql(0,
 	"select count(*) from reader_log where v = 0");
-isnt($out, 0, "there are some zeros in reader_log");
+isnt($out, 0, "reader_log is not empty");
 
 $cluster->stop;

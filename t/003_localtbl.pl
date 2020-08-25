@@ -1,4 +1,6 @@
-# simple deadlock test
+# Check local table, added after PGPRO-2883.
+# ars: looks too specific in its current shape. At least local table
+# modifications should be added
 
 use strict;
 use warnings;
