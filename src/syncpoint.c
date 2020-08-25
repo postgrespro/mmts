@@ -48,6 +48,8 @@
 
 int			MtmSyncpointInterval;  /* in kilobytes */
 
+PG_FUNCTION_INFO_V1(update_recovery_horizons);
+
 /* XXX: change to some receiver-local structures */
 static int
 origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
@@ -140,9 +142,9 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 
 	/* Start tx */
 	StartTransactionCommand();
+	PushActiveSnapshot(GetTransactionSnapshot());
 	if (SPI_connect() != SPI_OK_CONNECT)
 		mtm_log(ERROR, "could not connect using SPI");
-	PushActiveSnapshot(GetTransactionSnapshot());
 
 	/*
 	 * Log mark that this is bdr-like transaction: plain COMMIT will be
@@ -176,6 +178,9 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 
 	/* Finish transaction */
 	SPI_finish();
+
+	UpdateRecoveryHorizons();
+
 	PopActiveSnapshot();
 	CommitTransactionCommand();
 
@@ -390,6 +395,67 @@ GetRecoveryHorizon(int sender_node_id)
 	return horizon;
 }
 
+/*
+ * receiver needs the horizon to report to walsender, however running SPI for
+ * each report is too expensive, so put current positions in shmem for faster
+ * retrieval.
+ */
+void
+UpdateRecoveryHorizons(void)
+{
+	int			rc;
+
+	if (SPI_connect() != SPI_OK_CONNECT)
+		mtm_log(ERROR, "could not connect using SPI");
+	PushActiveSnapshot(GetTransactionSnapshot());
+
+	/* Load latest checkpoint for given node */
+	rc = SPI_execute("select node_id, horizon from mtm.get_recovery_horizons();",
+					 true, 0);
+
+	if (rc == SPI_OK_SELECT)
+	{
+		TupleDesc	tupdesc = SPI_tuptable->tupdesc;
+		int			i;
+
+		Assert(SPI_processed <= MTM_MAX_NODES);
+		for (i = 0; i < SPI_processed; i++)
+		{
+			HeapTuple	tup = SPI_tuptable->vals[i];
+			bool		isnull;
+			int			node_id;
+			XLogRecPtr	horizon;
+
+			node_id = DatumGetInt32(SPI_getbinval(tup, tupdesc, 1, &isnull));
+			Assert(!isnull);
+			Assert(TupleDescAttr(tupdesc, 0)->atttypid == INT4OID);
+			Assert(node_id > 0 && node_id <= MTM_MAX_NODES);
+
+			horizon = DatumGetLSN(SPI_getbinval(tup, tupdesc, 2, &isnull));
+			Assert(!isnull);
+			Assert(TupleDescAttr(tupdesc, 1)->atttypid == LSNOID);
+
+			/*
+			 * races around this might in theory set the value backwards, but
+			 * there is nothing scary in that
+			 */
+			pg_atomic_write_u64(&Mtm->peers[node_id - 1].horizon, horizon);
+		}
+	}
+	else
+	{
+		mtm_log(ERROR, "get_recovery_horizons failed, rc %d", rc);
+	}
+
+	SPI_finish();
+}
+
+Datum
+update_recovery_horizons(PG_FUNCTION_ARGS)
+{
+	UpdateRecoveryHorizons();
+	PG_RETURN_VOID();
+}
 
 /*
  * Load filter

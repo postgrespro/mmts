@@ -356,6 +356,7 @@ MtmSharedShmemStartup()
 			Mtm->peers[i].walsender_pid = InvalidPid;
 			Mtm->peers[i].dmq_dest_id = -1;
 			Mtm->peers[i].dmq_receiver_pid = InvalidPid;
+			pg_atomic_init_u64(&Mtm->peers[i].horizon, InvalidXLogRecPtr);
 
 			/*
 			 * XXX Assume that MaxBackends is the same at each node of

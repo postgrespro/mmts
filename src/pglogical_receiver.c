@@ -123,7 +123,7 @@ sendFeedback(MtmReceiverContext *rctx, bool force)
 	if (!force && wal_receiver_status_interval <= 0)
 		return;
 
-	flush_pos = GetRecoveryHorizon(rctx->w.sender_node_id);
+	flush_pos = pg_atomic_read_u64(&Mtm->peers[rctx->w.sender_node_id - 1].horizon);
 
 	now = GetCurrentTimestamp();
 	/*

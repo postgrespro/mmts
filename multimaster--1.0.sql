@@ -247,6 +247,10 @@ COMMENT ON TABLE mtm.syncpoints IS
     landed at >= receiver_lsn locally -- this is used by other nodes to report
     origin changes to receiver node';
 
+CREATE FUNCTION update_recovery_horizons() returns void
+  AS 'MODULE_PATHNAME','update_recovery_horizons'
+  LANGUAGE C;
+
 -- for debugging
 CREATE FUNCTION mtm.syncpoints_trigger_f() RETURNS trigger AS $$
 BEGIN
@@ -255,6 +259,9 @@ BEGIN
     RETURN OLD;
   ELSE
     RAISE LOG 'inserting syncpoint row: %', NEW;
+    -- others info about syncpoints apply allow to advance our horizons, so
+    -- it makes sense to update them here, not only sp apply
+    PERFORM mtm.update_recovery_horizons();
     RETURN NEW;
   END IF;
 END
@@ -304,7 +311,7 @@ CREATE FUNCTION mtm.translate_syncpoint(origin_node_id int, origin_lsn pg_lsn,
           s.receiver_node_id = emitter_node_id AND
           s.origin_lsn <= translate_syncpoint.origin_lsn
     ORDER BY origin_lsn DESC LIMIT 1
-$$ LANGUAGE sql;
+$$ LANGUAGE sql STABLE;
 
 -- Latest syncpoint to and from each node: up to which origin_lsn
 -- receiver_node_id applied *all* transactions of origin_node_id?
@@ -360,8 +367,16 @@ CREATE FUNCTION mtm.get_recovery_horizon(sender_node_id int) RETURNS pg_lsn AS $
                                '0/0'::pg_lsn)
                  END)
   FROM mtm.latest_syncpoints
-  WHERE receiver_node_id=mtm.my_node_id();
-$$ LANGUAGE sql;
+  WHERE receiver_node_id = mtm.my_node_id();
+$$ LANGUAGE sql STABLE;
+
+CREATE FUNCTION mtm.get_recovery_horizons(OUT node_id int, OUT horizon pg_lsn)
+RETURNS SETOF record AS $$
+  SELECT n.id, mtm.get_recovery_horizon(n.id)
+  FROM mtm.cluster_nodes n
+  WHERE n.id != mtm.my_node_id();
+$$ LANGUAGE sql STABLE;
+
 
 /*
  * old syncpoints cleanup support

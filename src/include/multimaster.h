@@ -190,6 +190,10 @@ typedef struct
 		PGPROC		*walreceiver_proc;
 		int			dmq_dest_id;
 		pid_t		dmq_receiver_pid;
+		/*
+		 * which LSN we should ack to this node? caches get_recovery_horizon
+		 */
+		pg_atomic_uint64 horizon;
 	}			peers[MTM_MAX_NODES];
 	BgwPool		pools[MTM_MAX_NODES];	/* [Mtm->nAllNodes]: per-node data */
 

@@ -43,6 +43,7 @@ extern void SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 extern Syncpoint SyncpointGetLatest(int origin_node_id);
 extern Syncpoint *SyncpointGetAllLatest(int sender_node_id);
 extern XLogRecPtr GetRecoveryHorizon(int sender_node_id);
+extern void UpdateRecoveryHorizons(void);
 extern HTAB *RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg);
 
 extern char* pg_lsn_out_c(XLogRecPtr lsn);
