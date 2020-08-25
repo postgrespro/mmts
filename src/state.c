@@ -3570,9 +3570,6 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	logical_slot = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 	filter_slot_name = psprintf(MULTIMASTER_FILTER_SLOT_PATTERN, node_id);
 
-	/* detach incoming queues from this node */
-	dmq_detach_receiver(dmq_name);
-
 	/*
 	 * Disable this node by terminating receiver. It shouldn't came back
 	 * online as dmq-receiver check node_id presense in mtm.cluster_nodes.
