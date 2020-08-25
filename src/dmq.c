@@ -231,6 +231,20 @@ struct
 	}			inhandles[DMQ_MAX_RECEIVERS];
 }			dmq_local;
 
+/* hack: copy definition to get inside with our dirty hands */
+typedef struct
+{
+	slock_t		mq_mutex;
+	PGPROC	   *mq_receiver;
+	PGPROC	   *mq_sender;
+	pg_atomic_uint64 mq_bytes_read;
+	pg_atomic_uint64 mq_bytes_written;
+	Size		mq_ring_size;
+	bool		mq_detached;
+	uint8		mq_ring_offset;
+	char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
+} my_shm_mq;
+
 /* Flags set by signal handlers */
 static volatile sig_atomic_t got_SIGHUP = false;
 
@@ -926,19 +940,7 @@ shm_mq_available(shm_mq_handle *mqh)
 	uint64		used;
 	Size		ringsize;
 
-	/* redefine this structure in extension */
-	struct
-	{
-		slock_t		mq_mutex;
-		PGPROC	   *mq_receiver;
-		PGPROC	   *mq_sender;
-		pg_atomic_uint64 mq_bytes_read;
-		pg_atomic_uint64 mq_bytes_written;
-		Size		mq_ring_size;
-		bool		mq_detached;
-		uint8		mq_ring_offset;
-		char		mq_ring[FLEXIBLE_ARRAY_MEMBER];
-	} *mq = (void *) shm_mq_get_queue(mqh);
+	my_shm_mq *mq = (void *) shm_mq_get_queue(mqh);
 
 	/* Compute number of ring buffer bytes used and available. */
 	rb = pg_atomic_read_u64(&mq->mq_bytes_read);
@@ -1066,7 +1068,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 		 * This ought to be fixed actually.
 		 */
 		mtm_log(COMMERROR,
-				"[DMQ] subscription %s is not found (body = %s)",
+				"[DMQ] subscription %s is not found (body = %s), dropping message",
 				stream_name, body);
 		return;
 	}
@@ -1076,7 +1078,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	 * waiting for SIGHUP. This is needed to maintain the basic 'message
 	 * arrived after dmq_stream_subscribe finished and connection is good =>
 	 * must pass the message' idea. This is e.g. critical for permanent
-	 * stream subscribers like monitor in mtm.
+	 * stream subscribers like replier in mtm.
 	 * procno_gen is ever updated by me, so it is safe to look at it without
 	 * locks.
 	 */
@@ -1557,6 +1559,7 @@ ensure_outq_handle()
 	shm_toc    *toc;
 	shm_mq	   *outq;
 	MemoryContext oldctx;
+	my_shm_mq *my_mq;
 
 
 	if (dmq_local.mq_outh != NULL)
@@ -1577,6 +1580,13 @@ ensure_outq_handle()
 				 errmsg("bad magic number in dynamic shared memory segment")));
 
 	outq = shm_toc_lookup(toc, MyProc->pgprocno, false);
+	/*
+	 * XXXX since we overwrite mq in-place, there is a race with an unlikely
+	 * outcome of assertion failure inside shm_mq_set_sender if dmq sender
+	 * hasn't managed to zero out the queue yet.
+	 */
+	my_mq = (my_shm_mq *) outq;
+	my_mq->mq_sender = NULL;
 	shm_mq_set_sender(outq, MyProc);
 
 	oldctx = MemoryContextSwitchTo(TopMemoryContext);
