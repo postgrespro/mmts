@@ -12,10 +12,14 @@ import datetime
 import docker
 import warnings
 import pprint
+import logging.config
+import logging
 
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
 from lib.test_helper import *
+logging.config.fileConfig('lib/logging.conf')
+log = logging.getLogger('syncpoint')
 
 
 class RecoveryTest(unittest.TestCase, TestHelper):
@@ -53,10 +57,10 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def setUp(self):
         warnings.simplefilter("ignore", ResourceWarning)
         time.sleep(20)
-        print('Start new test at ', datetime.datetime.utcnow())
+        log.info('Start new test')
 
     def tearDown(self):
-        print('Finish test at ', datetime.datetime.utcnow())
+        log.info('Finish test')
 
     # Returns the newest wal
     def _get_last_wal(self, dsn):
@@ -94,11 +98,13 @@ class RecoveryTest(unittest.TestCase, TestHelper):
                   iteration_sleep=20,
                   iterations=1000):
         last_wals_initial = self._get_last_wals(dsns)
-        print("waiting for wal, last_wals_initial={}, first_wals={}".format(last_wals_initial, self._get_first_wals(dsns)))
+        log.debug("waiting for wal, last_wals_initial={}, first_wals={}"
+                  .format(last_wals_initial, self._get_first_wals(dsns)))
         for j in range(iterations):
             time.sleep(iteration_sleep)
             last_wals = self._get_last_wals(dsns)
-            print("waiting for wal, last_wals={}, first_wals={}".format(last_wals, self._get_first_wals(dsns)))
+            log.debug("waiting for wal, last_wals={}, first_wals={}"
+                      .format(last_wals, self._get_first_wals(dsns)))
             # xxx: this is only correct for first 4GB of WAL due to the hole in
             # WAL file naming
             if all(int(lw, 16) - int(lw_i, 16) >= wals_to_pass
@@ -107,11 +113,38 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
         raise AssertionError('timed out while waiting for wal')
 
+    def _chk_rec_trim(self, dsn, other_dsns, iteration_sleep=2,
+                      iterations=1000):
+        log.info('checking if wals were trimmed during recovery')
+        dsns = other_dsns + [dsn]
+        first_wals_before = self._get_first_wals(dsns)
+        first_wals = []
+        wals_trimmed = False
+        status = ''
+        for j in range(iterations):
+            time.sleep(iteration_sleep)
+            last_wals = self._get_last_wals(dsns)
+            first_wals = self._get_first_wals(dsns)
+            status = self.nodeSelect(dsn,
+                                     'SELECT status from mtm.status()')[0][0]
+            log.debug("status: %s" % status)
+            log.debug('first wals - %s, ' % first_wals)
+            log.debug('last wals - %s' % last_wals)
+            if status == 'online':
+                break
+            wals_trimmed = wals_trimmed or all(b<a for (b,a) in zip(
+                first_wals_before, first_wals))
+        if status != 'online':
+            raise Exception('timed out waiting for online status')
+        if not wals_trimmed:
+            raise Exception(
+                'wals were not trimmed during recovery, fw_before: %s, fw: %s'
+                % (first_wals_before, first_wals))
+        return
+
     def test_syncpoints(self):
-        print('### test_syncpoints ###')
-        print('Stopping client')
+        log.info('### test_syncpoints ###')
         self.client.stop()
-        print('Client stopped')
 
         # disable fsync for faster test execution
         # checkpoint ensures wal we expect to be removed in the first test is
@@ -120,7 +153,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.nodeExecute(dsn, ["ALTER SYSTEM SET fsync = 'off'",
                                    "SELECT pg_reload_conf()",
                                    "CHECKPOINT"])
-        print('fsync is turned off')
+        log.debug('fsync is turned off')
         time.sleep(5)
 
         # check that wals are trimmed when everyone is online
@@ -139,22 +172,27 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         # now check that wal is preserved if some node is offline
         self.client.stop()
         failure = CrashRecoverNode('node3')
-        print('putting node 3 down')
+        log.info('putting node 3 down')
         failure.start()
         # getting first_wals here would be too strict -- unlikely, but probably
         # there is some WAL which is not needed by offline node
         slot_wals_before = self._get_slot_wals(self.dsns[:2], 3)
         self.client.bgrun()
-        self._wait_wal(self.dsns[:2])
+        self._wait_wal(self.dsns[:2], 10)
         first_wals_after = self._get_first_wals(self.dsns[:2])
         if not all(b >= a for (b, a) in zip(slot_wals_before, first_wals_after)):
             raise AssertionError('segments on some nodes were trimmed in degraded mode: before={}, after={}'.format(slot_wals_before, first_wals_after))
 
-        print('getting node 3 up')
+        log.info('getting node 3 up')
         failure.stop()
-        time.sleep(20)
-        self.client.stop()
+        # This allows to connect to MM node during recovery
+        recovery_dsn = self.dsns[2]+' application_name=mtm_admin'
+        # Wait for node becomes accessible (in recovery mode)
+        self.awaitOnline(recovery_dsn)
+        self._chk_rec_trim(recovery_dsn, self.dsns[:2])
         self.awaitOnline(self.dsns[2])
+        # Now stop client
+        self.client.stop()
 
 
 if __name__ == '__main__':
