@@ -208,7 +208,7 @@ class TestHelper(object):
 
     @staticmethod
     def nodeSelect(dsn, statement):
-        con = psycopg2.connect(dsn + " connect_timeout=1")
+        con = psycopg2.connect(dsn + " connect_timeout=20")
         try:
             cur = con.cursor()
             cur.execute(statement)

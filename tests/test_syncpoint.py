@@ -183,6 +183,15 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         if not all(b >= a for (b, a) in zip(slot_wals_before, first_wals_after)):
             raise AssertionError('segments on some nodes were trimmed in degraded mode: before={}, after={}'.format(slot_wals_before, first_wals_after))
 
+        # re-run client in weak mode to allow node to recover
+        # (but don't stop it completely to make test harder)
+        self.client.stop()
+        numworkers = {
+            'transfer': 1,
+            'sumtotal': 1,
+            'inserter': 1
+        }
+        self.client.bgrun(numworkers=numworkers)
         log.info('getting node 3 up')
         failure.stop()
         # This allows to connect to MM node during recovery

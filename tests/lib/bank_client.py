@@ -417,16 +417,16 @@ class MtmClient(object):
             #         print(pxact[i], end="\t")
             #     print("\n")
 
-    def run(self):
+    def run(self, numworkers):
         # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         self.loop = asyncio.get_event_loop()
 
         for i, _ in enumerate(self.dsns):
-            for j in range(1):
+            for j in range(numworkers['transfer']):
                 self.loop.create_task(self.exec_tx(self.transfer_tx, i, 'transfer', j))
-            self.loop.create_task(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
-            asyncio.ensure_future(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
-            for j in range(10):
+            for j in range(numworkers['sumtotal']):
+                self.loop.create_task(self.exec_tx(self.total_tx, i, 'sumtotal', 0))
+            for j in range(numworkers['inserter']):
                 self.loop.create_task(self.exec_tx(self.insert_tx, i, 'inserter', j))
 
         self.loop.create_task(self.status())
@@ -437,13 +437,20 @@ class MtmClient(object):
         finally:
              self.loop.close()
 
-    def bgrun(self):
+    def bgrun(self, numworkers=None):
         print('Starting evloop in different process')
 
+        # default number of workers
+        if numworkers is None:
+            numworkers = {
+                'transfer': 1,
+                'sumtotal': 1,
+                'inserter': 10
+            }
         self.running = True
 
         self.parent_pipe, self.child_pipe = aioprocessing.AioPipe()
-        self.evloop_process = multiprocessing.Process(target=self.run, args=())
+        self.evloop_process = multiprocessing.Process(target=self.run, args=(numworkers,))
         self.evloop_process.start()
 
     # returns list indexed by node id - 1; each member is dict
