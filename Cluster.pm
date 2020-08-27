@@ -78,6 +78,8 @@ sub init
 
 			multimaster.heartbeat_send_timeout = 100
 			multimaster.heartbeat_recv_timeout = 5000
+
+			multimaster.syncpoint_interval = 10MB
 		});
 
 		if (defined $self->{referee})

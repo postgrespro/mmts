@@ -161,11 +161,11 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 
 	/* Save syncpoint */
 	sql = psprintf("insert into mtm.syncpoints values "
-				   "(%d, '%s', %d, '%s') "
+				   "(%d, %d, '%s', '%s') "
 				   "on conflict do nothing",
+				   Mtm->my_node_id,
 				   origin_node_id,
 				   pg_lsn_out_c(origin_lsn),
-				   Mtm->my_node_id,
 				   pg_lsn_out_c(receiver_lsn)
 		);
 	rc = SPI_execute(sql, false, 0);

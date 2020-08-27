@@ -788,10 +788,10 @@
      FROM view_base_table
     GROUP BY view_base_table.key
    HAVING (length((view_base_table.data)::text) > 0);
-+ latest_syncpoints| SELECT node_id_pairs.origin_node_id,
++ latest_syncpoints| SELECT node_id_pairs.receiver_node_id,
++     node_id_pairs.origin_node_id,
 +     COALESCE(ls.origin_lsn, '0/0'::pg_lsn) AS origin_lsn,
-+     node_id_pairs.receiver_node_id,
-+     COALESCE(mtm.translate_syncpoint(node_id_pairs.origin_node_id, ls.origin_lsn, node_id_pairs.receiver_node_id),
++     COALESCE((mtm.translate_syncpoint(node_id_pairs.origin_node_id, ls.origin_lsn, node_id_pairs.receiver_node_id)).emitter_lsn,
 +         CASE
 +             WHEN (node_id_pairs.receiver_node_id = mtm.my_node_id()) THEN ( SELECT pg_replication_slots.restart_lsn
 +                FROM pg_replication_slots
@@ -803,13 +803,13 @@
 +            FROM mtm.cluster_nodes n1,
 +             mtm.cluster_nodes n2
 +           WHERE (n1.id <> n2.id)) node_id_pairs
-+      LEFT JOIN ( SELECT DISTINCT ON (syncpoints.origin_node_id, syncpoints.receiver_node_id) syncpoints.origin_node_id,
++      LEFT JOIN ( SELECT DISTINCT ON (syncpoints.receiver_node_id, syncpoints.origin_node_id) syncpoints.receiver_node_id,
++             syncpoints.origin_node_id,
 +             syncpoints.origin_lsn,
-+             syncpoints.receiver_node_id,
 +             syncpoints.receiver_lsn
 +            FROM mtm.syncpoints
-+           ORDER BY syncpoints.origin_node_id, syncpoints.receiver_node_id, syncpoints.origin_lsn DESC) ls ON (((node_id_pairs.origin_node_id = ls.origin_node_id) AND (node_id_pairs.receiver_node_id = ls.receiver_node_id))))
-+   ORDER BY node_id_pairs.origin_node_id, node_id_pairs.receiver_node_id;
++           ORDER BY syncpoints.receiver_node_id, syncpoints.origin_node_id, syncpoints.origin_lsn DESC) ls ON (((node_id_pairs.origin_node_id = ls.origin_node_id) AND (node_id_pairs.receiver_node_id = ls.receiver_node_id))))
++   ORDER BY node_id_pairs.receiver_node_id, node_id_pairs.origin_node_id;
   mvtest_tv| SELECT mvtest_t.type,
       sum(mvtest_t.amt) AS totamt
      FROM mvtest_t
