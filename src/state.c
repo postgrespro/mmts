@@ -2827,13 +2827,26 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 	MtmTxStatusResponse *resp = &txse->resp; /* shorter lines */
 	GlobalTx   *gtx;
 	StringInfo	packed_msg;
+	bool		gtx_busy;
 
 	/* fast check before digging WAL */
-	gtx = GlobalTxAcquire(msg->gid, false);
+	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy);
 	if (gtx != NULL)
 	{
 		handle_1a_gtx(msg, gtx, resp);
 		GlobalTxRelease(gtx);
+		goto reply_1a;
+	}
+	/*
+	 * If backend is still working on xact, don't stall on waiting for it to
+	 * release gtx as it may take very long; replier queue might overflow
+	 * during waiting, thus receiver even won't be able to deliver ack to
+	 * PC|P, and backend would never exit.
+	 */
+	if (gtx_busy)
+	{
+		mtm_log(StatusRequest, "can't participate in xact %s resolution: backend is still working on it",
+				msg->gid);
 		goto reply_1a;
 	}
 
@@ -2897,7 +2910,7 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 		 */
 
 		/* xact obviously could appear after fast path check */
-		gtx = GlobalTxAcquire(msg->gid, false);
+		gtx = GlobalTxAcquire(msg->gid, false, false, NULL);
 		if (gtx != NULL)
 		{
 			handle_1a_gtx(msg, gtx, resp);
@@ -2976,13 +2989,20 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 		"",
 		msg->gid
 	};
+	bool		gtx_busy;
 
-	gtx = GlobalTxAcquire(msg->gid, false);
+	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy);
 	/*
-	 * finalized statuses are sent on 1a, no need to bother with this here
+	 * Finalized statuses are sent in 1a, no need to bother with this here.
 	 */
 	if (!gtx)
+	{
+		if (gtx_busy)
+			mtm_log(StatusRequest, "ignoring 2A message for xact %s as backend is still working on it",
+					msg->gid);
+
 		goto reply_2a;
+	}
 
 	/*
 	 * Some parts of various papers use proposal term here, some
@@ -3125,7 +3145,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 
 				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
 
-				gtx = GlobalTxAcquire(msg->gid, false);
+				gtx = GlobalTxAcquire(msg->gid, false, false, NULL);
 				if (!gtx)
 					goto got_message;
 

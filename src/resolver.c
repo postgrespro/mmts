@@ -136,7 +136,7 @@ ResolveForRefereeWinner(void)
 	{
 		bool commit;
 
-		gtx = GlobalTxAcquire(gids[i], false);
+		gtx = GlobalTxAcquire(gids[i], false, false, NULL);
 		if (!gtx)
 			continue;
 
@@ -229,7 +229,7 @@ finish_ready(void)
 	/* finish ready xacts */
 	for (i = 0; i < n_agids; i++)
 	{
-		gtx = GlobalTxAcquire(agids[i], false);
+		gtx = GlobalTxAcquire(agids[i], false, false, NULL);
 		if (!gtx)
 			continue;
 
@@ -445,7 +445,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 	mtm_log(ResolverTx, "handle_response: got '%s'", MtmMesageToString(raw_msg));
 
-	gtx = GlobalTxAcquire(gid, false);
+	gtx = GlobalTxAcquire(gid, false, false, NULL);
 	if (!gtx)
 		return;
 

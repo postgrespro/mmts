@@ -744,7 +744,7 @@ process_remote_commit(StringInfo in,
 				 */
 				Assert(msg_status == GTXPreCommitted);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
 				if (!rwctx->gtx)
 				{
 					/*
@@ -928,7 +928,7 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
-				rwctx->gtx = GlobalTxAcquire(gid, true);
+				rwctx->gtx = GlobalTxAcquire(gid, true, false, NULL);
 				/*
 				 * it must be brand new gtx, we don't do anything before P
 				 */
@@ -1008,7 +1008,7 @@ process_remote_commit(StringInfo in,
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
 
 				/* normal path: we have PREPARE, finish it */
 				if (rwctx->gtx)
@@ -1127,7 +1127,7 @@ process_remote_commit(StringInfo in,
 									rwctx->txlist_pos);
 				}
 
-				rwctx->gtx = GlobalTxAcquire(gid, false);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
 				if (!rwctx->gtx)
 				{
 					mtm_log(MtmApplyTrace, "skipping ABORT PREPARED of %s as there is no xact", gid);

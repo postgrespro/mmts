@@ -215,9 +215,14 @@ GlobalTxEnsureBeforeShmemExitHook(void)
  * that without passing third argument?)
  *	  Status is racing with commit -- that is okay, we later will scan WAL
  * will read that commit (abort).
+ *
+ * If nowait_own_live is true, gtx is already locked, I am the coordinator and
+ * gtx is not orphaned, don't wait for release -- backend is still working on
+ * xact, which may be very long. *busy (if provided) is set to true in this
+ * case.
  */
 GlobalTx *
-GlobalTxAcquire(const char *gid, bool create)
+GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live, bool *busy)
 {
 	GlobalTx   *gtx = NULL;
 	bool		found;
@@ -254,6 +259,8 @@ GlobalTxAcquire(const char *gid, bool create)
 			else
 			{
 				gtx = NULL;
+				if (busy)
+					*busy = false;
 			}
 
 			break;
@@ -263,6 +270,19 @@ GlobalTxAcquire(const char *gid, bool create)
 		{
 			gtx->acquired_by = MyBackendId;
 			break;
+		}
+
+		if (nowait_own_live)
+		{
+			int			tx_node_id = MtmGidParseNodeId(gid);
+
+			if (tx_node_id == Mtm->my_node_id && !gtx->orphaned)
+			{
+				if (busy)
+					*busy = true;
+				LWLockRelease(gtx_shared->lock);
+				return NULL;
+			}
 		}
 
 		LWLockRelease(gtx_shared->lock);

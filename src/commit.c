@@ -466,7 +466,8 @@ MtmTwoPhaseCommit(void)
 
 		/* prepare transaction on our node */
 
-		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true);
+		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true,
+											   false, NULL);
 		/*
 		 * it is simpler to mark gtx originated here as orphaned from the
 		 * beginning rather than in error handler; resolver won't touch gtx

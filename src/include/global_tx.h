@@ -85,7 +85,8 @@ extern gtx_shared_data *gtx_shared;
 void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
 void GlobalTxEnsureBeforeShmemExitHook(void);
-GlobalTx *GlobalTxAcquire(const char *gid, bool create);
+GlobalTx *GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live,
+						  bool *busy);
 void GlobalTxRelease(GlobalTx *gtx);
 void GlobalTxAtExit(int code, Datum arg);
 void GlobalTxLoadAll(void);
