@@ -91,11 +91,17 @@ void
 MaybeLogSyncpoint(void)
 {
 	/* do unlocked check first */
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint < MtmSyncpointInterval * 1024)
+	if ((GetInsertRecPtr() < Mtm->latestSyncpoint) ||
+		(GetInsertRecPtr() - Mtm->latestSyncpoint < MtmSyncpointInterval * 1024))
 		return;
 
 	LWLockAcquire(Mtm->syncpoint_lock, LW_EXCLUSIVE);
-	if (GetInsertRecPtr() - Mtm->latestSyncpoint >= MtmSyncpointInterval * 1024)
+	/*
+	 * GetInsertRecPtr returns slightly stale value, so the first check
+	 * prevents too frequent syncpoint creation
+	 */
+	if ((GetInsertRecPtr() > Mtm->latestSyncpoint) &&
+		(GetInsertRecPtr() - Mtm->latestSyncpoint >= MtmSyncpointInterval * 1024))
 	{
 		XLogRecPtr syncpoint_lsn;
 
