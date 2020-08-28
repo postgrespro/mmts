@@ -326,7 +326,12 @@ class MtmClient(object):
                         # which in case of select's failure will lead to exception
                         # and stale connection to the database
                         # print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
-                        conn = yield from aiopg.connect(dsn, enable_hstore=False, timeout=1)
+                        #
+                        # XXX at least 0.16 version of aio pg leaks connections
+                        # on timeout expiration, so set it large -- but not
+                        # having it all also not nice, should upgrade aiopg and
+                        # check whether it was fixed
+                        conn = yield from aiopg.connect(dsn, enable_hstore=False, timeout=30)
                         print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
 
                 if (not cur) or cur.closed:
