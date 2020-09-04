@@ -988,13 +988,29 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 			{
 				DiscardStmt *stmt = (DiscardStmt *) parsetree;
 
-				if (stmt->target == DISCARD_TEMP)
-					temp_schema_reset();
-
+				/*
+				 * DISCARD ALL does UNLISTEN, so such xact can't be prepared,
+				 * i.e. we can't send it as tx DDL. To wipe temp tables at
+				 * peers manually do temp_schema_reset.
+				 * Note that there is apply reordering danger, as with all
+				 * non-tx ddl (deadlock detector might complain).
+				 * (DISCARD ALL can't be done in tx block, so we don't care
+				 * about that case)
+				 */
 				if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
 				{
+					temp_schema_reset();
 					SkipCommand(true);
 					MtmGucDiscard();
+				}
+				/*
+				 * The only other form of DISCARD involving peers is
+				 * TEMP -- send it as tx DDL to prevent reordering issues.
+				 * Others are just executed locally.
+				 */
+				else if (stmt->target != DISCARD_TEMP)
+				{
+					SkipCommand(true);
 				}
 				break;
 			}
@@ -1007,6 +1023,11 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				if (stmt->kind == VAR_SET_MULTI)
 					SkipCommand(true);
 
+				/*
+				 * SET (and RESET) issued in tx block have tx scope, so we
+				 * only log them as tx DDL. Session-level SET will be handled
+				 * by MtmGucSet and thus prepended to any further DDL.
+				 */
 				if (!IsTransactionBlock())
 				{
 					SkipCommand(true);
