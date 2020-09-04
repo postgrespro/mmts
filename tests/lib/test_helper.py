@@ -64,8 +64,9 @@ class TestHelper(object):
 
         raise AssertionError('awaitCommit on node {} exceeded timeout {}'.format(node_id, TEST_MAX_RECOVERY_TIME))
 
+    # if write is true, make writing xact
     @staticmethod
-    def awaitOnline(dsn):
+    def awaitOnline(dsn, write=False):
         total_sleep = 0
         one = 0
         con = None
@@ -74,8 +75,11 @@ class TestHelper(object):
             try:
                 con = psycopg2.connect(dsn + " connect_timeout=1")
                 cur = con.cursor()
-                cur.execute("select 1")
-                one = int(cur.fetchone()[0])
+                if write:
+                    cur.execute("create table if not exists bulka ();")
+                else:
+                    cur.execute("select 1")
+                    one = int(cur.fetchone()[0])
                 cur.close()
                 print("{} {} is online!".format(datetime.datetime.utcnow(), dsn))
                 return

@@ -82,15 +82,15 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def _get_first_wals(self, dsns):
         return [self._get_first_wal(dsn) for dsn in dsns]
 
-    # get restart_lsn segment of slot to the given node
-    def _get_slot_wal(self, dsn, recepient):
+    # get restart_lsn segment of slot to the recipient node id.
+    def _get_slot_wal(self, dsn, recipient):
         return self.nodeSelect(dsn, """
         SELECT pg_walfile_name(restart_lsn)
         FROM pg_replication_slots WHERE slot_name = 'mtm_slot_{}'
-        """.format(recepient))[0][0]
+        """.format(recipient))[0][0]
 
-    def _get_slot_wals(self, dsns, recepient):
-        return [self._get_slot_wal(dsn, recepient) for dsn in dsns]
+    def _get_slot_wals(self, dsns, recipient):
+        return [self._get_slot_wal(dsn, recipient) for dsn in dsns]
 
     # Waits (up to iterations * iteration_sleep seconds)
     # until at least wals_to_pass segments appear on each node
@@ -174,6 +174,9 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         failure = CrashRecoverNode('node3')
         log.info('putting node 3 down')
         failure.start()
+        # wait until 1 and 2 exclude 3; use write xact to ensure generation
+        # switch is over
+        [self.awaitOnline(dsn, write=True) for dsn in self.dsns[:2]]
         # getting first_wals here would be too strict -- unlikely, but probably
         # there is some WAL which is not needed by offline node
         slot_wals_before = self._get_slot_wals(self.dsns[:2], 3)

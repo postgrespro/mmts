@@ -71,7 +71,7 @@ typedef enum MtmLogTag
 	MtmApplyTrace			= LOG,
 	MtmApplyError			= LOG,
 	MtmApplyBgwFinish		= LOG,
-	MtmReceiverFeedback		= DEBUG1,
+	MtmReceiverFeedback		= LOG,
 
 	/* state */
 	MtmStateMessage			= LOG,
