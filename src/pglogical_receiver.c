@@ -693,7 +693,6 @@ pglogical_receiver_main(Datum main_arg)
 
 			if (rc & WL_LATCH_SET)
 				ResetLatch(MyLatch);
-			mtm_log(LOG, "waked up while waiting for receiver mode");
 		}
 		mtm_log(MtmReceiverStart, "registered as running in %s mode",
 				MtmReplicationModeMnem[rctx->w.mode]);

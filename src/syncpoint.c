@@ -185,8 +185,6 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 	/* Finish transaction */
 	SPI_finish();
 
-	UpdateRecoveryHorizons();
-
 	PopActiveSnapshot();
 	CommitTransactionCommand();
 
@@ -453,6 +451,7 @@ UpdateRecoveryHorizons(void)
 		mtm_log(ERROR, "get_recovery_horizons failed, rc %d", rc);
 	}
 
+	PopActiveSnapshot();
 	SPI_finish();
 }
 
