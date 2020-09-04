@@ -71,7 +71,7 @@ def keep_trying(tries, delay, method, name, *args, **kwargs):
         except Exception as e:
             if t == tries - 1:
                 raise Exception("%s failed all %d tries" % (name, tries)) from e
-            print("%s failed [%d of %d]: %s" % (name, t + 1, tries, str(e)))
+            print("%s %s failed [%d of %d]: %s" % (datetime.datetime.utcnow(), name, t + 1, tries, str(e)))
             time.sleep(delay)
     raise Exception("this should not happen")
 
