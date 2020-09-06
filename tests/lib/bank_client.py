@@ -268,10 +268,9 @@ class MtmClient(object):
 
         return counts
 
-    @asyncio.coroutine
-    def status(self):
+    async def status(self):
         while self.running:
-            msg = yield from self.child_pipe.coro_recv()
+            msg = await self.child_pipe.coro_recv()
             if msg == 'status' or msg == 'status_noclean':
                 serialized_aggs = []
 
@@ -285,7 +284,7 @@ class MtmClient(object):
                                 agg.clear_values()
                         serialized_aggs[node_id][aggname] = total_agg.as_dict()
 
-                yield from self.child_pipe.coro_send(serialized_aggs)
+                await self.child_pipe.coro_send(serialized_aggs)
             elif msg == 'exit':
                 break
             else:
@@ -293,14 +292,13 @@ class MtmClient(object):
 
         # End of work. Wait for tasks and stop event loop.
         self.running = False # mark for other coroutines to exit
-        tasks = [t for t in asyncio.Task.all_tasks() if t is not asyncio.Task.current_task()]
-        yield from asyncio.gather(*tasks)
+        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+        await asyncio.gather(*tasks)
 
         self.loop.stop()
 
 
-    @asyncio.coroutine
-    def exec_tx(self, tx_block, node_id, aggname_prefix, conn_i):
+    async def exec_tx(self, tx_block, node_id, aggname_prefix, conn_i):
         conn_name = "node_{}_{}_{}".format(node_id + 1, aggname_prefix, conn_i)
 
         if aggname_prefix not in self.aggregates[node_id]:
@@ -322,101 +320,101 @@ class MtmClient(object):
                 # conn/cursor in exception handler: just reconnect if it is
                 # dead.
                 if (not conn) or conn.closed:
+                        # print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
                         # enable_hstore tries to perform select from database
                         # which in case of select's failure will lead to exception
                         # and stale connection to the database
-                        # print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
                         #
                         # XXX at least 0.16 version of aio pg leaks connections
                         # on timeout expiration, so set it large -- but not
                         # having it all also not nice, should upgrade aiopg and
                         # check whether it was fixed
-                        conn = yield from aiopg.connect(dsn, enable_hstore=False, timeout=30)
-                        print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
+                        conn = await aiopg.connect(dsn, enable_hstore=False, timeout=30)
+                        # print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
 
                 if (not cur) or cur.closed:
                         # big timeout here is important because on timeout
                         # expiration psycopg tries to call PQcancel() which
                         # tries to create blocking connection to postgres and
                         # blocks evloop
-                        cur = yield from conn.cursor(timeout=3600)
+                        cur = await conn.cursor(timeout=3600)
 
-                        # yield from cur.execute("select pg_backend_pid()")
-                        # bpid = yield from cur.fetchone()
+                        # await cur.execute("select pg_backend_pid()")
+                        # bpid = await cur.fetchone()
                         # print('{} pid is {}'.format(conn_name, bpid[0]))
 
                 # ROLLBACK tx after previous exception.
                 # Doing this here instead of except handler to stay inside try
                 # block.
-                status = yield from conn.get_transaction_status()
+                status = await conn.get_transaction_status()
                 if status != TRANSACTION_STATUS_IDLE:
-                    yield from cur.execute('rollback')
+                    await cur.execute('rollback')
 
-                yield from tx_block(conn, cur, agg, conn_i)
+                await tx_block(conn, cur, agg, conn_i)
                 agg.finish_tx('commit')
 
             except psycopg2.Error as e:
-                # if 'transfer' in conn_name:
-                    # print("{} {} got psycopg2 exception: {}".format(datetime.datetime.utcnow(), conn_name, e))
                 msg = str(e).strip()
+                # if 'node_2' in conn_name:
+                # print('{} {} caught psycopg exception {}, traceback: {}: {}'.format(datetime.datetime.utcnow(), conn_name, type(e), msg, traceback.format_exc()))
+                # print('{} {} caught psycopg exception {}'.format(datetime.datetime.utcnow(), conn_name, msg))
                 agg.finish_tx(msg)
                 # Give evloop some free time.
                 # In case of continuous excetions we can loop here without returning
                 # back to event loop and block it
-                yield from asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)
 
             except BaseException as e:
                 msg = str(e).strip()
                 agg.finish_tx(msg)
-                print('Caught exception %s, %s, %d, %s' % (type(e), aggname_prefix, conn_i + 1, msg) )
+                # print('{} {} caught exception {}: {}, traceback: {}'.format(datetime.datetime.utcnow(), conn_name, type(e), msg, traceback.format_exc()))
 
                 # Give evloop some free time.
                 # In case of continuous excetions we can loop here without returning
                 # back to event loop and block it
-                yield from asyncio.sleep(0.5)
+                await asyncio.sleep(0.5)
 
         # Close connection during client termination
         # XXX: I tried to be polite and close the cursor beforehand, but it
         # sometimes gives 'close cannot be used while an asynchronous query
         # is underway'.
+        # print('{} {} closing conn and exiting'.format(datetime.datetime.utcnow(), conn_name))
         if conn:
             conn.close()
+        # print('{} {} conn closed, exiting'.format(datetime.datetime.utcnow(), conn_name))
 
-    @asyncio.coroutine
-    def transfer_tx(self, conn, cur, agg, conn_i):
+    async def transfer_tx(self, conn, cur, agg, conn_i):
         amount = 1
         # to avoid deadlocks:
         from_uid = random.randint(1, self.n_accounts - 2)
         to_uid = from_uid + 1
-        yield from cur.execute('begin')
-        yield from cur.execute('''update bank_test
+        await cur.execute('begin')
+        await cur.execute('''update bank_test
             set amount = amount - %s
             where uid = %s''',
             (amount, from_uid))
         assert(cur.rowcount == 1)
-        yield from cur.execute('''update bank_test
+        await cur.execute('''update bank_test
             set amount = amount + %s
             where uid = %s''',
             (amount, to_uid))
         assert(cur.rowcount == 1)
-        yield from cur.execute('commit')
+        await cur.execute('commit')
 
-    @asyncio.coroutine
-    def insert_tx(self, conn, cur, agg, conn_i):
+    async def insert_tx(self, conn, cur, agg, conn_i):
         query = "insert into insert_test values ('%s')" % (uuid.uuid4())
-        yield from cur.execute(query)
+        await cur.execute(query)
 
-    @asyncio.coroutine
-    def total_tx(self, conn, cur, agg, conn_i):
-        yield from cur.execute("select sum(amount), count(*), count(uid) from bank_test")
-        total = yield from cur.fetchone()
+    async def total_tx(self, conn, cur, agg, conn_i):
+        await cur.execute("select sum(amount), count(*), count(uid) from bank_test")
+        total = await cur.fetchone()
         if total[0] != self.total:
             agg.isolation += 1
             print(datetime.datetime.utcnow(), 'Isolation error, total ', self.total, ' -> ', total[0], ', node ', conn_i+1)
             self.total = total[0]
             # print(self.oops)
-            # yield from cur.execute('select * from pg_prepared_xacts order by prepared;')
-            # pxacts = yield from cur.fetchall()
+            # await cur.execute('select * from pg_prepared_xacts order by prepared;')
+            # pxacts = await cur.fetchall()
             # for pxact in pxacts:
             #     for i, col in enumerate(["transaction", "gid", "prepared", "owner", "database", "state3pc"]):
             #         print(pxact[i], end="\t")
@@ -425,6 +423,9 @@ class MtmClient(object):
     def run(self, numworkers):
         # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         self.loop = asyncio.get_event_loop()
+        # set True to show traceback of unhandled asyncio exceptions
+        # https://docs.python.org/3/library/asyncio-dev.html
+        self.loop.set_debug(enabled=False)
 
         for i, _ in enumerate(self.dsns):
             for j in range(numworkers['transfer']):

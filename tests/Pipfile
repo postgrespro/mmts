@@ -6,9 +6,9 @@ verify_ssl = true
 [dev-packages]
 
 [packages]
-aiopg = "==0.16.0"
+aiopg = "==1.0.0"
 aioprocessing = "==1.0.1"
-docker-compose = "==1.24.1"
+docker-compose = "==1.26.2"
 
 [requires]
 python_version = "3.7"
