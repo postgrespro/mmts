@@ -513,13 +513,14 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 		mtm_state->last_online_in = gen.num;
 
 		/*
-		 * Write to WAL ParallelSafe<genm> message, which is a mark for
+		 * Write to WAL ParallelSafe<gen_num> message, which is a mark for
 		 * those who will recover from us in this generation that they are
 		 * recovered: all following xacts can't commit without approval of all
 		 * new gen members, all committed xacts of previous generations lie
 		 * before ParallelSafe.
-		 * Note that any PREPARE from new gen would perfectly do this job as
-		 * well; this just guarantees convergence in the absence of xacts.
+		 * Note that any PREPARE from new gen could do this job as
+		 * well if we carried full gen info with it; but this
+		 * guarantees convergence in the absence of xacts.
 		 */
 		/* xxx we should add versioning to logical messages */
 		PackGenAndDonors(&s, gen, donors);
@@ -1522,7 +1523,7 @@ RefereeClearGrant(void)
 		return;
 	}
 	if (atoi(PQcmdTuples(res)) > 0)
-		mtm_log(MtmStateDebug, "grant cleared");
+		mtm_log(MtmStateDebug, "referee grant cleared");
 	/* done */
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	/*
@@ -1552,6 +1553,7 @@ CampaignerMain(Datum main_arg)
 														  ALLOCSET_DEFAULT_SIZES);
 	static unsigned short drandom_seed[3] = {0, 0, 0};
 	TimestampTz last_campaign_at = 0;
+	int			rc = WL_TIMEOUT;
 
 	MtmBackgroundWorker = true;
 	mtm_log(MtmStateMessage, "campaigner started");
@@ -1604,7 +1606,6 @@ CampaignerMain(Datum main_arg)
 
 	for (;;)
 	{
-		int			rc;
 		MtmGeneration candidate_gen;
 		nodemask_t cohort;
 		uint64 my_last_online_in;
@@ -1627,11 +1628,12 @@ CampaignerMain(Datum main_arg)
 		MemoryContextSwitchTo(campaigner_ctx);
 
 		/*
-		 * do the job; campaign as requested and retry regularly, but not more
-		 * often than once in campaign_retry_interval.
+		 * do the job; campaign as requested and retry regularly after sleep
 		 */
 		now = GetCurrentTimestamp();
 		if (campaign_requested ||
+			rc & WL_TIMEOUT ||
+			/* harden against SetLatch bombardment for paranoia's sake */
 			TimestampDifferenceExceeds(last_campaign_at, now,
 									   campaign_retry_interval))
 		{
