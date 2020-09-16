@@ -845,6 +845,7 @@ pglogical_receiver_main(Datum main_arg)
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);
+		mtm_log(MtmReceiverStart, "START_REPLICATION done");
 
 		for (;;)				/* main loop, jump out only with ERROR */
 		{

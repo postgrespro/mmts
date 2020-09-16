@@ -219,6 +219,7 @@ MtmFindMaxClique(nodemask_t* graph, int n_nodes, int* clique_size)
 	NodeList result;
 	int all[MAX_NODES];
 	int i;
+	int j;
 
 	tmp.size = 0;
 	result.size = 0;
@@ -226,12 +227,12 @@ MtmFindMaxClique(nodemask_t* graph, int n_nodes, int* clique_size)
 		all[i] = i;
 
 	/* check that matrix is symmetric */
-	for (int i = 0; i < n_nodes; i++)
-	for (int j = 0; j < n_nodes; j++)
+	for (i = 0; i < n_nodes; i++)
+	for (j = 0; j < n_nodes; j++)
 		Assert(BIT_CHECK(graph[i], j) == BIT_CHECK(graph[j], i));
 
 	/* algorithm requires diagonal elements to be set */
-	for (int i = 0; i < n_nodes; i++)
+	for (i = 0; i < n_nodes; i++)
 		Assert(BIT_CHECK(graph[i], i));
 
 	extend(&tmp, &result, graph, all, 0, n_nodes);

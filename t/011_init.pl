@@ -4,9 +4,6 @@
 use Cluster;
 use Test::More tests => 1;
 
-# determenistic ports for expected files
-$PostgresNode::last_port_assigned = 55431;
-
 my $cluster = new Cluster(3);
 $cluster->init(q{
 });

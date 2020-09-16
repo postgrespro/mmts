@@ -382,7 +382,7 @@ GetRecoveryHorizon(int sender_node_id)
 	rc = SPI_execute(sql, true, 0);
 
 	if (rc != SPI_OK_SELECT && SPI_processed != 1)
-		mtm_log(ERROR, "mtm.get_recovery_horizon failed: rc=%d, SPI_processed=%ld",
+		mtm_log(ERROR, "mtm.get_recovery_horizon failed: rc=%d, SPI_processed=" UINT64_FORMAT,
 				rc, SPI_processed);
 
 	tup = SPI_tuptable->vals[0];

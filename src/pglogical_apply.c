@@ -1473,7 +1473,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	int			spill_file = -1;
 	int			save_cursor = 0;
 	int			save_len = 0;
-	MemoryContext old_context;
+	MemoryContext old_context = CurrentMemoryContext;
 
 	rwctx->origin_xid = InvalidTransactionId;
 	rwctx->my_xid = InvalidTransactionId;
@@ -1520,7 +1520,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 * into transaction ctxses (most things will; xxx are there any of
 		 * such allocations at all apart from ErrorData?)
 		 */
-		old_context = MemoryContextSwitchTo(MtmApplyContext);
+		MemoryContextSwitchTo(MtmApplyContext);
 		do
 		{
 			char		action = pq_getmsgbyte(&s);
