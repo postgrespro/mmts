@@ -21,6 +21,7 @@ extern void dmq_detach_receiver(char *sender_name);
 
 extern void dmq_terminate_receiver(char *name);
 
+extern void dmq_reattach_receivers(void);
 extern void dmq_stream_subscribe(char *stream_name);
 extern void dmq_stream_unsubscribe(void);
 

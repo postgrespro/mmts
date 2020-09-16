@@ -1275,10 +1275,10 @@ CampaignTour(MtmConfig *mtm_cfg,
 	nodemask_t donors = 0;
 
 	/*
-	 * TODO: it would be nice to dmq_reattach_shm_mq here (normally it is done
-	 * via dmq_stream_subscribe, but here we are permanently subscribed).
-	 *
+	 * if we haven't live shm_mq to receivers previously, attempt to get them
+	 * now before we send the request
 	 */
+	dmq_reattach_receivers();
 	dmq_get_sendconn_cnt(cohort, sconn_cnt);
 
 	request_msg.tag = T_MtmGenVoteRequest;

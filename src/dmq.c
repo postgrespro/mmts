@@ -1841,6 +1841,29 @@ dmq_subscriber_before_shmem_exit(int status, Datum arg)
 }
 
 /*
+ * Try to ensure we have live connections to receivers, if not yet. This
+ * swallows any previous errors; see dmq_stream_subscribe for typical usage.
+ */
+void dmq_reattach_receivers(void)
+{
+	int			i;
+
+	for (i = 0; i < dmq_local.n_inhandles; i++)
+	{
+		if (dmq_local.inhandles[i].name[0] == '\0')
+			continue; /* unused slot */
+
+		/*
+		 * TODO: it would be nice to attempt reattach if we have the handle
+		 * but the queue is already broken (sender detached), however shm_mq
+		 * doesn't have this in its API and hand-crafting it is a crutch.
+		 */
+		if (dmq_local.inhandles[i].mqh == NULL)
+			dmq_reattach_shm_mq(i);
+	}
+}
+
+/*
  * Subscribes caller to msgs from stream_name and attempts to reattach to
  * receivers.
  *
@@ -1854,7 +1877,6 @@ dmq_stream_subscribe(char *stream_name)
 {
 	bool		found;
 	DmqStreamSubscription *sub;
-	int			i;
 
 	/*
 	 * If our process subscribes for the first time obtain a procno gen.
@@ -1882,8 +1904,7 @@ dmq_stream_subscribe(char *stream_name)
 	strncpy(dmq_local.curr_stream_name, stream_name, DMQ_NAME_MAXLEN);
 
 	/*
-	 * Try to ensure we have live connections to receivers, if not yet. The
-	 * typical usage is
+	 * The typical usage is
 	 * - subscribe to reply stream
 	 * - send request
 	 * - get reply (dmq_pop_nb)
@@ -1891,19 +1912,7 @@ dmq_stream_subscribe(char *stream_name)
 	 * without risk of missing connection failure after request was sent (thus
 	 * possibly exposing client to infinite waiting for answer).
 	 */
-	for (i = 0; i < dmq_local.n_inhandles; i++)
-	{
-		if (dmq_local.inhandles[i].name[0] == '\0')
-			continue; /* unused slot */
-
-		/*
-		 * TODO: it would be nice to attempt reattach if we have the handle
-		 * but the queue is already broken (sender detached), however shm_mq
-		 * doesn't have this in its API and hand-crafting it is a crutch.
-		 */
-		if (dmq_local.inhandles[i].mqh == NULL)
-			dmq_reattach_shm_mq(i);
-	}
+	dmq_reattach_receivers();
 }
 
 /* unsubscribe from the current stream */
