@@ -961,7 +961,6 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 {
 	nodemask_t connected_mask_with_me;
 	nodemask_t clique;
-	bool	   is_curr_gen_connected;
 
 	/*
 	 * Basebackup'ed node must recover from donor until it obtains syncpoints
@@ -986,10 +985,9 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	LWLockAcquire(mtm_state->connectivity_lock, LW_SHARED);
 	connected_mask_with_me = MtmGetConnectedMaskWithMe(true);
 	clique = MtmGetConnectivityClique(true);
-	is_curr_gen_connected = MtmIsConnectivityClique(mtm_state->current_gen_members);
 	LWLockRelease(mtm_state->connectivity_lock);
 
-	mtm_log(MtmStateDebug, "CampaignMyself: current_gen.num=" UINT64_FORMAT ", current_gen.members=%s, current_gen.configured=%s, StatusInGen=%s, last_online_in=" UINT64_FORMAT ", last_vote.num=" UINT64_FORMAT ", clique=%s, connected_mask_with_me=%s, is_curr_gen_connected=%d",
+	mtm_log(MtmStateDebug, "CampaignMyself: current_gen.num=" UINT64_FORMAT ", current_gen.members=%s, current_gen.configured=%s, StatusInGen=%s, last_online_in=" UINT64_FORMAT ", last_vote.num=" UINT64_FORMAT ", clique=%s, connected_mask_with_me=%s",
 			pg_atomic_read_u64(&mtm_state->current_gen_num),
 			maskToString(mtm_state->current_gen_members),
 			maskToString(mtm_state->current_gen_configured),
@@ -997,8 +995,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 			mtm_state->last_online_in,
 			mtm_state->last_vote.num,
 			maskToString(clique),
-			maskToString(connected_mask_with_me),
-			is_curr_gen_connected);
+			maskToString(connected_mask_with_me));
 
 	/*
 	 * If I am online in curr gen (definitely its member) and all members are
@@ -1016,10 +1013,27 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 *   exluding 3 from the cluster.
 	 * The only reason for 2 balloting at all here, while 1 is not
 	 * recovered yet is xact resolution liveness, c.f. handle_1a.
+	 *
+	 * Actually there is one more important reason for the check: to avoid
+	 * needless recovery node must not haste to ballot itself if it still sees
+	 * everyone (in its *personal* connectivity mask, not common clique). For
+	 * instance,
+	 * - 1 loses network
+	 * - 2 heartbeats 3 with 'hey, I don't see 1 anymore'
+	 * - 2 ballots with 3 for gen n <2, 3>
+	 * - 3 accepts it, gen is elected
+	 * - But there is a short window when 3 continues to see 1. If it ballots
+	 *   during this time, it must chose between cliques 13 or 23 -- and must
+	 *   chose deterministically, to avoid flip-flopping in real sausage
+	 *   topologies; we set it to min, so it will actually ballot for gen
+	 *   n + 1 <13>. And once the vote for n + 1 is given, node can never be
+	 *   online in gen n, so recovery is unavoidable (2's loi will be n but
+	 *   3's < n, so 3 won't be donor in the next gen).
 	 */
-	if (MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE && is_curr_gen_connected)
+	if (MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE &&
+		is_submask(mtm_state->current_gen_members, connected_mask_with_me))
 	{
-		mtm_log(MtmStateDebug, "not campaigning as curr gen is connected and I am online");
+		mtm_log(MtmStateDebug, "not campaigning as I see curr gen and I am online");
 		goto no_interesting_candidates;
 	}
 
