@@ -14,7 +14,7 @@ if [ "$1" = 'postgres' ]; then
 
 		cat <<-EOF >> $PGDATA/postgresql.conf
 			listen_addresses='*'
-			log_line_prefix = '%m [%p]: '
+			log_line_prefix = '%m [%p] [%a]: '
 			archive_mode = on
 			archive_command = 'cp %p /pg/archive/%f'
 
@@ -34,6 +34,18 @@ if [ "$1" = 'postgres' ]; then
                         multimaster.max_workers = 30
 
 			multimaster.connect_timeout = 10
+			# Be careful; tests expect commits on live
+			# nodes during others failures, and failure time is ~10s;
+			# if we simulate network loss, failure won't be
+			# detected until this timeout passes.
+			# OTOH, setting it too low might lead to node
+			# exclusions on weak machines during normal work.
+                        # It was also noticed that if extensive logging is enabled
+			# (older, at least pre #6392) journald might not be able
+			# to swallow logs time which also provoked exlusions
+			# with 2s timeout
+			multimaster.heartbeat_recv_timeout = 2000
+			multimaster.heartbeat_send_timeout = 200
 			wal_sender_timeout = 10min
 			wal_receiver_status_interval = 10s
 		EOF

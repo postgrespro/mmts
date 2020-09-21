@@ -204,23 +204,27 @@ class MtmClient(object):
         hashes2 = set()
 
         for dsn in self.dsns:
-            con = psycopg2.connect(dsn)
             try:
-                cur = con.cursor()
-                cur.execute("""
-                select
-                  md5('(' || string_agg(uid::text || ', ' || amount::text , '),(') || ')')
-                from
-                  (select * from bank_test order by uid) t;""")
-                hashes.add(cur.fetchone()[0])
+                con = psycopg2.connect(dsn)
+                try:
+                    cur = con.cursor()
+                    cur.execute("""
+                    select
+                    md5('(' || string_agg(uid::text || ', ' || amount::text , '),(') || ')')
+                    from
+                    (select * from bank_test order by uid) t;""")
+                    hashes.add(cur.fetchone()[0])
 
-                cur.execute("""
-                select md5(string_agg(id, ','))
-                from (select id from insert_test order by id) t;""")
-                hashes2.add(cur.fetchone()[0])
-                cur.close()
-            finally:
-                con.close()
+                    cur.execute("""
+                    select md5(string_agg(id, ','))
+                    from (select id from insert_test order by id) t;""")
+                    hashes2.add(cur.fetchone()[0])
+                    cur.close()
+                finally:
+                    con.close()
+            except Exception as e:
+                print("is_data_identic failed to query {}".format(dsn))
+                raise e
 
         print("bank_test hashes: {}".format(hashes))
         print("insert_test hashes: {}".format(hashes2))
@@ -270,25 +274,29 @@ class MtmClient(object):
 
     async def status(self):
         while self.running:
-            msg = await self.child_pipe.coro_recv()
-            if msg == 'status' or msg == 'status_noclean':
-                serialized_aggs = []
+            try:
+                msg = await self.child_pipe.coro_recv()
+                if msg == 'status' or msg == 'status_noclean':
+                    serialized_aggs = []
 
-                for node_id, node_aggs in enumerate(self.aggregates):
-                    serialized_aggs.append({})
-                    for aggname, aggarray in node_aggs.items():
-                        total_agg = MtmTxAggregate()
-                        for agg in aggarray:
-                            total_agg += agg
-                            if msg == 'status':
-                                agg.clear_values()
-                        serialized_aggs[node_id][aggname] = total_agg.as_dict()
+                    for node_id, node_aggs in enumerate(self.aggregates):
+                        serialized_aggs.append({})
+                        for aggname, aggarray in node_aggs.items():
+                            total_agg = MtmTxAggregate()
+                            for agg in aggarray:
+                                total_agg += agg
+                                if msg == 'status':
+                                    agg.clear_values()
+                            serialized_aggs[node_id][aggname] = total_agg.as_dict()
 
-                await self.child_pipe.coro_send(serialized_aggs)
-            elif msg == 'exit':
+                    await self.child_pipe.coro_send(serialized_aggs)
+                elif msg == 'exit':
+                    break
+                else:
+                    print('evloop: unknown message')
+            except EOFError as eoferror:
+                print('status worker detected eof (driver exited), shutting down the client')
                 break
-            else:
-                print('evloop: unknown message')
 
         # End of work. Wait for tasks and stop event loop.
         self.running = False # mark for other coroutines to exit
@@ -421,6 +429,8 @@ class MtmClient(object):
             #     print("\n")
 
     def run(self, numworkers):
+        # close the unused end to get eof if parent exits
+        self.parent_pipe.close()
         # asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
         self.loop = asyncio.get_event_loop()
         # set True to show traceback of unhandled asyncio exceptions
@@ -457,7 +467,12 @@ class MtmClient(object):
 
         self.parent_pipe, self.child_pipe = aioprocessing.AioPipe()
         self.evloop_process = multiprocessing.Process(target=self.run, args=(numworkers,))
+        # this will forcebly kill the process instead of (infinitely) waiting
+        # for it to die when the main one exits
+        self.evloop_process.daemon = True
         self.evloop_process.start()
+        # close the unused end to get eof if child exits
+        self.child_pipe.close()
 
     # returns list indexed by node id - 1; each member is dict
     # {agg name (transaction type, e.g. 'transfer') :
@@ -480,9 +495,12 @@ class MtmClient(object):
         print('aggregates cleaned')
 
     def stop(self):
+        if self.evloop_process is None:
+            return
         print('{} stopping client'.format(datetime.datetime.utcnow()))
         self.parent_pipe.send('exit')
         self.evloop_process.join()
+        self.evloop_process = None
         print('{} client stopped'.format(datetime.datetime.utcnow()))
 
     @classmethod
