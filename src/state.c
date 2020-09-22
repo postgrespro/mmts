@@ -209,6 +209,7 @@ PG_FUNCTION_INFO_V1(mtm_status);
 PG_FUNCTION_INFO_V1(mtm_state_create);
 PG_FUNCTION_INFO_V1(mtm_get_logged_prepared_xact_state);
 
+static bool pb_hook_registred = false;
 static bool pb_preparers_incremented = false;
 static bool pb_holders_incremented = false;
 
@@ -2427,11 +2428,22 @@ mtm_status(PG_FUNCTION_ARGS)
  * -----------------------------------
  */
 
+static void
+PBOnExit(int code, Datum arg)
+{
+	ReleasePB();
+}
+
 /* Exclude all holders */
 void
 AcquirePBByPreparer(void)
 {
 	Assert(!pb_preparers_incremented);
+	if (!pb_hook_registred)
+	{
+		before_shmem_exit(PBOnExit, (Datum) 0);
+		pb_hook_registred = true;
+	}
 	for (;;)
 	{
 		SpinLockAcquire(&mtm_state->cb_lock);
@@ -2458,6 +2470,11 @@ static void
 AcquirePBByHolder(void)
 {
 	Assert(!pb_holders_incremented);
+	if (!pb_hook_registred)
+	{
+		before_shmem_exit(PBOnExit, (Datum) 0);
+		pb_hook_registred = true;
+	}
 	/* Holder has the priority, so prevent new committers immediately */
 	SpinLockAcquire(&mtm_state->cb_lock);
 	mtm_state->n_prepare_holders += 1;

@@ -521,8 +521,6 @@ pglogical_receiver_at_exit(int status, Datum arg)
 		mtm_log(MtmApplyError, "receiver %s is exiting",
 				MyBgworkerEntry->bgw_name);
 
-	ReleasePB();
-
 	/*
 	 * Make sure all our workers die before checking out, we don't want to
 	 * have orphaned workers prowling and applying around when we (or another

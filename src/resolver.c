@@ -68,9 +68,7 @@ ResolverSigHupHandler(SIGNAL_ARGS)
 static void
 resolver_at_exit(int status, Datum arg)
 {
-	ReleasePB();
 }
-
 
 /*****************************************************************************
  *

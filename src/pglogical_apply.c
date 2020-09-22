@@ -901,7 +901,6 @@ process_remote_commit(StringInfo in,
 							 (MtmGetCurrentStatusInGen() == MTM_GEN_RECOVERY &&
 							  prepare_gen_num == MtmGetCurrentGenNum())))
 				{
-					ReleasePB();
 					proc_exit(0);
 				}
 
@@ -1667,6 +1666,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 				   rwctx->txlist_pos);
 		rwctx->txlist_pos = -1;
 		query_cancel_allowed = false;
+		ReleasePB();
 
 		/*
 		 * handle only prepare errors here
@@ -1720,7 +1720,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			proc_exit(1);
 		}
 
-		ReleasePB();
 		if (rwctx->gtx != NULL)
 		{
 			GlobalTxRelease(rwctx->gtx);
