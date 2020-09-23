@@ -1274,6 +1274,7 @@ CampaignTour(MtmConfig *mtm_cfg,
 	uint64 max_last_vote_num = MtmInvalidGenNum;
 	uint64 max_last_online_in = my_last_online_in;
 	nodemask_t donors = 0;
+	nodemask_t not_polled_candidates;
 
 	/*
 	 * if we haven't live shm_mq to receivers previously, attempt to get them
@@ -1304,6 +1305,8 @@ CampaignTour(MtmConfig *mtm_cfg,
 	 * them.
 	 */
 	BIT_SET(donors, Mtm->my_node_id - 1); /* start iteration on myself */
+	not_polled_candidates = candidate_gen.members;
+	BIT_CLEAR(not_polled_candidates, Mtm->my_node_id - 1);
 	for (i = 0; i < n_messages; i++)
 	{
 		MtmGenVoteResponse *msg = messages[i];
@@ -1326,9 +1329,21 @@ CampaignTour(MtmConfig *mtm_cfg,
 		}
 		if (!msg->vote_ok && msg->last_vote_num > max_last_vote_num)
 			max_last_vote_num = msg->last_vote_num;
+		BIT_CLEAR(not_polled_candidates, senders[i] - 1);
 	}
 
-	if (MtmQuorum(mtm_cfg, nvotes)) /* victory */
+	/*
+	 * We actually need only MtmQuorum(mtm_cfg, nvotes) votes to conform to
+	 * the safety, however demanding all gen members has voted is better
+	 * because it guarantees we won't miss last_online_in from some potential
+	 * donor and thus won't put it accidently into recovery. This actually
+	 * rarely happens in tests since dmq_reattach_receivers doesn't handle
+	 * broken existing shm_mq.
+	 *
+	 * TODO: it would be nice to re-attempt failed balloting immediately if
+	 * dmq_pop_nb inside gather successfully rettached some queue(s).
+	 */
+	if (MtmQuorum(mtm_cfg, nvotes) && not_polled_candidates == 0) /* victory */
 	{
 		mtm_log(MtmStateSwitch, "won election of gen num=" UINT64_FORMAT ", members=%s, configured=%s, donors=%s",
 				candidate_gen.num,
@@ -1341,11 +1356,12 @@ CampaignTour(MtmConfig *mtm_cfg,
 	}
 	else
 	{
-		mtm_log(MtmStateSwitch, "failed election of gen num=" UINT64_FORMAT ", members=%s, configured=%s, nvotes=%d",
+		mtm_log(MtmStateSwitch, "failed election of gen num=" UINT64_FORMAT ", members=%s, configured=%s, nvotes=%d, not_polled_candidates=%s",
 				candidate_gen.num,
 				maskToString(candidate_gen.members),
 				maskToString(candidate_gen.configured),
-				nvotes);
+				nvotes,
+				maskToString(not_polled_candidates));
 	}
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	LWLockAcquire(mtm_state->vote_lock, LW_EXCLUSIVE);
