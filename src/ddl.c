@@ -1331,10 +1331,21 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 {
 	int			rc;
 
-	/* Write DDL to our WAL in case smbd going to recover from us */
+	/*
+	 * Write DDL to our WAL in case smbd going to recover from us.
+	 * We don't log standalone (non-tx) DDL as decoding API doesn't expose
+	 * origin info, so figuring it out during apply is problematic
+	 * (though syncpoint messages already do workaround for that).
+	 * This means non-tx DDL might be skipped during recovery; this seems to
+	 * be ok given, well, its non-transactionality: we anyway can't expect
+	 * successfull execution everywhere.
+	 */
 	Assert(replorigin_session_origin != InvalidRepOriginId);
-	LogLogicalMessage(transactional ? "D" : "C",
-					  messageBody, strlen(messageBody) + 1, transactional);
+	if (transactional)
+	{
+		LogLogicalMessage(transactional ? "D" : "C",
+						  messageBody, strlen(messageBody) + 1, transactional);
+	}
 
 	mtm_log(DDLStmtIncoming, "%d: Executing utility statement %s",
 			MyProcPid, messageBody);
