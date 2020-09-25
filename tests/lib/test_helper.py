@@ -4,10 +4,13 @@ import datetime
 import psycopg2
 import random
 import os
+import socket
+import subprocess
 import logging
+import warnings
 
 from .failure_injector import *
-from .bank_client import keep_trying
+from .bank_client import keep_trying, MtmClient
 from . import log_helper  # configures loggers
 
 log = logging.getLogger('root.test_helper')
@@ -20,7 +23,103 @@ TEST_SETUP_TIME = 20
 TEST_STOP_DELAY = 5
 
 # Node host for dind (Docker-in-Docker execution)
+# gitlab ensures dind container (in which pg containers ports are exposed) is
+# available as 'docker', see
+# https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services
 NODE_HOST = 'docker' if 'DOCKER_HOST' in os.environ else '127.0.0.1'
+
+class MMTestCase(unittest.TestCase):
+    @classmethod
+    def collectLogs(cls, referee=False):
+        log.info('collecting logs')
+        # non-standard &> doesn't work in e.g. default Debian dash, so
+        # use old school > 2>&1
+        subprocess.run('docker logs node1 >logs1 2>&1', shell=True)
+        subprocess.run('docker logs node2 >logs2 2>&1', shell=True)
+        if not referee:
+            subprocess.run('docker logs node3 >logs3 2>&1', shell=True)
+        else:
+            subprocess.run('docker logs referee >logs_referee 2>&1', shell=True)
+
+    # get 3 nodes up
+    @classmethod
+    def setUpClass(cls):
+        # resolve hostname once during start as aoipg or docker have problems
+        # with resolving hostname under a load
+        host_ip = socket.gethostbyname(NODE_HOST)
+
+        cls.dsns = [
+            f"dbname=regression user=postgres host={host_ip} port=15432",
+            f"dbname=regression user=postgres host={host_ip} port=15433",
+            f"dbname=regression user=postgres host={host_ip} port=15434"
+        ]
+        cls.test_ok = True
+
+        subprocess.check_call(['docker-compose', 'up', '--force-recreate',
+                               '--build', '-d'])
+
+        # # Some Docker container debug stuff
+        # subprocess.check_call(['docker-compose', 'ps'])
+        # subprocess.check_call(['sudo', 'iptables', '-S'])
+        # subprocess.check_call(['sudo', 'iptables', '-L'])
+        # subprocess.check_call(['docker-compose', 'logs'])
+
+        # Wait for all nodes to become online
+        try:
+            [cls.awaitOnline(dsn) for dsn in cls.dsns]
+
+            cls.client = MtmClient(cls.dsns, n_accounts=1000)
+            cls.client.bgrun()
+        except Exception as e:
+            # collect logs even if fail in setupClass
+            cls.collectLogs()
+            raise e
+
+    @classmethod
+    def tearDownClass(cls):
+        log.info('tearDownClass')
+
+        # ohoh
+        th = TestHelper()
+        th.client = cls.client
+
+        # collect logs for CI anyway
+        try:
+            # skip the check if test already failed
+            if cls.test_ok:
+                th.assertDataSync()
+        finally:
+            cls.client.stop()
+            # Destroying containers is really unhelpful for local debugging, so
+            # do this automatically only in CI.
+            cls.collectLogs()
+            if 'CI' in os.environ:
+                subprocess.check_call(['docker-compose', 'down'])
+
+    def setUp(self):
+        # xxx why do we need this
+        warnings.simplefilter("ignore", ResourceWarning)
+        time.sleep(20)
+        log.info('start new test')
+
+    # For use in tearDown; says whether the test has failed. Unfortunately
+    # unittest doesn't expose this. Works only for 3.4+. Taken from
+    # https://stackoverflow.com/a/39606065/4014587
+    def lastTestOk(self):
+        result = self.defaultTestResult()
+        self._feedErrorsToResult(result, self._outcome.errors)
+        error = self.list2reason(result.errors)
+        failure = self.list2reason(result.failures)
+        return not error and not failure
+
+    def list2reason(self, exc_list):
+        if exc_list and exc_list[-1][0] is self:
+            return exc_list[-1][1]
+
+    def tearDown(self):
+        # communicate to tearDownClass the result
+        self.__class__.test_ok = self.lastTestOk()
+        log.info('finish test')
 
 
 class TestHelper(object):

@@ -21,46 +21,7 @@ from lib.test_helper import *
 
 log = logging.getLogger('root')
 
-class RecoveryTest(unittest.TestCase, TestHelper):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.dsns = [
-            "dbname=regression user=postgres host=127.0.0.1 port=15432",
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
-            "dbname=regression user=postgres host=127.0.0.1 port=15434"
-        ]
-
-        subprocess.check_call(['docker-compose', 'up',
-                               '--force-recreate',
-                               '--build',
-                               '-d'])
-
-        # Wait for all nodes to become online
-        [cls.awaitOnline(dsn) for dsn in cls.dsns]
-
-        cls.client = MtmClient(cls.dsns, n_accounts=1000)
-        cls.client.bgrun()
-
-    @classmethod
-    def tearDownClass(cls):
-        log.info('tearDown')
-
-        # ohoh
-        th = TestHelper()
-        th.client = cls.client
-
-        th.assertDataSync()
-        cls.client.stop()
-
-    def setUp(self):
-        warnings.simplefilter("ignore", ResourceWarning)
-        time.sleep(20)
-        log.info('Start new test')
-
-    def tearDown(self):
-        log.info('Finish test')
-
+class SyncpointTest(MMTestCase, TestHelper):
     # Returns the newest wal
     def _get_last_wal(self, dsn):
         return self.nodeSelect(dsn, "SELECT name FROM pg_ls_waldir() WHERE "

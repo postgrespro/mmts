@@ -27,78 +27,19 @@ from lib.test_helper import *
 
 log = logging.getLogger('root')
 
-class RecoveryTest(unittest.TestCase, TestHelper):
+class RecoveryTest(MMTestCase, TestHelper):
+    def test_normal_operations(self):
+        log.info('### test_normal_operations ###')
 
-    @classmethod
-    def setUpClass(cls):
-        # resolve hostname once during start as aoipg or docker have problems
-        # with resolving hostname under a load
-        host_ip = socket.gethostbyname(NODE_HOST)
+        aggs_failure, aggs = self.performFailure(NoFailure())
 
-        cls.dsns = [
-            f"dbname=regression user=postgres host={host_ip} port=15432",
-            f"dbname=regression user=postgres host={host_ip} port=15433",
-            f"dbname=regression user=postgres host={host_ip} port=15434"
-        ]
+        self.assertCommits(aggs_failure)
+        self.assertIsolation(aggs_failure)
 
-        subprocess.check_call(['docker-compose', 'up', '--force-recreate',
-                               '--build', '-d'])
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
 
-        # # Some Docker container debug stuff
-        # subprocess.check_call(['docker-compose', 'ps'])
-        # subprocess.check_call(['sudo', 'iptables', '-S'])
-        # subprocess.check_call(['sudo', 'iptables', '-L'])
-        # subprocess.check_call(['docker-compose', 'logs'])
-
-        # Wait for all nodes to become online
-        try:
-            [cls.awaitOnline(dsn) for dsn in cls.dsns]
-
-            cls.client = MtmClient(cls.dsns, n_accounts=1000)
-            cls.client.bgrun()
-        except Exception as e:
-            # collect logs even if fail in setupClass
-            cls.collectLogs()
-            raise e
-
-    @classmethod
-    def tearDownClass(cls):
-        print('tearDownClass')
-
-        # ohoh
-        th = TestHelper()
-        th.client = cls.client
-
-        # collect logs for CI anyway
-        try:
-            th.assertDataSync()
-        finally:
-            cls.client.stop()
-            # Destroying containers is really unhelpful for local debugging, so
-            # do this automatically only in CI.
-            if 'CI' in os.environ:
-                cls.collectLogs()
-                subprocess.check_call(['docker-compose', 'down'])
-
-    @classmethod
-    def collectLogs(cls):
-        log.info('collecting logs')
-        # subprocess.run(
-        # 'docker-compose logs --no-color > mmts.log', shell=True)
-        # non-standard &> doesn't work in e.g. default Debian dash, so
-        # use old school > 2>&1
-        subprocess.run('docker logs node1 >mmts_node1.log 2>&1', shell=True)
-        subprocess.run('docker logs node2 >mmts_node2.log 2>&1', shell=True)
-        subprocess.run('docker logs node3 >mmts_node3.log 2>&1', shell=True)
-
-    def setUp(self):
-        warnings.simplefilter("ignore", ResourceWarning)
-        time.sleep(20)
-        log.info('start new test')
-
-    def tearDown(self):
-        log.info('finish test')
-
+    # main random tests
     def test_random_disasters(self):
         log.info('### test_random_disasters ###')
 
@@ -130,17 +71,45 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
             log.info(f'iteration #{i} is OK')
 
-# useful to temporary run inidividual tests for debugging
+    # sausage topology test
+    def test_edge_partition(self):
+        log.info('### test_edge_partition ###')
+
+        aggs_failure, aggs = self.performFailure(
+            EdgePartition('node1', 'node3'), node_wait_for_online=
+            "dbname=regression user=postgres host=127.0.0.1 port=15434",
+            stop_load=True)
+
+        self.assertTrue(('commit' in aggs_failure[0]['transfer']['finish']) or
+                        ('commit' in aggs_failure[2]['transfer']['finish']))
+        self.assertCommits(aggs_failure[1:2])  # second node
+        self.assertIsolation(aggs_failure)
+
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
+
+    # can be used for manual running of some particular failure
+    def _test_single_failure(self):
+        log.info('### test_single_failure ###')
+
+        failure = CrashRecoverNode('node3')
+        aggs_failure, aggs = self.performFailure(
+            failure, node_wait_for_online=
+            "dbname=regression user=postgres host=127.0.0.1 port=15434",
+            stop_load=True)
+
+        self.assertCommits(aggs_failure[:2])
+        self.assertNoCommits(aggs_failure[2:])
+        self.assertIsolation(aggs_failure)
+
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
 
 
-def suite():
-    suite = unittest.TestSuite()
-    suite.addTest(RecoveryTest('test_tmp'))
-    return suite
-
-
+# you can run single test with something like
+# python -u -m unittest test_recovery.RecoveryTest.test_single_failure
 if __name__ == '__main__':
-    unittest.main()
-
-    # runner = unittest.TextTestRunner(verbosity=2, failfast=True)
-    # runner.run(suite())
+    # run all tests
+    runner = unittest.TextTestRunner(verbosity=1, failfast=True)
+    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecoveryTest)
+    runner.run(suite)

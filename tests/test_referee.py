@@ -17,10 +17,18 @@ from lib.test_helper import *
 
 log = logging.getLogger('root')
 
-class RefereeTest(unittest.TestCase, TestHelper):
-
+class RefereeTest(MMTestCase, TestHelper):
     @classmethod
     def setUpClass(cls):
+        host_ip = socket.gethostbyname(NODE_HOST)
+
+        cls.dsns = [
+            f"dbname=regression user=postgres host={host_ip} port=15432",
+            f"dbname=regression user=postgres host={host_ip} port=15433",
+        ]
+        cls.referee_dsn = f"dbname=regression user=postgres host={host_ip} port=15435"
+        cls.test_ok = True
+
         subprocess.check_call(['docker-compose',
             '-f', 'support/two_nodes.yml',
             'up',
@@ -28,44 +36,47 @@ class RefereeTest(unittest.TestCase, TestHelper):
             '--build',
             '-d'])
 
-        cls.client = MtmClient([
-            "dbname=regression user=postgres host=127.0.0.1 port=15432",
-            "dbname=regression user=postgres host=127.0.0.1 port=15433"
-        ], n_accounts=1000)
-        cls.client.bgrun()
+        # Wait for all nodes to become online
+        try:
+            [cls.awaitOnline(dsn) for dsn in cls.dsns]
 
-        # create extension on referee
-        cls.nodeExecute("dbname=regression user=postgres "
-                        "host=127.0.0.1 port=15435",
-                        ['create extension referee'])
+            cls.client = MtmClient(cls.dsns, n_accounts=1000)
+            cls.client.bgrun()
+            # create extension on referee
+            cls.nodeExecute(cls.referee_dsn,
+                            ['create extension referee'])
+        except Exception as e:
+            # collect logs even if fail in setupClass
+            cls.collectLogs(referee=True)
+            raise e
 
     @classmethod
     def tearDownClass(cls):
-        print('tearDown')
-        cls.client.stop()
+        log.info('tearDownClass')
 
         # ohoh
         th = TestHelper()
         th.client = cls.client
-        th.assertDataSync()
-        cls.client.stop()
 
-        # subprocess.check_call(['docker-compose','down'])
+        # collect logs for CI anyway
+        try:
+            # skip the check if test already failed
+            if cls.test_ok:
+                th.assertDataSync()
+        finally:
+            cls.client.stop()
+            # Destroying containers is really unhelpful for local debugging, so
+            # do this automatically only in CI.
+            cls.collectLogs(referee=True)
+            if 'CI' in os.environ:
+                subprocess.check_call(['docker-compose', 'down'])
 
-    def setUp(self):
-        warnings.simplefilter("ignore", ResourceWarning)
-
-        log.info('start new test')
-
-    def tearDown(self):
-        log.info('finish test')
 
     def test_neighbor_restart(self):
         log.info('### test_neighbor_restart ###')
 
         aggs_failure, aggs = self.performFailure(
-            RestartNode('node2'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
+            RestartNode('node2'), node_wait_for_online=self.dsns[1],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -80,7 +91,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             CrashRecoverNode('node2'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
+            self.dsns[1],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -95,7 +106,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             SingleNodePartition('node2'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
+            self.dsns[1],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -113,8 +124,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             SingleNodePartition('node2'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15433",
-            stop_load=True)
+            self.dsns[1], stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
         self.assertNoCommits(aggs_failure[1:])
@@ -125,8 +135,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             SingleNodePartition('node1'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15432",
-            stop_load=True)
+            self.dsns[0], stop_load=True)
 
         self.assertNoCommits(aggs_failure[:1])
         self.assertCommits(aggs_failure[1:])
@@ -199,10 +208,8 @@ class RefereeTest(unittest.TestCase, TestHelper):
         log.info('#### up up(winner) || up')
         log.info('###########################')
         docker_api.containers.get('node2').start()
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15433")
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15432")
+        self.awaitOnline(self.dsns[1])
+        self.awaitOnline(self.dsns[0])
 
         self.client.bgrun()
         time.sleep(3)
@@ -212,8 +219,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         log.info('#### check that decision is cleaned')
         log.info('###########################')
-        con = psycopg2.connect(
-            "dbname=regression user=postgres host=127.0.0.1 port=15435")
+        con = psycopg2.connect(self.referee_dsn)
         con.autocommit = True
         cur = con.cursor()
         cur.execute(
@@ -254,8 +260,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         # need to start node1 to perform consequent tests
         docker_api = docker.from_env()
         docker_api.containers.get('node1').start()
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15432")
+        self.awaitOnline(self.dsns[0])
 
         self.client.bgrun()
         time.sleep(3)
@@ -290,8 +295,7 @@ class RefereeTest(unittest.TestCase, TestHelper):
         # need to start node1 to perform consequent tests
         docker_api = docker.from_env()
         docker_api.containers.get('node1').start()
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15432")
+        self.awaitOnline(self.dsns[0])
 
         self.client.bgrun()
         time.sleep(3)
@@ -347,10 +351,8 @@ class RefereeTest(unittest.TestCase, TestHelper):
         self.client.get_aggregates(clean=False)
         self.client.stop()
         docker_api.containers.get('node2').start()
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15433")
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15432")
+        self.awaitOnline(self.dsns[1])
+        self.awaitOnline(self.dsns[0])
         self.client.bgrun()
         time.sleep(3)
 
@@ -368,10 +370,8 @@ class RefereeTest(unittest.TestCase, TestHelper):
 
         log.info('#### check that decision is cleaned')
         log.info('###################################')
-        self.awaitOnline(
-            "dbname=regression user=postgres host=127.0.0.1 port=15435")
-        con = psycopg2.connect(
-            "dbname=regression user=postgres host=127.0.0.1 port=15435")
+        self.awaitOnline(self.referee_dsn)
+        con = psycopg2.connect(self.referee_dsn)
         con.autocommit = True
         cur = con.cursor()
         cur.execute(
