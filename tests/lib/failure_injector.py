@@ -1,5 +1,6 @@
 import docker
 
+
 class FailureInjector(object):
 
     def __init__(self, node=None):
@@ -9,6 +10,7 @@ class FailureInjector(object):
         docker_node = self.docker_api.containers.get(node)
         docker_node.exec_run(command, user='root')
 
+
 class NoFailure(FailureInjector):
 
     def start(self):
@@ -16,6 +18,7 @@ class NoFailure(FailureInjector):
 
     def stop(self):
         return
+
 
 class SingleNodePartition(FailureInjector):
 
@@ -128,7 +131,8 @@ class StartNode(FailureInjector):
         self.node = node
         super().__init__()
 
-    # XXX: Is it really a good idea to call cli.stop inside method called start?
+    # XXX: Is it really a good idea to call cli.stop inside method
+    # called start?
     def start(self):
         return
 

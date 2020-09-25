@@ -17,6 +17,10 @@ import pprint
 import uuid
 import traceback
 
+from . import log_helper  # configures loggers
+
+log = logging.getLogger('root.bank_client')
+
 class MtmTxAggregate(object):
 
     def __init__(self):
@@ -64,6 +68,7 @@ class MtmTxAggregate(object):
             'finish': copy.deepcopy(self.finish)
         }
 
+
 def keep_trying(tries, delay, method, name, *args, **kwargs):
     for t in range(tries):
         try:
@@ -71,9 +76,10 @@ def keep_trying(tries, delay, method, name, *args, **kwargs):
         except Exception as e:
             if t == tries - 1:
                 raise Exception("%s failed all %d tries" % (name, tries)) from e
-            print("%s %s failed [%d of %d]: %s" % (datetime.datetime.utcnow(), name, t + 1, tries, str(e)))
+            log.info("%s failed [%d of %d]: %s" % (name, t + 1, tries, str(e)))
             time.sleep(delay)
     raise Exception("this should not happen")
+
 
 class MtmClient(object):
 
@@ -81,6 +87,7 @@ class MtmClient(object):
         # logging.basicConfig(level=logging.DEBUG)
         self.n_accounts = n_accounts
         self.dsns = dsns
+        self.running = False
 
         # self.create_extension()
 
@@ -93,7 +100,7 @@ class MtmClient(object):
 
         self.initdb()
 
-        print('initialized')
+        log.info('initialized')
 
         self.nodes_state_fields = ["id", "disabled", "disconnected", "catchUp", "slotLag",
             "avgTransDelay", "lastStatusChange", "oldestSnapshot", "SenderPid",
@@ -152,15 +159,15 @@ class MtmClient(object):
             con.close()
 
     def await_nodes(self):
-        print("await_nodes")
+        log.info("await_nodes")
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
             try:
                 con.autocommit = True
                 cur = con.cursor()
-                # xxx: make write transaction to ensure generational perturbations
-                # after init have calmed down
+                # xxx: make write transaction to ensure generational
+                # perturbations after init have calmed down
                 # do we really need that?
 
                 cur.execute('create table if not exists bulka ()')
@@ -168,10 +175,9 @@ class MtmClient(object):
             finally:
                 con.close()
 
-
     def create_extension(self):
 
-        print("create extension")
+        log.info("create extension")
 
         for dsn in self.dsns:
             con = psycopg2.connect(dsn)
@@ -185,9 +191,9 @@ class MtmClient(object):
 
         connstr = " "
         for i in range(len(self.dsns)-1):
-        	connstr = connstr + "\"dbname=regression user=pg host=192.168.253." + str(i+2) + "\""
-        	if (i < len(self.dsns) - 2):
-        		connstr = connstr + ", "
+            connstr = connstr + "\"dbname=regression user=pg host=192.168.253."+str(i+2) + "\""
+            if i < len(self.dsns) - 2:
+                connstr = connstr + ", "
 
         conn = psycopg2.connect(self.dsns[0])
         try:
@@ -223,11 +229,11 @@ class MtmClient(object):
                 finally:
                     con.close()
             except Exception as e:
-                print("is_data_identic failed to query {}".format(dsn))
+                log.error("is_data_identic failed to query {}".format(dsn))
                 raise e
 
-        print("bank_test hashes: {}".format(hashes))
-        print("insert_test hashes: {}".format(hashes2))
+        log.info("bank_test hashes: {}".format(hashes))
+        log.info("insert_test hashes: {}".format(hashes2))
         return (len(hashes) == 1 and len(hashes2) == 1)
 
     def n_prepared_tx(self):
@@ -237,13 +243,13 @@ class MtmClient(object):
             n_prepared = self.list_prepared(dsn_ind)
             total_n_prepared += n_prepared
 
-        print("total num of prepared xacts on all nodes: %d" % (total_n_prepared))
-        return (total_n_prepared)
+        log.info("total num of prepared xacts on all nodes: %d" % total_n_prepared)
+        return total_n_prepared
 
     def list_prepared(self, node_id):
         n_prepared = 0
         con = psycopg2.connect(self.dsns[node_id] + " application_name=mtm_admin")
-        print("listing prepared xacts on node {} ({}):".format(node_id + 1, self.dsns[node_id]))
+        log.info("listing prepared xacts on node {} ({}):".format(node_id + 1, self.dsns[node_id]))
         try:
             cur = con.cursor()
             cur.execute('select * from pg_prepared_xacts order by prepared;')
@@ -254,7 +260,7 @@ class MtmClient(object):
                 n_prepared += 1
         finally:
             con.close()
-        print("total {} prepared xacts\n----\n".format(n_prepared))
+        log.info("total {} prepared xacts\n----\n".format(n_prepared))
         return n_prepared
 
     def insert_counts(self):
@@ -293,9 +299,9 @@ class MtmClient(object):
                 elif msg == 'exit':
                     break
                 else:
-                    print('evloop: unknown message')
+                    log.warning('evloop: unknown message')
             except EOFError as eoferror:
-                print('status worker detected eof (driver exited), shutting down the client')
+                log.error('status worker detected eof (driver exited), shutting down the client')
                 break
 
         # End of work. Wait for tasks and stop event loop.
@@ -328,17 +334,12 @@ class MtmClient(object):
                 # conn/cursor in exception handler: just reconnect if it is
                 # dead.
                 if (not conn) or conn.closed:
-                        # print('{} {} connecting'.format(datetime.datetime.utcnow(), conn_name))
+                        log.debug("{} connecting".format(conn_name))
                         # enable_hstore tries to perform select from database
                         # which in case of select's failure will lead to exception
                         # and stale connection to the database
-                        #
-                        # XXX at least 0.16 version of aio pg leaks connections
-                        # on timeout expiration, so set it large -- but not
-                        # having it all also not nice, should upgrade aiopg and
-                        # check whether it was fixed
-                        conn = await aiopg.connect(dsn, enable_hstore=False, timeout=30)
-                        # print('{} {} connected'.format(datetime.datetime.utcnow(), conn_name))
+                        conn = await aiopg.connect(dsn, enable_hstore=False, timeout=1)
+                        log.debug('{} connected'.format(conn_name))
 
                 if (not cur) or cur.closed:
                         # big timeout here is important because on timeout
@@ -349,7 +350,7 @@ class MtmClient(object):
 
                         # await cur.execute("select pg_backend_pid()")
                         # bpid = await cur.fetchone()
-                        # print('{} pid is {}'.format(conn_name, bpid[0]))
+                        # log.debug('{} pid is {}'.format(conn_name, bpid[0]))
 
                 # ROLLBACK tx after previous exception.
                 # Doing this here instead of except handler to stay inside try
@@ -363,9 +364,8 @@ class MtmClient(object):
 
             except psycopg2.Error as e:
                 msg = str(e).strip()
-                # if 'node_2' in conn_name:
-                # print('{} {} caught psycopg exception {}, traceback: {}: {}'.format(datetime.datetime.utcnow(), conn_name, type(e), msg, traceback.format_exc()))
-                # print('{} {} caught psycopg exception {}'.format(datetime.datetime.utcnow(), conn_name, msg))
+                log.debug('{} caught psycopg exception {}'.format(conn_name, msg))
+                # log.debug('{} caught psycopg exception {}, traceback: {}: {}'.format(conn_name, type(e), msg, traceback.format_exc()))
                 agg.finish_tx(msg)
                 # Give evloop some free time.
                 # In case of continuous excetions we can loop here without returning
@@ -375,7 +375,9 @@ class MtmClient(object):
             except BaseException as e:
                 msg = str(e).strip()
                 agg.finish_tx(msg)
-                # print('{} {} caught exception {}: {}, traceback: {}'.format(datetime.datetime.utcnow(), conn_name, type(e), msg, traceback.format_exc()))
+                log.error(
+                    'Caught exception %s, %s, %d, %s' %
+                    (type(e), aggname_prefix, conn_i + 1, msg))
 
                 # Give evloop some free time.
                 # In case of continuous excetions we can loop here without returning
@@ -386,10 +388,10 @@ class MtmClient(object):
         # XXX: I tried to be polite and close the cursor beforehand, but it
         # sometimes gives 'close cannot be used while an asynchronous query
         # is underway'.
-        # print('{} {} closing conn and exiting'.format(datetime.datetime.utcnow(), conn_name))
+        # log.debug('{} closing conn and exiting'.format(conn_name))
         if conn:
             conn.close()
-        # print('{} {} conn closed, exiting'.format(datetime.datetime.utcnow(), conn_name))
+        # log.debug('{} conn closed, exiting'.format(conn_name))
 
     async def transfer_tx(self, conn, cur, agg, conn_i):
         amount = 1
@@ -418,7 +420,7 @@ class MtmClient(object):
         total = await cur.fetchone()
         if total[0] != self.total:
             agg.isolation += 1
-            print(datetime.datetime.utcnow(), 'Isolation error, total ', self.total, ' -> ', total[0], ', node ', conn_i+1)
+            log.error('Isolation error, total ', self.total, ' -> ', total[0], ', node ', conn_i+1)
             self.total = total[0]
             # print(self.oops)
             # await cur.execute('select * from pg_prepared_xacts order by prepared;')
@@ -454,7 +456,7 @@ class MtmClient(object):
              self.loop.close()
 
     def bgrun(self, numworkers=None):
-        print('Starting evloop in different process')
+        log.info('starting evloop in different process')
 
         # default number of workers
         if numworkers is None:
@@ -467,7 +469,7 @@ class MtmClient(object):
 
         self.parent_pipe, self.child_pipe = aioprocessing.AioPipe()
         self.evloop_process = multiprocessing.Process(target=self.run, args=(numworkers,))
-        # this will forcebly kill the process instead of (infinitely) waiting
+        # this will forcibly kill the process instead of (infinitely) waiting
         # for it to die when the main one exits
         self.evloop_process.daemon = True
         self.evloop_process.start()
@@ -492,16 +494,16 @@ class MtmClient(object):
     def clean_aggregates(self):
         self.parent_pipe.send('status')
         self.parent_pipe.recv()
-        print('aggregates cleaned')
+        log.info('aggregates cleaned')
 
     def stop(self):
         if self.evloop_process is None:
             return
-        print('{} stopping client'.format(datetime.datetime.utcnow()))
+        log.info('stopping client')
         self.parent_pipe.send('exit')
         self.evloop_process.join()
         self.evloop_process = None
-        print('{} client stopped'.format(datetime.datetime.utcnow()))
+        log.info('client stopped')
 
     @classmethod
     def print_aggregates(cls, aggs):
@@ -523,6 +525,7 @@ class MtmClient(object):
                             print(agg[col], end="\t")
                     print("")
             print("")
+
 
 if __name__ == "__main__":
     c = MtmClient(['dbname=regression user=postgres host=127.0.0.1 port=15432',

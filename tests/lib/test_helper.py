@@ -4,9 +4,13 @@ import datetime
 import psycopg2
 import random
 import os
+import logging
 
 from .failure_injector import *
 from .bank_client import keep_trying
+from . import log_helper  # configures loggers
+
+log = logging.getLogger('root.test_helper')
 
 TEST_WARMING_TIME = 3
 TEST_DURATION = 10
@@ -18,8 +22,8 @@ TEST_STOP_DELAY = 5
 # Node host for dind (Docker-in-Docker execution)
 NODE_HOST = 'docker' if 'DOCKER_HOST' in os.environ else '127.0.0.1'
 
-class TestHelper(object):
 
+class TestHelper(object):
     def assertIsolation(self, aggs):
         isolated = True
         for conn_id, agg in enumerate(aggs):
@@ -32,7 +36,7 @@ class TestHelper(object):
         for conn_id, agg in enumerate(aggs):
             commits = commits and 'commit' in agg['transfer']['finish']
         if not commits:
-            print('No commits during aggregation interval')
+            log.error('No commits during aggregation interval')
             # time.sleep(100000)
             raise AssertionError('No commits during aggregation interval')
 
@@ -47,9 +51,12 @@ class TestHelper(object):
         total_sleep = 0
 
         while total_sleep <= TEST_MAX_RECOVERY_TIME:
-            print('{} waiting for commit on node {}, slept for {}, aggregates:'.format(datetime.datetime.utcnow(), node_id + 1, total_sleep))
+            log.info(
+                'waiting for commit on node {}, slept for {}, '
+                'aggregates:'.format(node_id + 1, total_sleep))
             aggs = self.client.get_aggregates(clean=False, _print=True)
-            print('=== transfer finishes: ', aggs[node_id]['transfer']['finish'])
+            log.info('=== transfer finishes: %s' %
+                             aggs[node_id]['transfer']['finish'])
             if ('commit' in aggs[node_id]['transfer']['finish'] and
                     aggs[node_id]['transfer']['finish']['commit'] > 10):
                 return
@@ -81,10 +88,11 @@ class TestHelper(object):
                     cur.execute("select 1")
                     one = int(cur.fetchone()[0])
                 cur.close()
-                print("{} {} is online!".format(datetime.datetime.utcnow(), dsn))
+                log.info("{} is online!".format(dsn))
                 return
             except Exception as e:
-                print('{} waiting for {} to get online: {}'.format(datetime.datetime.utcnow(), dsn, str(e)))
+                log.info('waiting for {} to get online: {}'.format(dsn,
+                                                                      str(e)))
                 time.sleep(5)
                 total_sleep += 5
             finally:
@@ -92,7 +100,9 @@ class TestHelper(object):
                     con.close()
 
         # Max recovery time was exceeded
-        raise AssertionError('awaitOnline on {} exceeded timeout {}s'.format(dsn, TEST_MAX_RECOVERY_TIME))
+        raise AssertionError(
+            'awaitOnline on {} exceeded timeout {}s'.format(
+                dsn, TEST_MAX_RECOVERY_TIME))
 
     def AssertNoPrepares(self):
         n_prepared = self.client.n_prepared_tx()
@@ -143,23 +153,23 @@ class TestHelper(object):
         FailureClass = random.choice(ONE_NODE_FAILURES)
         failure = FailureClass(node)
 
-        print('Simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
+        log.info('simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
         return self.performFailure(failure, wait, nodes_wait_for_commit, node_wait_for_online, stop_load, nodes_assert_commit_during_failure)
 
     def performFailure(self, failure, wait=0, nodes_wait_for_commit=[], node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
 
         time.sleep(TEST_WARMING_TIME)
 
-        print('Simulate failure at ',datetime.datetime.utcnow())
+        log.info('simulate failure')
 
         failure.start()
 
         self.client.clean_aggregates()
-        print('Started failure at ',datetime.datetime.utcnow())
+        log.info('started failure')
 
         time.sleep(TEST_DURATION)
 
-        print('Getting aggs during failure at ',datetime.datetime.utcnow())
+        log.info('getting aggs during failure')
         aggs_failure = self.client.get_aggregates()
         # helps to bail out earlier, making the investigation easier
         for n in nodes_assert_commit_during_failure:
@@ -168,17 +178,17 @@ class TestHelper(object):
         time.sleep(wait)
         failure.stop()
 
-        print('failure eliminated at', datetime.datetime.utcnow())
+        log.info('failure eliminated')
 
         self.client.clean_aggregates()
 
         if stop_load:
             time.sleep(3)
-            print('{} aggs before client stop:'.format(datetime.datetime.utcnow()))
+            log.info('aggs before client stop:')
             self.client.get_aggregates(clean=False)
             self.client.stop()
 
-        if node_wait_for_online != None:
+        if node_wait_for_online is not None:
             self.awaitOnline(node_wait_for_online)
         else:
             time.sleep(TEST_RECOVERY_TIME)
@@ -193,10 +203,10 @@ class TestHelper(object):
             time.sleep(TEST_RECOVERY_TIME)
 
         time.sleep(TEST_RECOVERY_TIME)
-        print('{} aggs after failure:'.format(datetime.datetime.utcnow()))
+        log.info('aggs after failure:')
         aggs = self.client.get_aggregates()
 
-        return (aggs_failure, aggs)
+        return aggs_failure, aggs
 
     @staticmethod
     def nodeExecute(dsn, statements):

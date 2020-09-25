@@ -12,15 +12,14 @@ import datetime
 import docker
 import warnings
 import pprint
-import logging.config
 import logging
 
+import lib.log_helper  # configures loggers
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
 from lib.test_helper import *
-logging.config.fileConfig('lib/logging.conf')
-log = logging.getLogger('syncpoint')
 
+log = logging.getLogger('root')
 
 class RecoveryTest(unittest.TestCase, TestHelper):
 
@@ -45,7 +44,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
     @classmethod
     def tearDownClass(cls):
-        print('tearDown')
+        log.info('tearDown')
 
         # ohoh
         th = TestHelper()

@@ -18,10 +18,14 @@ import subprocess
 import time
 import unittest
 import warnings
+import logging
 
 from lib.bank_client import MtmClient
 from lib.failure_injector import *
+import lib.log_helper  # configures loggers
 from lib.test_helper import *
+
+log = logging.getLogger('root')
 
 class RecoveryTest(unittest.TestCase, TestHelper):
 
@@ -37,10 +41,8 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             f"dbname=regression user=postgres host={host_ip} port=15434"
         ]
 
-        subprocess.check_call(['docker-compose', 'up',
-            '--force-recreate',
-            '--build',
-            '-d'])
+        subprocess.check_call(['docker-compose', 'up', '--force-recreate',
+                               '--build', '-d'])
 
         # # Some Docker container debug stuff
         # subprocess.check_call(['docker-compose', 'ps'])
@@ -50,7 +52,7 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
         # Wait for all nodes to become online
         try:
-            [ cls.awaitOnline(dsn) for dsn in cls.dsns ]
+            [cls.awaitOnline(dsn) for dsn in cls.dsns]
 
             cls.client = MtmClient(cls.dsns, n_accounts=1000)
             cls.client.bgrun()
@@ -80,8 +82,9 @@ class RecoveryTest(unittest.TestCase, TestHelper):
 
     @classmethod
     def collectLogs(cls):
-        print('collecting logs')
-        # subprocess.run('docker-compose logs --no-color > mmts.log', shell=True)
+        log.info('collecting logs')
+        # subprocess.run(
+        # 'docker-compose logs --no-color > mmts.log', shell=True)
         # non-standard &> doesn't work in e.g. default Debian dash, so
         # use old school > 2>&1
         subprocess.run('docker logs node1 >mmts_node1.log 2>&1', shell=True)
@@ -91,26 +94,28 @@ class RecoveryTest(unittest.TestCase, TestHelper):
     def setUp(self):
         warnings.simplefilter("ignore", ResourceWarning)
         time.sleep(20)
-        print('Start new test at ', datetime.datetime.utcnow())
+        log.info('start new test')
 
     def tearDown(self):
-        print('Finish test at ', datetime.datetime.utcnow())
+        log.info('finish test')
 
     def test_random_disasters(self):
-        print('### test_random_disasters ###')
+        log.info('### test_random_disasters ###')
 
         for i in range(1, 16):
-            print(f'Running round #{i} of test_random_disasters')
+            log.info(f'Running round #{i} of test_random_disasters')
             node_number = random.choice(range(1, 4))
             port = 15431 + node_number
 
-            nodes_assert_commit_during_failure = [n for n in range(3) if n != node_number - 1]
+            nodes_assert_commit_during_failure = [n for n in range(3) if n !=
+                                                  node_number - 1]
             aggs_failure, aggs = self.performRandomFailure(
                 f'node{node_number}',
                 nodes_wait_for_commit=[n for n in range(3)],
                 node_wait_for_online=f"dbname=regression user=postgres host={NODE_HOST} port={port}",
                 stop_load=True,
-                nodes_assert_commit_during_failure=nodes_assert_commit_during_failure)
+                nodes_assert_commit_during_failure=
+                nodes_assert_commit_during_failure)
 
             for n in range(3):
                 if n == node_number - 1:
@@ -123,13 +128,16 @@ class RecoveryTest(unittest.TestCase, TestHelper):
             self.assertIsolation(aggs)
             self.assertDataSync()
 
-            print(f'Iteration #{i} is OK')
+            log.info(f'iteration #{i} is OK')
 
 # useful to temporary run inidividual tests for debugging
+
+
 def suite():
     suite = unittest.TestSuite()
     suite.addTest(RecoveryTest('test_tmp'))
     return suite
+
 
 if __name__ == '__main__':
     unittest.main()

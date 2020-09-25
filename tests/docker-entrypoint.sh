@@ -14,7 +14,7 @@ if [ "$1" = 'postgres' ]; then
 
 		cat <<-EOF >> $PGDATA/postgresql.conf
 			listen_addresses='*'
-			log_line_prefix = '%m [%p] [%a]: '
+			log_line_prefix = '%m [%p] [[%a]]: '
 			archive_mode = on
 			archive_command = 'cp %p /pg/archive/%f'
 
@@ -42,7 +42,7 @@ if [ "$1" = 'postgres' ]; then
 			# exclusions on weak machines during normal work.
                         # It was also noticed that if extensive logging is enabled
 			# (older, at least pre #6392) journald might not be able
-			# to swallow logs time which also provoked exlusions
+			# to swallow logs in time which also provoked exlusions
 			# with 2s timeout
 			multimaster.heartbeat_recv_timeout = 2000
 			multimaster.heartbeat_send_timeout = 200
