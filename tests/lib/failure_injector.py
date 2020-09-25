@@ -56,13 +56,19 @@ class EdgePartition(FailureInjector):
         self.nodeB = nodeB
         super().__init__()
 
+    def __change(self, action):
+        self.container_exec(self.nodeA,
+                            "iptables {} INPUT -s {} -j DROP".format(
+                                action, self.nodeB))
+        self.container_exec(self.nodeA,
+                            "iptables {} OUTPUT -d {} -j DROP".format(
+                                action, self.nodeB))
+
     def start(self):
-        self.container_exec(self.nodeA, "iptables -A INPUT -s {} -j DROP".format(self.nodeB) )
-        self.container_exec(self.nodeA, "iptables -A OUTPUT -s {} -j DROP".format(self.nodeB) )
+        self.__change('-A')
 
     def stop(self):
-        self.container_exec(self.nodeA, "iptables -D INPUT -s {} -j DROP".format(self.nodeB))
-        self.container_exec(self.nodeA, "iptables -D OUTPUT -s {} -j DROP".format(self.nodeB))
+        self.__change('-D')
 
 
 class RestartNode(FailureInjector):
@@ -139,5 +145,6 @@ class StartNode(FailureInjector):
     def stop(self):
         self.docker_api.containers.get(self.node).start()
 
-ONE_NODE_FAILURES = [SingleNodePartition, SingleNodePartitionReject, RestartNode, CrashRecoverNode]
+ONE_NODE_FAILURES = [SingleNodePartition, SingleNodePartitionReject,
+                     RestartNode, CrashRecoverNode, FreezeNode]
 TWO_NODE_FAILURES = [EdgePartition]

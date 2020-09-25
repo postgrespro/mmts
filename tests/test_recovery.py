@@ -87,18 +87,21 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-    # def test_edge_partition(self):
-    #     print('### test_edge_partition ###')
+    def test_edge_partition(self):
+        log.info('### test_edge_partition ###')
 
-    #     aggs_failure, aggs = self.performFailure(EdgePartition('node1', 'node3'),
-    #         node_wait_for_online="dbname=regression user=postgres host=127.0.0.1 port=15434", stop_load=True)
+        aggs_failure, aggs = self.performFailure(
+            EdgePartition('node1', 'node3'), node_wait_for_online=
+            "dbname=regression user=postgres host=127.0.0.1 port=15434",
+            stop_load=False)
 
-    #     self.assertTrue( ('commit' in aggs_failure[0]['transfer']['finish']) or ('commit' in aggs_failure[2]['transfer']['finish']) )
-    #     self.assertCommits(aggs_failure[1:2]) # second node
-    #     self.assertIsolation(aggs_failure)
+        self.assertTrue(('commit' in aggs_failure[0]['transfer']['finish']) or
+                        ('commit' in aggs_failure[2]['transfer']['finish']))
+        self.assertCommits(aggs_failure[1:2])  # second node
+        self.assertIsolation(aggs_failure)
 
-    #     self.assertCommits(aggs)
-    #     self.assertIsolation(aggs)
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
 
     def test_node_restart(self):
         log.info('### test_node_restart ###')
@@ -130,18 +133,19 @@ class RecoveryTest(unittest.TestCase, TestHelper):
         self.assertCommits(aggs)
         self.assertIsolation(aggs)
 
-    # def test_node_pause(self):
-    #     print('### test_node_pause ###')
+    def test_node_pause(self):
+        log.info('### test_node_pause ###')
 
-    #     aggs_failure, aggs = self.performFailure(FreezeNode('node3'),
-    #         node_wait_for_commit=2, stop_load=True)
+        aggs_failure, aggs = self.performFailure(FreezeNode('node3'),
+                                                 nodes_wait_for_commit=[2],
+                                                 stop_load=True)
 
-    #     self.assertCommits(aggs_failure[:2])
-    #     self.assertNoCommits(aggs_failure[2:])
-    #     self.assertIsolation(aggs_failure)
+        self.assertCommits(aggs_failure[:2])
+        self.assertNoCommits(aggs_failure[2:])
+        self.assertIsolation(aggs_failure)
 
-    #     self.assertCommits(aggs)
-    #     self.assertIsolation(aggs)
+        self.assertCommits(aggs)
+        self.assertIsolation(aggs)
 
     def test_node_bicrash(self):
         log.info('### test_node_bicrash ###')
