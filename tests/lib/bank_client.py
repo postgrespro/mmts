@@ -166,11 +166,8 @@ class MtmClient(object):
             try:
                 con.autocommit = True
                 cur = con.cursor()
-                # xxx: make write transaction to ensure generational
-                # perturbations after init have calmed down
-                # do we really need that?
-
-                cur.execute('create table if not exists bulka ()')
+                # ensure generational perturbations after init have calmed down
+                cur.execute('select mtm.ping();')
                 cur.close()
             finally:
                 con.close()

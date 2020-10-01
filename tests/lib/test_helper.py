@@ -172,7 +172,7 @@ class TestHelper(object):
 
     # if write is true, make writing xact
     @staticmethod
-    def awaitOnline(dsn, write=False):
+    def awaitOnline(dsn, mm_ping=False):
         total_sleep = 0
         one = 0
         con = None
@@ -181,11 +181,10 @@ class TestHelper(object):
             try:
                 con = psycopg2.connect(dsn + " connect_timeout=1")
                 cur = con.cursor()
-                if write:
-                    cur.execute("create table if not exists bulka ();")
+                if mm_ping:
+                    cur.execute("select mtm.ping();")
                 else:
-                    cur.execute("select 1")
-                    one = int(cur.fetchone()[0])
+                    cur.execute("select 42;")
                 cur.close()
                 log.info("{} is online!".format(dsn))
                 return

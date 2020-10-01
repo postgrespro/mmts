@@ -773,12 +773,11 @@ MtmGetCurrentStatus(bool gen_locked, bool vote_locked)
 		 * - "select 't'" gives ok at A and B
 		 * - it also gives ok at C if C's clique is <A, B, C>, but C is not
 		 *   aware of gen 2's election at all.
-		 * are theoretically still possible.
+		 * are still possible (and seen in practice). mtm_ping can be used to
+		 * mitigate this if needed.
 		 *
-		 * I haven't seen such races in tests though (unlike created by nodes
-		 * own campaigner ones). Just in case, all this stuff doesn't
-		 * influence safety; this is just a matter of deciding when to open
-		 * the shop to the client.
+		 * Just in case, all this stuff doesn't influence safety; this is just
+		 * a matter of deciding when to open the shop to the client.
 		 */
 		if (!is_submask(mtm_state->current_gen_members,
 						MtmGetConnectivityClique(false)) ||

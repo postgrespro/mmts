@@ -237,7 +237,6 @@ CREATE TABLE mtm.syncpoints(
     origin_lsn pg_lsn not null,
     receiver_lsn pg_lsn not null
 );
-
 -- The column and sort order is important for queries optimization
 -- (latest_syncpoints, translate_syncpoint, cleanup_old_syncpoints);
 -- unfortunately, pg doesn't allow to specify sort ordering (DESC) in primary
@@ -530,3 +529,6 @@ CREATE VIEW mtm.stat_bgwpool AS
 CREATE FUNCTION mtm.get_logged_prepared_xact_state(gid text) RETURNS text
   AS 'MODULE_PATHNAME','mtm_get_logged_prepared_xact_state'
   LANGUAGE C;
+
+CREATE FUNCTION mtm.ping() RETURNS bool AS 'MODULE_PATHNAME','mtm_ping'
+LANGUAGE C;

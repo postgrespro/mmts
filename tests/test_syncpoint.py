@@ -134,9 +134,9 @@ class SyncpointTest(MMTestCase, TestHelper):
         failure = CrashRecoverNode('node3')
         log.info('putting node 3 down')
         failure.start()
-        # wait until 1 and 2 exclude 3; use write xact to ensure generation
+        # wait until 1 and 2 exclude 3; use mm_ping to ensure generation
         # switch is over
-        [self.awaitOnline(dsn, write=True) for dsn in self.dsns[:2]]
+        [self.awaitOnline(dsn, mm_ping=True) for dsn in self.dsns[:2]]
         # getting first_wals here would be too strict -- unlikely, but probably
         # there is some WAL which is not needed by offline node
         slot_wals_before = self._get_slot_wals(self.dsns[:2], 3)

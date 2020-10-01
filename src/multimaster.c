@@ -67,6 +67,7 @@ PG_FUNCTION_INFO_V1(mtm_after_node_drop);
 PG_FUNCTION_INFO_V1(mtm_join_node);
 PG_FUNCTION_INFO_V1(mtm_init_cluster);
 PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
+PG_FUNCTION_INFO_V1(mtm_ping);
 
 static size_t MtmGetTransactionStateSize(void);
 static void MtmSerializeTransactionState(void *ctx);
@@ -1294,6 +1295,82 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	PopActiveSnapshot();
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Check that all current gen members have the same gen and doesn't want to
+ * change it. This is useful for learning when cluster has finally started up
+ * and no generation switch perturbations will happen anymore unless some
+ * failure happens. Note that it asserts that all gen members are online -- we
+ * could make it more selective, but that's enough for tests.
+ *
+ * Returns true on success, bails out with ERROR on failure.
+ */
+Datum
+mtm_ping(PG_FUNCTION_ARGS)
+{
+	MtmConfig *cfg = MtmLoadConfig();
+	int i;
+	MtmGeneration curr_gen;
+
+	if (!MtmIsEnabled())
+		elog(ERROR, "multimaster is not enabled");
+
+	curr_gen = MtmGetCurrentGen(false);
+	/*
+	 * MtmBeginTransaction must have already checked that we are online in
+	 * current gen, but of course things could've changed since then.
+	 */
+	if (MtmGetCurrentStatusInGenNotLocked() != MTM_GEN_ONLINE)
+		elog(ERROR, "multimaster node is not online in the current gen");
+	for (i = 0; i < cfg->n_nodes; i++)
+	{
+		MtmNode *peer = &cfg->nodes[i];
+		PGconn *conn;
+		PGresult *res;
+		uint64 peer_gen_num;
+
+		/* poll only gen members */
+		if (!BIT_CHECK(curr_gen.members, peer->node_id - 1))
+			continue;
+
+		conn = PQconnectdb(peer->conninfo);
+		if (PQstatus(conn) != CONNECTION_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(conn));
+
+			PQfinish(conn);
+			mtm_log(ERROR,
+					"Could not connect to a node '%s' from this node: %s",
+					peer->conninfo, msg);
+		}
+
+		/*
+		 * MtmBeginTransaction automatically ensures there are no pending
+		 * balloting -- and that peer is online in gen, which is probably a
+		 * bit more than needed.
+		 */
+		res = PQexec(conn,
+					 "select gen_num from mtm.status();");
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			char	   *msg = pchomp(PQerrorMessage(conn));
+
+			PQclear(res);
+			PQfinish(conn);
+			mtm_log(ERROR,
+					"Failed to query mtm.cluster_status on '%s': %s",
+					peer->conninfo, msg);
+		}
+		peer_gen_num = pg_strtouint64(PQgetvalue(res, 0, 0), NULL, 10);
+		PQclear(res);
+		PQfinish(conn);
+		if (curr_gen.num != peer_gen_num)
+			mtm_log(ERROR, "ping failed: my curr gen num is " UINT64_FORMAT ", but %d's is " UINT64_FORMAT,
+					curr_gen.num, peer->node_id, peer_gen_num);
+
+	}
+	PG_RETURN_BOOL(true);
 }
 
 /*

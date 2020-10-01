@@ -83,7 +83,7 @@ foreach (0..$#{$cluster->{nodes}})
 	$cluster->{nodes}->[$_]->append_conf('postgresql.conf', q{restart_after_crash = on});
 }
 $cluster->start();
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( [0,1,2] );
 
 # Simulate payload
 $cluster->pgbench(0, ('-i', '-n', -s => '1') );
@@ -99,7 +99,7 @@ note("Simulate hard crash of a backend by SIGKILL to $pid0");
 kill -9, $pid0;
 
 $cluster->pgbench_await($pgb1);
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( [0,1,2] );
 is($cluster->is_data_identic( (0,1,2) ), 1, "check consistency after crash");
 
 

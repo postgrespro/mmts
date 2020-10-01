@@ -50,7 +50,7 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 foreach my $node (@{$cluster->{nodes}}){
 	$node->restart;
 }
-$cluster->await_nodes( (0,1,2) );
+$cluster->await_nodes( [0,1,2] );
 
 # load schedule without tablespace test which is not expected
 # to work with several postgreses on a single node

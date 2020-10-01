@@ -46,7 +46,11 @@ if [ "$1" = 'postgres' ]; then
 			# with 2s timeout
 			multimaster.heartbeat_recv_timeout = 2000
 			multimaster.heartbeat_send_timeout = 200
-			wal_sender_timeout = 10min
+			# Heavily loaded receiver won't send progress until
+			# walsender requires it which happens at
+			# wal_sender_timeout / 2, so keep it relatively low
+			# for syncpoint test.
+			wal_sender_timeout = 60s
 			wal_receiver_status_interval = 10s
 		EOF
 

@@ -42,7 +42,7 @@ note("stopping node 2");
 $cluster->{nodes}->[2]->stop;
 
 sleep($cluster->{recv_timeout});
-$cluster->await_nodes( (0,1) );
+$cluster->await_nodes( [0,1] );
 
 $cluster->safe_psql(0, "insert into t values(2, 20);");
 $cluster->safe_psql(1, "insert into t values(3, 30);");
@@ -60,7 +60,7 @@ note("starting node 2");
 $cluster->{nodes}->[2]->start;
 
 # intentionaly start from 2
-$cluster->await_nodes( (2,0,1) );
+$cluster->await_nodes( [2,0,1] );
 
 $cluster->safe_psql(0, "insert into t values(6, 60);");
 $cluster->safe_psql(1, "insert into t values(7, 70);");

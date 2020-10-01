@@ -66,7 +66,7 @@ sub init
 			max_replication_slots = 12
 
 			# walsender-walreceiver keepalives
-			wal_sender_timeout = 10min
+			wal_sender_timeout = 60s
 			wal_receiver_status_interval = 10s
 
 			# how often receivers restart
@@ -111,7 +111,7 @@ sub create_mm
 	my ($self, $dbname) = @_;
 	my $nodes = $self->{nodes};
 
-	$self->await_nodes( (0..$#{$self->{nodes}}) );
+	$self->await_nodes([0..$#{$self->{nodes}}], 0);
 
 	foreach my $node (@$nodes)
 	{
@@ -177,7 +177,7 @@ sub create_mm
 		select mtm.init_cluster(\$\$$my_connstr\$\$, \$\${$peer_connstrs}\$\$);
 	));
 
-	$self->await_nodes( (0..$#{$self->{nodes}}) );
+	$self->await_nodes([0..$#{$self->{nodes}}]);
 }
 
 sub start
@@ -271,12 +271,16 @@ sub backup_and_init()
 
 sub await_nodes()
 {
-	my ($self, @nodenums) = @_;
+	my ($self, $nodenums, $mm_ping) = @_;
+	# use mtm.ping to ensure generational perturbations are over, unless
+	# explicitly asked not to (e.g. in case mm is not created yet)
+	$mm_ping //= 1;
+	my $query = $mm_ping ? "select mtm.ping();" : "select 't';";
 
-	foreach my $i (@nodenums)
+	foreach my $i (@$nodenums)
 	{
 		my $dbname = $self->{nodes}->[$i]->{dbname};
-		if (!$self->{nodes}->[$i]->poll_query_until($dbname, "select 't'"))
+		if (!$self->{nodes}->[$i]->poll_query_until($dbname, $query))
 		{
 			die "Timed out waiting for mm node$i to become online";
 		}
@@ -285,7 +289,6 @@ sub await_nodes()
 			print("Polled node$i\n");
 		}
 	}
-	sleep 3;
 }
 
 sub pgbench()

@@ -30,18 +30,18 @@ $cluster->pgbench(2, ('-n','-N', -T => '4') );
 
 $cluster->{nodes}->[2]->stop('fast');
 sleep($cluster->{recv_timeout});
-$cluster->await_nodes( (0,1) );
+$cluster->await_nodes( [0,1] );
 
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
 $cluster->pgbench(1, ('-n','-N', -T => '4') );
 
-$cluster->await_nodes( (0,1) ); # just in case we've faced random timeout before
+$cluster->await_nodes( [0,1] ); # just in case we've faced random timeout before
 $hash0 = $cluster->safe_psql(0, $hash_query);
 $hash1 = $cluster->safe_psql(1, $hash_query);
 is($hash0, $hash1, "Check that hash is the same before recovery");
 
 $cluster->{nodes}->[2]->start;
-$cluster->await_nodes( (2,0,1) );
+$cluster->await_nodes( [2,0,1] );
 
 $oldhash = $hash0;
 $hash0 = $cluster->safe_psql(0, $hash_query);
@@ -70,7 +70,7 @@ $cluster->{nodes}->[2]->stop('fast');
 $cluster->{nodes}->[1]->start;
 $cluster->{nodes}->[2]->start;
 
-$cluster->await_nodes( (1,2,0) );
+$cluster->await_nodes( [1,2,0] );
 
 $sum0 = $cluster->safe_psql(0, "select sum(v) from t;");
 $sum1 = $cluster->safe_psql(1, "select sum(v) from t;");
@@ -100,7 +100,7 @@ $cluster->{nodes}->[2]->start;
 $cluster->pgbench_await($pgb_handle);
 
 # await recovery
-$cluster->await_nodes( (2,0,1) );
+$cluster->await_nodes( [2,0,1] );
 
 # check data identity
 $hash0 = $cluster->safe_psql(0, $hash_query);

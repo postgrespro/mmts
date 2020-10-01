@@ -53,7 +53,7 @@ foreach (0..$#{$cluster->{nodes}})
     });
 }
 
-$cluster->await_nodes( (0..$#{$cluster->{nodes}}) );
+$cluster->await_nodes( [0..$#{$cluster->{nodes}}] );
 
 $cluster->pgbench(0, ('-i', '-n', -s => '10') );
 $cluster->pgbench(0, ('-N', '-n', -t => '100') );
@@ -70,7 +70,7 @@ sleep(2);
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[2]->start;
 
-$cluster->await_nodes( (2,0,1) );
+$cluster->await_nodes( [2,0,1] );
 is($cluster->is_data_identic( (0,1,2) ), 1, "check auto recovery");
 
 ################################################################################
@@ -126,7 +126,7 @@ recovery_target = 'immediate'
 recovery_target_action = 'promote'
 ));
 $cluster->{nodes}->[$new_node_off]->start;
-$cluster->await_nodes( (3,0,1,2) );
+$cluster->await_nodes([3,0,1,2], 0);
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");
 note("join_node done");
 
@@ -137,7 +137,7 @@ if ($concurrent_load)
 	IPC::Run::kill_kill($pgb2);
 }
 
-$cluster->await_nodes( (3,0,1,2) );
+$cluster->await_nodes( [3,0,1,2] );
 $cluster->pgbench(0, ('-N', '-n', -t => '100') );
 $cluster->pgbench(3, ('-N', '-n', -t => '100') );
 
@@ -164,7 +164,7 @@ sleep(2);
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[0]->start;
 
-$cluster->await_nodes( (2,0,1) );
+$cluster->await_nodes( [2,0,1] );
 is($cluster->is_data_identic((0,1,2,3)), 1, "check recovery after add_node");
 
 ################################################################################
@@ -180,7 +180,7 @@ sleep(2);
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 $cluster->pgbench(2, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[1]->start;
-$cluster->await_nodes( (3,2,1) );
+$cluster->await_nodes( [3,2,1] );
 is($cluster->is_data_identic((1,2,3)), 1, "check recovery after drop_node");
 
 

@@ -109,7 +109,7 @@ MaybeLogSyncpoint(void)
 		Mtm->latestSyncpoint = syncpoint_lsn;
 
 		mtm_log(SyncpointCreated,
-				"syncpoint created, origin_lsn=%X/%X)",
+				"syncpoint created, origin_lsn=%X/%X",
 				(uint32) (syncpoint_lsn >> 32), (uint32) syncpoint_lsn);
 	}
 	LWLockRelease(Mtm->syncpoint_lock);
