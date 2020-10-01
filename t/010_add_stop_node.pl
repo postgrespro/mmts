@@ -110,7 +110,21 @@ $cluster->poll_query_until(0, "select exists(select * from pg_replication_slots 
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
 $cluster->release_socket($sock);
 $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''
-	});
+												});
+# Prevent recovery of new node further than the end point returned by
+# basebackup as streaming will be requested since it, so not doing this might
+# result in attempting to receive already existing data. This realistically
+# happens with syncpoint rows, leading to insertion conflict.
+#
+# It would be much nicer to learn the correct (end of recovery) LSN at the new
+# node itself and not burden user with carrying it around, but there seems no
+# easy way to do that without core changes.
+$cluster->{nodes}->[$new_node_off]->append_conf(
+		"recovery.conf", qq(
+restore_command = 'false'
+recovery_target = 'immediate'
+recovery_target_action = 'promote'
+));
 $cluster->{nodes}->[$new_node_off]->start;
 $cluster->await_nodes( (3,0,1,2) );
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");
