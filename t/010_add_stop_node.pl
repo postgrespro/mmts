@@ -93,7 +93,6 @@ if ($concurrent_load)
 
 my $new_node_off = $cluster->add_node();
 $cluster->{nodes}->[$new_node_off]->{dbname} = 'postgres';
-my $sock = $cluster->hold_socket($new_node_off);
 my $connstr = $cluster->connstr($new_node_off);
 my $new_node_id = $cluster->safe_psql(0, "SELECT mtm.add_node(\$\$$connstr\$\$)");
 
@@ -108,7 +107,6 @@ if ($concurrent_load)
 $cluster->poll_query_until(0, "select exists(select * from pg_replication_slots where slot_name = 'mtm_filter_slot_${new_node_id}');")
     or croak "timed out waiting for slot creation";
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
-$cluster->release_socket($sock);
 $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''
 												});
 # Prevent recovery of new node further than the end point returned by

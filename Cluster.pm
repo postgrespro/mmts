@@ -10,12 +10,24 @@ use Cwd;
 use IPC::Run;
 use Socket;
 
+# 127.0.0.1 is not ok because we pick up random ephemeral port which might be
+# occupied by client connection while node is down -- and then it would refuse
+# to start later. At least on my linux the kernel binds clients to 127.0.0.1,
+# so this works. Alternatively we could
+#   - bind to the socket manually immediately after shutdown and release before
+#     the start, but this obviously only (greatly) reduces the danger;
+#   - forget we are a distributed thing and use unix sockets like vanilla tests
+our $mm_listen_address = '127.0.0.2';
+
 sub new
 {
 	my ($class, $n_nodes, $referee) = @_;
-	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
 
-	$PostgresNode::test_pghost = "127.0.0.1";
+	# ask PostgresNode to use tcp and listen on mm_listen_address
+	$PostgresNode::use_tcp = 1;
+	$PostgresNode::test_pghost = $mm_listen_address;
+
+	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
 
 	my $self = {
 		nodes => \@nodes,
@@ -41,19 +53,12 @@ sub init
 	if (defined $self->{referee})
 	{
 		$self->{referee}->init();
-		$self->{referee}->append_conf('postgresql.conf', q{
-									  unix_socket_directories = ''
-									  listen_addresses = '127.0.0.1'
-									  });
 	}
 
 	foreach my $node (@$nodes)
 	{
-		$node->{_host} = '127.0.0.1';
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', q{
-			unix_socket_directories = ''
-			listen_addresses = '127.0.0.1'
 			max_connections = 50
 			log_line_prefix = '%m [%p] %i '
 			log_statement = all
@@ -255,7 +260,7 @@ sub backup_and_init()
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	my $dumpres = command_output(['pg_basebackup', '-D', $backup_path, '-p', $port,
-		'-h', '127.0.0.1', '--no-sync', '-v', '-S', "mtm_filter_slot_$to_mmid"]);
+		'-h', $mm_listen_address, '--no-sync', '-v', '-S', "mtm_filter_slot_$to_mmid"]);
 
 	print "# Backup finished\n";
 
@@ -358,11 +363,13 @@ sub is_data_identic()
 	return 1;
 }
 
+# this was used when mm listened on 127.0.0.1 and there was a risk of collision
+# with client port while node is down
 sub hold_socket()
 {
 	my ($self, $node_off) = @_;
 	my $node = $self->{nodes}->[$node_off];
-	my $iaddr = inet_aton('127.0.0.1');
+	my $iaddr = inet_aton($mm_listen_address);
 	my $paddr = sockaddr_in($node->{_port}, $iaddr);
 	my $proto = getprotobyname("tcp");
 

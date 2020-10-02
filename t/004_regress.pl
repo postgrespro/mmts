@@ -71,7 +71,7 @@ END {
 my $regress_shlib = TestLib::perl2host($ENV{REGRESS_SHLIB});
 my $regress_libdir = dirname($regress_shlib);
 TestLib::system_log($ENV{'PG_REGRESS'},
-	'--host=127.0.0.1', "--port=$port",
+	'--host=' . $Cluster::mm_listen_address, "--port=$port",
 	'--use-existing', '--bindir=',
 	'--schedule=parallel_schedule',
 	"--dlpath=${regress_libdir}",
