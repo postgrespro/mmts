@@ -1667,6 +1667,7 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		rwctx->txlist_pos = -1;
 		query_cancel_allowed = false;
 		ReleasePB();
+		debug_query_string = NULL;
 
 		/*
 		 * handle only prepare errors here
