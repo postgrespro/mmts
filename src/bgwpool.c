@@ -123,6 +123,12 @@ BgwPoolBeforeShmemExit(int status, Datum arg)
 	pid_t receiver_pid;
 
 	/*
+	 * We might ERROR out here with poolDesc lock held (final release of all
+	 * lwlocks happens in ProcKill which is called later).
+	 */
+	LWLockReleaseAll();
+
+	/*
 	 * Dynamic workers never die one by one normally because receiver is
 	 * completely clueless whether the worker managed to do his job before he
 	 * exited, so he doesn't know whether (and how) should he reassign it to
