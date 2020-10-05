@@ -14,9 +14,14 @@ use Socket;
 # occupied by client connection while node is down -- and then it would refuse
 # to start later. At least on my linux the kernel binds clients to 127.0.0.1,
 # so this works. Alternatively we could
-#   - bind to the socket manually immediately after shutdown and release before
+#   1) bind to the socket manually immediately after shutdown and release before
 #     the start, but this obviously only (greatly) reduces the danger;
-#   - forget we are a distributed thing and use unix sockets like vanilla tests
+#   2) forget we are a distributed thing and use unix sockets like vanilla tests
+#
+# UPD: well, bf member msvs-6-3 decided to take 127.0.0.2 for local connections,
+# so 1) was also implemented for such cases.
+# I don't like falling back to 2) because a) it is slightly easier to connect to
+# ports b) Windows uses TCP anyway.
 our $mm_listen_address = '127.0.0.2';
 
 sub new
@@ -28,6 +33,7 @@ sub new
 	$PostgresNode::test_pghost = $mm_listen_address;
 
 	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
+	$_->hold_port() foreach @nodes;
 
 	my $self = {
 		nodes => \@nodes,
@@ -35,7 +41,8 @@ sub new
 	};
 	if (defined $referee && $referee)
 	{
-		$self->{referee} = get_new_node("referee")
+		$self->{referee} = get_new_node("referee");
+		$self->{referee}->hold_port();
 	}
 
 	bless $self, $class;
@@ -54,6 +61,11 @@ sub init
 	{
 		$self->{referee}->init();
 	}
+
+	my $hba = qq{
+        host all all ${mm_listen_address}/32 trust
+        host replication all ${mm_listen_address}/32 trust
+	};
 
 	foreach my $node (@$nodes)
 	{
@@ -86,6 +98,7 @@ sub init
 
 			multimaster.syncpoint_interval = 10MB
 		});
+		$node->append_conf('pg_hba.conf', $hba);
 
 		if (defined $self->{referee})
 		{
@@ -95,6 +108,7 @@ sub init
 			$node->append_conf('postgresql.conf', qq(
 				multimaster.referee_connstring = 'dbname=postgres host=$rhost port=$rport'
 ));
+			$node->append_conf('pg_hba.conf', $hba);
 		}
 
 		if (defined $conf_opts)
@@ -232,7 +246,9 @@ sub add_node()
 {
 	my ($self) = @_;
 
-	push(@{$self->{nodes}}, get_new_node("node@{[$#{$self->{nodes}} + 2]}"));
+	my $new_node = get_new_node("node@{[$#{$self->{nodes}} + 2]}");
+	$new_node->hold_port();
+	push(@{$self->{nodes}}, $new_node);
 
 	return $#{$self->{nodes}};
 }
@@ -363,14 +379,40 @@ sub is_data_identic()
 	return 1;
 }
 
-# this was used when mm listened on 127.0.0.1 and there was a risk of collision
-# with client port while node is down
-sub hold_socket()
+# Override PostgresNode::start|stop to reserve the port while node is down
 {
-	my ($self, $node_off) = @_;
-	my $node = $self->{nodes}->[$node_off];
-	my $iaddr = inet_aton($mm_listen_address);
-	my $paddr = sockaddr_in($node->{_port}, $iaddr);
+	# otherwise perl whines, thinking our override is redefine
+	no warnings 'redefine';
+	# that's how perl people call super from monkey-patch-overridden method
+	# https://stackoverflow.com/a/575873/4014587
+	my $postgres_node_start_super = \&PostgresNode::start;
+	*PostgresNode::start = sub {
+		my $self = shift;
+		$self->release_port();
+		$postgres_node_start_super->( $self, @_ );
+	};
+
+	my $postgres_node_stop_super = \&PostgresNode::stop;
+	*PostgresNode::stop = sub {
+		my $self = shift;
+		$postgres_node_stop_super->( $self, @_ );
+		$self->hold_port();
+	};
+}
+
+# Bind to socket with our port so no one could use it while node is down.
+sub PostgresNode::hold_port {
+	my $self = shift;
+
+	# do nothing if this is not mm node, it most probably uses unix socket
+	return unless $self->host eq $mm_listen_address;
+
+	# stop() might be called several times without start(), don't bind if
+	# already did so
+	return if defined $self->{held_socket};
+
+	my $iaddr = inet_aton($self->host);
+	my $paddr = sockaddr_in($self->port, $iaddr);
 	my $proto = getprotobyname("tcp");
 
 	socket(my $sock, PF_INET, SOCK_STREAM, $proto)
@@ -378,18 +420,24 @@ sub hold_socket()
 
 	# As in postmaster, don't use SO_REUSEADDR on Windows
 	setsockopt($sock, SOL_SOCKET, SO_REUSEADDR, pack("l", 1))
-		unless $TestLib::windows_os;
-	(bind($sock, $paddr) && listen($sock, SOMAXCONN))
-		or die "socket bind and listen failed: $!";
+	  unless $TestLib::windows_os;
+	bind($sock, $paddr) or die
+	  "socket bind failed: $!";
+	listen($sock, SOMAXCONN)
+	  or die "socket listen failed: $!";
 
-	return $sock;
+	$self->{held_socket} = $sock;
+	note("bind to port @{[$self->port]}");
 }
 
-sub release_socket()
-{
-	my ($self, $sock) = @_;
-	close($sock);
+sub PostgresNode::release_port {
+	my $self = shift;
+	if (defined $self->{held_socket})
+	{
+		close($self->{held_socket});
+		$self->{held_socket} = undef;
+	}
+	note("port released");
 }
-
 
 1;
