@@ -67,10 +67,23 @@ sub init
         host replication all ${mm_listen_address}/32 trust
 	};
 
+	# binary protocol doesn't tolerate strict alignment currently, so use it
+	# everywhere but on arm (which is the only live arch which might be strict
+	# here)
+	my $binary_basetypes = 0;
+	if (!$TestLib::windows_os)
+	{
+		my $uname_arch = `uname -m`;
+		if ($? != 0) {
+			BAIL_OUT("system uname -m failed");
+		}
+		$binary_basetypes = ($uname_arch =~ m/arm/) ? 0 : 1;
+	}
+
 	foreach my $node (@$nodes)
 	{
 		$node->init(allows_streaming => 'logical');
-		$node->append_conf('postgresql.conf', q{
+		$node->append_conf('postgresql.conf', qq{
 			max_connections = 50
 			log_line_prefix = '%m [%p] %i '
 			log_statement = all
@@ -102,6 +115,8 @@ sub init
 			# MB of shmem, and some bf members have only 2GB /dev/shm, so be
 			# careful upping this.
 			multimaster.trans_spill_threshold = 50MB
+
+			multimaster.binary_basetypes = ${binary_basetypes}
 		});
 		$node->append_conf('pg_hba.conf', $hba);
 

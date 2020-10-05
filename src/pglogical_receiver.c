@@ -828,10 +828,12 @@ pglogical_receiver_main(Datum main_arg)
 						  "\"max_proto_version\" '1',"
 						  "\"min_proto_version\" '1',"
 						  "\"forward_changesets\" '1',"
+						  "\"binary.want_binary_basetypes\" '%d',"
 						  "\"mtm_replication_mode\" '%s')",
 						  psprintf(MULTIMASTER_SLOT_PATTERN, receiver_mtm_cfg->my_node_id),
 						  (uint32) (remote_start >> 32),
 						  (uint32) remote_start,
+						  MtmBinaryBasetypes,
 						  MtmReplicationModeMnem[rctx->w.mode]
 			);
 		conn = ((MyWalReceiverConn *) rctx->wrconn)->streamConn;

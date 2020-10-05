@@ -76,9 +76,8 @@ static void pglogical_write_delete(StringInfo out, PGLogicalOutputData *data,
 static void pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 					  Relation rel, HeapTuple tuple);
 static char decide_datum_transfer(Form_pg_attribute att,
-					  Form_pg_type typclass,
-					  bool allow_internal_basetypes,
-					  bool allow_binary_basetypes);
+								  Form_pg_type typclass,
+								  bool client_want_binary_basetypes);
 
 static void pglogical_write_caughtup(StringInfo out, PGLogicalOutputData *data,
 						 XLogRecPtr wal_end_ptr);
@@ -641,9 +640,7 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
 		typclass = (Form_pg_type) GETSTRUCT(typtup);
 
 		transfer_type = decide_datum_transfer(att, typclass,
-											  data->allow_internal_basetypes,
-											  data->allow_binary_basetypes);
-
+											  data->client_want_binary_basetypes);
 		pq_sendbyte(out, transfer_type);
 		switch (transfer_type)
 		{
@@ -716,13 +713,12 @@ pglogical_write_tuple(StringInfo out, PGLogicalOutputData *data,
  */
 static char
 decide_datum_transfer(Form_pg_attribute att, Form_pg_type typclass,
-					  bool allow_internal_basetypes,
-					  bool allow_binary_basetypes)
+					  bool client_want_binary_basetypes)
 {
 	/*
 	 * Use the binary protocol, if allowed, for builtin & plain datatypes.
 	 */
-	if (allow_internal_basetypes &&
+	if (client_want_binary_basetypes &&
 		typclass->typtype == 'b' &&
 		att->atttypid < FirstNormalObjectId &&
 		typclass->typelem == InvalidOid)

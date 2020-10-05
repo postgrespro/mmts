@@ -139,6 +139,7 @@ char	   *MtmRefereeConnStr;
 bool		MtmBreakConnection;
 bool		MtmWaitPeerCommits;
 bool		MtmNo3PC;
+bool		MtmBinaryBasetypes;
 
 bool mtm_config_valid;
 
@@ -602,6 +603,20 @@ NULL);
 							NULL,
 							NULL
 		);
+
+	DefineCustomBoolVariable(
+		"multimaster.binary_basetypes",
+		"Send native PG types in binary format",
+		NULL,
+		&MtmBinaryBasetypes,
+		true,
+		PGC_POSTMASTER,
+		0,
+		NULL,
+		NULL,
+		NULL
+		);
+
 
 	/* MtmDeadlockDetectorInit(MTM_MAX_NODES); */
 

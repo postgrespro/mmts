@@ -148,6 +148,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->caughtup_cb = pg_decode_caughtup;
 }
 
+#if 0
 static bool
 check_binary_compatibility(PGLogicalOutputData *data)
 {
@@ -205,6 +206,7 @@ check_binary_compatibility(PGLogicalOutputData *data)
 
 	return true;
 }
+#endif
 
 /* initialize this plugin */
 static void
@@ -216,9 +218,6 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 	data->context = AllocSetContextCreate(TopMemoryContext,
 										  "pglogical conversion context",
 										  ALLOCSET_DEFAULT_SIZES);
-	data->allow_internal_basetypes = true;
-	data->allow_binary_basetypes = true;
-
 
 	ctx->output_plugin_private = data;
 
@@ -292,10 +291,11 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 		}
 		else if ((data->client_protocol_format != NULL
 				  && strcmp(data->client_protocol_format, "native") == 0)
-				 /* yeah, that's what we really use */
+				 /* yeah, that's what mm really uses */
 				 || data->client_protocol_format == NULL)
 		{
 			data->api = pglogical_init_api(PGLogicalProtoNative);
+			/* nobody cares about this value */
 			opt->output_type = OUTPUT_PLUGIN_BINARY_OUTPUT;
 
 			if (data->client_no_txinfo)
@@ -352,24 +352,6 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 			}
 
 			data->field_datum_encoding = wanted_encoding;
-		}
-
-		/*
-		 * It's obviously not possible to send binary representatio of data
-		 * unless we use the binary output.
-		 */
-		if (opt->output_type == OUTPUT_PLUGIN_BINARY_OUTPUT &&
-			data->client_want_internal_basetypes)
-		{
-			data->allow_internal_basetypes =
-				check_binary_compatibility(data);
-		}
-
-		if (opt->output_type == OUTPUT_PLUGIN_BINARY_OUTPUT &&
-			data->client_want_binary_basetypes &&
-			data->client_binary_basetypes_major_version == PG_VERSION_NUM / 100)
-		{
-			data->allow_binary_basetypes = true;
 		}
 
 		/*
