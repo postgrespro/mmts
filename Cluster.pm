@@ -97,6 +97,11 @@ sub init
 			multimaster.heartbeat_recv_timeout = 5000
 
 			multimaster.syncpoint_interval = 10MB
+
+			# For add_stop node test we need at least 4 * 3 * (2 * trans_spill_threshold)
+			# MB of shmem, and some bf members have only 2GB /dev/shm, so be
+			# careful upping this.
+			multimaster.trans_spill_threshold = 50MB
 		});
 		$node->append_conf('pg_hba.conf', $hba);
 
