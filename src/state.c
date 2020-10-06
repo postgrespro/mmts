@@ -1954,7 +1954,11 @@ MtmOnDmqReceiverConnect(char *node_name)
 	else
 		mtm_log(MtmStateMessage, "[STATE] dmq receiver from node %d connected", node_id);
 
-	/* make sure monitor already restored generation state */
+	/*
+	 * Make sure monitor already restored generation state.
+	 * (monitor doesn't wait for our death on exit, but generation state
+	 * doesn't disappear on its restart, so this is fine)
+	 */
 	if (!Mtm->monitor_loaded)
 		mtm_log(FATAL, "mtm-monitor is not loaded yet");
 
@@ -3386,6 +3390,35 @@ typedef struct
 	TimestampTz last_start_time;
 } MtmBgw;
 
+static void
+MtmKillWalsenders(void)
+{
+	int			i;
+	int			n_live_walsendes;
+
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	Mtm->monitor_loaded = false;
+	for (i = 0; i < MTM_MAX_NODES; i++)
+	{
+		if (Mtm->peers[i].walsender_pid != InvalidPid)
+			kill(Mtm->peers[i].walsender_pid, SIGTERM);
+	}
+	LWLockRelease(Mtm->lock);
+	for (;;)
+	{
+		n_live_walsendes = 0;
+		for (i = 0; i < MTM_MAX_NODES; i++)
+		{
+			if (Mtm->peers[i].walsender_pid != InvalidPid)
+				n_live_walsendes++;
+		}
+		if (n_live_walsendes == 0)
+			break;
+		MtmSleep(USECS_PER_SEC / 10);
+	}
+
+}
+
 /*
  * Kill and wait for shutdown of all our children before getting out: we
  * e.g. don't want to duplicate them when new monitor starts.
@@ -3395,6 +3428,13 @@ MtmMonitorOnExit(int status, Datum arg)
 {
 	MtmBgw *bgws = (MtmBgw *) DatumGetPointer(arg);
 	int i;
+
+	mtm_log(MtmStateMessage, "monitor exiting");
+	LWLockReleaseAll(); /* in case we ERRORed out here helding hwlock */
+	MtmKillWalsenders();
+
+	/* we won't remember on next start which dests were already configured */
+	dmq_destination_drop(NULL);
 
 	/*
 	 * monitor must take all his wards with himself; otherwise e.g. new
@@ -3412,8 +3452,8 @@ MtmMonitorOnExit(int status, Datum arg)
 
 	/*
 	 * TODO: for extra paranoia it would be nice to kill here all dmq
-	 * receivers and walsenders (and prevent start of new ones) to
-	 * e.g. prevent old processes running after mtm re-initialization.
+	 * receivers (and prevent start of new ones) to e.g. prevent old processes
+	 * running after mtm re-initialization.
 	 */
 }
 
@@ -3846,8 +3886,6 @@ MtmMonitor(Datum arg)
 	 */
 	pfree(mtm_cfg);
 	mtm_cfg = NULL;
-	/* if previous instance of monitor configured something, drop it */
-	dmq_destination_drop(NULL);
 
 	/*
 	 * Keep us informed about subscription changes, so we can react on node
@@ -3908,6 +3946,13 @@ MtmMonitor(Datum arg)
 			if (mtm_cfg->my_node_id == MtmInvalidNodeId)
 			{
 				int			rc;
+
+				/*
+				 * Ensure walsenders don't stream anymore once we purge state.
+				 * In particular, telling others to wipe MTM_NODES is
+				 * something we would like to avoid.
+				 */
+				MtmKillWalsenders();
 
 				StartTransactionCommand();
 				if (SPI_connect() != SPI_OK_CONNECT)

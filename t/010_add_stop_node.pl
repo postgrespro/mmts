@@ -169,8 +169,8 @@ is($cluster->is_data_identic((0,1,2,3)), 1, "check recovery after add_node");
 # drop one of the initial nodes
 ################################################################################
 
-$cluster->safe_psql(1, "select mtm.drop_node(2)");
 $cluster->{nodes}->[0]->stop('fast');
+$cluster->safe_psql(1, "select mtm.drop_node(2)");
 
 # check basic recovery after drop_node
 $cluster->{nodes}->[1]->stop('fast');

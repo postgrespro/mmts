@@ -730,13 +730,27 @@ decide_datum_transfer(Form_pg_attribute att, Form_pg_type typclass,
 }
 
 static void
+MtmWalsenderOnExit(int status, Datum arg)
+{
+	int receiver_node_id = DatumGetInt32(arg);
+
+	LWLockReleaseAll(); /* in case we ERRORed out here with lwlock held */
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	if (Mtm->peers[receiver_node_id - 1].walsender_pid == MyProcPid)
+	{
+		Mtm->peers[receiver_node_id - 1].walsender_pid = InvalidPid;
+		BIT_CLEAR(Mtm->walsenders_mask, receiver_node_id - 1);
+	}
+	LWLockRelease(Mtm->lock);
+
+	mtm_log(ProtoTraceMode, "walsender to node %d exited", receiver_node_id);
+}
+
+static void
 MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 {
 	ListCell   *param;
 	MtmDecoderPrivate *hooks_data;
-
-	if (Mtm->my_node_id == MtmInvalidNodeId)
-		mtm_log(ERROR, "multimaster is not configured or not initialized yet");
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
@@ -744,6 +758,20 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 		   &hooks_data->receiver_node_id);
 	hooks_data->is_recovery = false;
 	hooks_data->cfg = MtmLoadConfig();
+	/* shutdown_cb is not what we want is it won't be called on ERROR|FATAL */
+	before_shmem_exit(MtmWalsenderOnExit, Int32GetDatum(hooks_data->receiver_node_id));
+
+	/*
+	 * Start only if monitor is up and running
+	 */
+	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+	if (!Mtm->monitor_loaded)
+		mtm_log(ERROR, "multimaster is not configured or not initialized yet");
+	if (Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid != InvalidPid)
+		mtm_log(ERROR, "walsender to node %d is still running", hooks_data->receiver_node_id);
+	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = MyProcPid;
+	BIT_SET(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
+	LWLockRelease(Mtm->lock);
 
 	foreach(param, args->in_params)
 	{
@@ -773,19 +801,6 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 		}
 	}
 
-	/*
-	 * Set proper originId mappings.
-	 *
-	 * This is copypasted from receiver. Better to have normal init method to
-	 * setup all stuff in shared memory. But seems that there is no such
-	 * callback in vanilla pg and adding one will require some carefull
-	 * thoughts.
-	 */
-	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
-	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = MyProcPid;
-	BIT_SET(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
-	LWLockRelease(Mtm->lock);
-
 	mtm_log(ProtoTraceMode,
 			"walsender to node %d starts in %s mode",
 			hooks_data->receiver_node_id,
@@ -795,18 +810,6 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 static void
 MtmReplicationShutdownHook(struct PGLogicalShutdownHookArgs *args)
 {
-	MtmDecoderPrivate *hooks_data = (MtmDecoderPrivate *) args->private_data;
-
-	Assert(hooks_data->receiver_node_id >= 0);
-
-	LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
-	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = InvalidPid;
-	BIT_CLEAR(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
-	LWLockRelease(Mtm->lock);
-
-	mtm_log(ProtoTraceMode, "walsender to node %d exits",
-			hooks_data->receiver_node_id);
-	hooks_data->receiver_node_id = -1;
 }
 
 /*
