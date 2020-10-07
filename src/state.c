@@ -962,6 +962,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 {
 	nodemask_t connected_mask_with_me;
 	nodemask_t clique;
+	bool	   replier_loaded;
 
 	/*
 	 * Basebackup'ed node must recover from donor until it obtains syncpoints
@@ -997,6 +998,25 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 			mtm_state->last_vote.num,
 			maskToString(clique),
 			maskToString(connected_mask_with_me));
+
+	/*
+	 * *After* we have retrieved the connectivity check that the replier is
+	 * still running. On exit it kills dmq receivers (ReplierOnExit); we must
+	 * be sure we are not funnily trying to exclude some node just because our
+	 * replier killed the dmq receiver from it.
+	 *
+	 * Added after a slow bf machine managed on fast shutdown to elect
+	 * generation without e.g. node A after dmq receiver from A was killed by
+	 * replier but before the rest of receivers were killed.
+	 */
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	replier_loaded = Mtm->replier_loaded;
+	LWLockRelease(Mtm->lock);
+	if (!replier_loaded)
+	{
+		mtm_log(MtmStateDebug, "not campaigning replier is not running");
+		goto no_interesting_candidates;
+	}
 
 	/*
 	 * If I am online in curr gen (definitely its member) and all members are
