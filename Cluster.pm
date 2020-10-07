@@ -318,6 +318,7 @@ sub await_nodes()
 	$mm_ping //= 1;
 	my $query = $mm_ping ? "select mtm.ping();" : "select 't';";
 
+	print("await_nodes " . join(", ", @{$nodenums}) . "\n");
 	foreach my $i (@$nodenums)
 	{
 		my $dbname = $self->{nodes}->[$i]->{dbname};
@@ -330,6 +331,18 @@ sub await_nodes()
 			print("Polled node$i\n");
 		}
 	}
+}
+
+# use after simulated failure of some node; waits for others to converge
+sub await_nodes_after_stop()
+{
+	my ($self, $nodenums) = @_;
+	# wait till others notice the node is down...
+	# (more strictly speaking we should wait > heartbeat_recv_timeout, but we
+	# don't emulate network issues, so the failure is noticed instantly)
+	sleep(2);
+	# and then ensure generation switch is over
+	$self->await_nodes($nodenums);
 }
 
 sub pgbench()

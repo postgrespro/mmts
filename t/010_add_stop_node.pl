@@ -65,8 +65,7 @@ $cluster->pgbench(2, ('-N', '-n', -t => '100') );
 ################################################################################
 
 $cluster->{nodes}->[2]->stop('fast');
-# sometimes failure of one node forces another into short recovery
-sleep(2);
+$cluster->await_nodes_after_stop( [0,1] );
 $cluster->pgbench(0, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[2]->start;
 
@@ -158,7 +157,7 @@ $cluster->safe_psql(3, "insert into test_seq values(DEFAULT)");
 ################################################################################
 
 $cluster->{nodes}->[0]->stop('fast');
-sleep(2);
+$cluster->await_nodes_after_stop( [1,2,3] );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[0]->start;
 
@@ -170,11 +169,12 @@ is($cluster->is_data_identic((0,1,2,3)), 1, "check recovery after add_node");
 ################################################################################
 
 $cluster->{nodes}->[0]->stop('fast');
+$cluster->await_nodes_after_stop( [1,2,3] );
 $cluster->safe_psql(1, "select mtm.drop_node(2)");
 
 # check basic recovery after drop_node
 $cluster->{nodes}->[1]->stop('fast');
-sleep(2);
+$cluster->await_nodes_after_stop( [2,3] );
 $cluster->pgbench(3, ('-N', '-n', -T => '1') );
 $cluster->pgbench(2, ('-N', '-n', -T => '1') );
 $cluster->{nodes}->[1]->start;

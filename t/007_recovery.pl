@@ -29,8 +29,7 @@ $cluster->pgbench(1, ('-n','-N', -T => '4') );
 $cluster->pgbench(2, ('-n','-N', -T => '4') );
 
 $cluster->{nodes}->[2]->stop('fast');
-sleep($cluster->{recv_timeout});
-$cluster->await_nodes( [0,1] );
+$cluster->await_nodes_after_stop( [0,1] );
 
 $cluster->pgbench(0, ('-n','-N', -T => '4') );
 $cluster->pgbench(1, ('-n','-N', -T => '4') );
