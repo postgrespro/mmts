@@ -14,6 +14,7 @@
 #include "catalog/pg_type.h"
 #include "tcop/tcopprot.h"
 #include "pgstat.h"
+#include "port/pg_crc32c.h"
 #include "storage/ipc.h"
 #include "miscadmin.h"			/* PostmasterPid */
 #include "utils/syscache.h"
