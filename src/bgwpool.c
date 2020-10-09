@@ -1,4 +1,5 @@
 #include "postgres.h"
+#include "access/transam.h"
 #include "access/xtm.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -119,14 +120,38 @@ subscription_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 static void
 BgwPoolBeforeShmemExit(int status, Datum arg)
 {
-	BgwPool *poolDesc = (BgwPool *) DatumGetPointer(arg);
+	MtmReceiverWorkerContext *rwctx = (MtmReceiverWorkerContext *) DatumGetPointer(arg);
+	BgwPool *poolDesc = rwctx->pool;
 	pid_t receiver_pid;
 
 	/*
 	 * We might ERROR out here with poolDesc lock held (final release of all
 	 * lwlocks happens in ProcKill which is called later).
+	 * XXX: this actually smells; I've seen getting here after ERROR in
+	 * palloc, but we shouldn't palloc under lwlock, really
 	 */
 	LWLockReleaseAll();
+
+	/* this is cosmetics as currently dying pool worker takes down the whole pool*/
+	if (rwctx->txlist_pos != -1)
+	{
+		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+				   rwctx->txlist_pos);
+		rwctx->txlist_pos = -1;
+	}
+
+	/*
+	 * If we were unfortunate enough to die with possibly already applied
+	 * change (PREPARE if origin_xid is valid, 2A|COMMIT if reply_pending) but
+	 * before ack, cut the link down to tell sender not to wait for us.
+	 */
+	if (TransactionIdIsValid(rwctx->origin_xid) || rwctx->reply_pending)
+	{
+		mtm_log(BgwPoolEvent, "forcing dmq sender reconnection to node %d as applier exits with unsent reply",
+				rwctx->sender_node_id);
+		dmq_destination_reconnect(
+			psprintf(MTM_DMQNAME_FMT, rwctx->sender_node_id));
+	}
 
 	/*
 	 * Dynamic workers never die one by one normally because receiver is
@@ -152,16 +177,17 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 {
 	int			size;
 	void	   *work;
-	MtmReceiverWorkerContext rwctx;
+	MtmReceiverWorkerContext *rwctx;
 	static PortalData fakePortal;
 	dsm_segment *seg;
 
-	MemSet(&rwctx, '\0', sizeof(MtmReceiverWorkerContext));
-	rwctx.sender_node_id = poolDesc->sender_node_id;
-	rwctx.mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
-	rwctx.txlist_pos = -1;
-	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(poolDesc));
-	TM->DetectGlobalDeadLockArg = PointerGetDatum(&rwctx.mode);
+	rwctx = MemoryContextAllocZero(TopMemoryContext, sizeof(MtmReceiverWorkerContext));
+	rwctx->sender_node_id = poolDesc->sender_node_id;
+	rwctx->mode = REPLMODE_NORMAL; /* parallel workers always apply normally */
+	rwctx->txlist_pos = -1;
+	rwctx->pool = poolDesc;
+	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(rwctx));
+	TM->DetectGlobalDeadLockArg = PointerGetDatum(&rwctx->mode);
 
 	/* Connect to the queue */
 	Assert(!dsm_find_mapping(poolDesc->dsmhandler));
@@ -243,13 +269,13 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 
 		if (poolDesc->head + MSGLEN(size) > poolDesc->size)
 		{
-			rwctx.txlist_pos = *((int *) queue);
+			rwctx->txlist_pos = *((int *) queue);
 			memcpy(work, &queue[sizeof(int)], size);
 			poolDesc->head = MSGLEN(size) - sizeof(int);
 		}
 		else
 		{
-			rwctx.txlist_pos = *((int *) &queue[poolDesc->head + sizeof(int)]);
+			rwctx->txlist_pos = *((int *) &queue[poolDesc->head + sizeof(int)]);
 			memcpy(work, &queue[poolDesc->head + 2 * sizeof(int)], size);
 			poolDesc->head += MSGLEN(size);
 		}
@@ -276,7 +302,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 
 		LWLockRelease(&poolDesc->lock);
 
-		MtmExecutor(work, size, &rwctx);
+		MtmExecutor(work, size, rwctx);
 		pfree(work);
 	}
 

@@ -17,6 +17,9 @@ extern char const *const MtmReplicationModeMnem[];
 /* forward decl to avoid including global_tx.h */
 struct GlobalTx;
 
+/* same for bgwpool.h */
+struct BgwPool;
+
 /*
  * Part of MtmReceiverContext used by both main receiver and parallel workers.
  * Exposed for bgwpool/apply needs.
@@ -36,11 +39,14 @@ typedef struct
 	 */
 	TransactionId		origin_xid;
 	TransactionId		my_xid;
+	bool				reply_pending;
 	/*
 	 * true means this is xact with plain commit, so we cannot ignore
 	 * apply failure
 	 */
 	bool				bdr_like;
+
+	struct BgwPool		*pool;
 } MtmReceiverWorkerContext;
 
 extern void MtmWakeupReceivers(void);

@@ -99,6 +99,7 @@ typedef struct
 	double		conn_start_time;
 	int			pos;
 	int8		mask_pos;
+	bool		reconnect_requested;
 } DmqDestination;
 
 typedef struct
@@ -599,6 +600,19 @@ dmq_sender_main(Datum main_arg)
 					PQfinish(conns[i].pgconn);
 					conns[i].active = false;
 					conns[i].pgconn = NULL;
+				}
+				else if (dest->active && conns[i].active &&
+						 dest->reconnect_requested)
+				{
+					dest->reconnect_requested = false;
+					PQfinish(conns[i].pgconn);
+					conns[i].pgconn = NULL;
+					if (conns[i].state == Active)
+					{
+						dmq_sender_disconnect_hook(conns[i].receiver_name);
+					}
+					conns[i].state = Idle;
+					dmq_state->sconn_cnt[dest->mask_pos] = DMQSCONN_DEAD;
 				}
 			}
 			LWLockRelease(dmq_state->lock);
@@ -2193,6 +2207,34 @@ dmq_destination_drop(char *receiver_name)
 			 (strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)))
 		{
 			dest->active = false;
+			if (receiver_name)
+				break;
+		}
+	}
+	sender_pid = dmq_state->sender_pid;
+	LWLockRelease(dmq_state->lock);
+
+	if (sender_pid)
+		kill(sender_pid, SIGHUP);
+}
+
+/* ask dmq sender to reconnect */
+void
+dmq_destination_reconnect(char *receiver_name)
+{
+	DmqDestinationId dest_id;
+	pid_t		sender_pid;
+
+	LWLockAcquire(dmq_state->lock, LW_EXCLUSIVE);
+	for (dest_id = 0; dest_id < DMQ_MAX_DESTINATIONS; dest_id++)
+	{
+		DmqDestination *dest = &(dmq_state->destinations[dest_id]);
+
+		if (dest->active &&
+			((receiver_name == NULL) ||
+			 (strncmp(dest->receiver_name, receiver_name, DMQ_NAME_MAXLEN) == 0)))
+		{
+			dest->reconnect_requested = true;
 			if (receiver_name)
 				break;
 		}

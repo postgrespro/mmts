@@ -37,7 +37,7 @@ typedef struct
 /*
  * Shared data of BgwPool
  */
-typedef struct
+typedef struct BgwPool
 {
 	int			sender_node_id;
 	LWLock		lock;

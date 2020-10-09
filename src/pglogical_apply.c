@@ -757,6 +757,17 @@ process_remote_commit(StringInfo in,
 				}
 
 				/*
+				 * That's unlikely, but if the process decides to die (and any
+				 * CHECK_FOR_INTERRUPTS, e.g. in elog might take us out)
+				 * immediately after apply but before sending the report
+				 * sender might wait for it infinitely. Arm the flag to notice
+				 * this in the exit hook; we'll cut the link down to prevent
+				 * the waiting.
+				 */
+				if (rwctx->mode == REPLMODE_NORMAL)
+					rwctx->reply_pending = true;
+
+				/*
 				 * give vote iff paxos rules allow it.
 				 */
 				if (term_cmp(msg_term, rwctx->gtx->state.proposal) >= 0)
@@ -788,6 +799,7 @@ process_remote_commit(StringInfo in,
 				if (rwctx->mode == REPLMODE_NORMAL)
 					mtm_send_2a_reply(gid, reply_status,
 									  reply_acc, origin_node);
+				rwctx->reply_pending = false;
 
 				GlobalTxRelease(rwctx->gtx);
 				rwctx->gtx = NULL;
@@ -1015,6 +1027,7 @@ process_remote_commit(StringInfo in,
 					StartTransactionCommand();
 					MtmBeginSession(origin_node);
 
+					rwctx->reply_pending = true;
 					FinishPreparedTransaction(gid, true, false);
 					CommitTransactionCommand();
 					rwctx->gtx->state.status = GTXCommitted;
@@ -1089,6 +1102,7 @@ process_remote_commit(StringInfo in,
 				if (rwctx->mode == REPLMODE_NORMAL)
 					mtm_send_2a_reply(gid, GTXCommitted,
 									  InvalidGTxTerm, origin_node);
+				rwctx->reply_pending = false;
 
 				break;
 			}
@@ -1660,27 +1674,11 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		edata = CopyErrorData();
 		EmitErrorReport();
 		FlushErrorState();
-
-		pgstat_report_activity(STATE_RUNNING, NULL);
-		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
-				   rwctx->txlist_pos);
-		rwctx->txlist_pos = -1;
-		query_cancel_allowed = false;
-		ReleasePB();
-		debug_query_string = NULL;
-
-		/*
-		 * handle only prepare errors here
-		 * XXX reply to 2a also, though its failure is unlikely
-		 */
+		/* TODO: better add it as context */
 		if (TransactionIdIsValid(rwctx->origin_xid))
-		{
-			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
-			if (rwctx->mode == REPLMODE_NORMAL)
-				mtm_send_prepare_reply(rwctx->origin_xid,
-									   rwctx->sender_node_id,
-									   false, edata);
-		}
+			mtm_log(MtmApplyError, "abort transaction origin_xid=" XID_FMT,
+					rwctx->origin_xid);
+
 
 		/*
 		 * If we are in recovery, there is no excuse for refusing the
@@ -1720,18 +1718,43 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 			 */
 			proc_exit(1);
 		}
+		/*
+		 * reply_pending matters only for 2A|CP|AP, we are not allowed to fail
+		 * applying them and must've bailed out above
+		 */
+		Assert(!rwctx->reply_pending);
+
+
+		/* cleanup */
+
+		ReleasePB();
 
 		if (rwctx->gtx != NULL)
 		{
 			GlobalTxRelease(rwctx->gtx);
 			rwctx->gtx = NULL;
 		}
+
 		MtmEndSession(42, false);
 
 		MtmDDLResetApplyState();
 
-		mtm_log(MtmApplyError, "abort transaction origin_xid=" XID_FMT,
-				rwctx->origin_xid);
+		txl_remove(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+				   rwctx->txlist_pos);
+		rwctx->txlist_pos = -1;
+		query_cancel_allowed = false;
+
+		/*
+		 * handle only prepare errors here
+		 */
+		if (TransactionIdIsValid(rwctx->origin_xid))
+		{
+			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
+			if (rwctx->mode == REPLMODE_NORMAL)
+				mtm_send_prepare_reply(rwctx->origin_xid,
+									   rwctx->sender_node_id,
+									   false, edata);
+		}
 
 		FreeErrorData(edata);
 		AbortCurrentTransaction();

@@ -39,6 +39,7 @@
 #include "replication/message.h"
 #include "access/relscan.h"
 #include "commands/vacuum.h"
+#include "pgstat.h"
 #include "utils/inval.h"
 #include "utils/builtins.h"
 #include "replication/origin.h"
@@ -1476,6 +1477,9 @@ MtmDDLResetApplyState()
 {
 	MtmCapturedDDL = NULL;
 	DDLApplyInProgress = false;
+	/* the memory it points to is about to go away */
+	debug_query_string = NULL;
+	pgstat_report_activity(STATE_RUNNING, NULL);
 }
 
 

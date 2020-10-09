@@ -15,6 +15,7 @@ extern DmqDestinationId dmq_destination_add(char *connstr, char *sender_name,
 											char *receiver_name, int8 recv_mask_pos,
 											int ping_period);
 extern void dmq_destination_drop(char *receiver_name);
+extern void dmq_destination_reconnect(char *receiver_name);
 
 extern void dmq_attach_receiver(char *sender_name, int8 mask_pos);
 extern void dmq_detach_receiver(char *sender_name);
