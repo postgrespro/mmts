@@ -3037,6 +3037,12 @@ handle_1a_batch(HTAB *txset)
 		return; /* prevent dummy logging */
 	mtm_log(StatusRequest, "got batch of %ld 1a messages to process",
 				hash_get_num_entries(txset));
+	/*
+	 * handle_1a will do StartTransactionCommand|CommitTransactionCommand
+	 * inside, and AtEOXact_HashTables somewhat weirdly expects no open scans
+	 * during commit, unless the table is freezed.
+	 */
+	hash_freeze(txset);
 	hash_seq_init(&txset_seq, txset);
 	while ((txse = hash_seq_search(&txset_seq)) != NULL)
 	{
