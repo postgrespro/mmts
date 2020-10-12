@@ -78,7 +78,7 @@ query_exec($conns[1], "update t set v = 'foo'");
 query_exec_async($conns[0], "commit");
 query_exec_async($conns[1], "commit");
 
-my $timeout = 5;
+my $timeout = 16;
 while (--$timeout > 0)
 {
 	my $r0 = $conns[0]->pg_ready();
