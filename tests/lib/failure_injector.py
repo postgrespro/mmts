@@ -1,10 +1,13 @@
 import docker
-
+import os
 
 class FailureInjector(object):
 
     def __init__(self, node=None):
-        self.docker_api = docker.from_env()
+        timeout = os.environ.get('DOCKER_CLIENT_TIMEOUT')
+        if timeout is not None:
+            timeout = int(timeout)
+        self.docker_api = docker.from_env(timeout=timeout)
 
     def container_exec(self, node, command):
         docker_node = self.docker_api.containers.get(node)

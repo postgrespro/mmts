@@ -28,6 +28,12 @@ TEST_STOP_DELAY = 5
 # https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services
 NODE_HOST = 'docker' if 'DOCKER_HOST' in os.environ else '127.0.0.1'
 
+# sometimes docker seems to randomly hang for a default 60s, see
+# https://github.com/docker/compose/issues/3927
+# increase timeout in both compose in direct API calls
+os.environ['DOCKER_CLIENT_TIMEOUT'] = '180'
+os.environ['COMPOSE_HTTP_TIMEOUT'] = '180'
+
 class MMTestCase(unittest.TestCase):
     @classmethod
     def collectLogs(cls, referee=False):
