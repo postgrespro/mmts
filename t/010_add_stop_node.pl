@@ -117,11 +117,13 @@ $cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket
 # node itself and not burden user with carrying it around, but there seems no
 # easy way to do that without core changes.
 $cluster->{nodes}->[$new_node_off]->append_conf(
-		"recovery.conf", qq(
+		"postgresql.conf", qq(
 restore_command = 'false'
 recovery_target = 'immediate'
 recovery_target_action = 'promote'
 ));
+# create recovery.signal
+$cluster->{nodes}->[$new_node_off]->set_recovery_mode();
 $cluster->{nodes}->[$new_node_off]->start;
 $cluster->await_nodes([3,0,1,2], 0);
 $cluster->safe_psql(0, "SELECT mtm.join_node('$new_node_id', '$end_lsn')");

@@ -506,7 +506,12 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	if (start_lsn == PG_UINT64_MAX)
 		return filter_map;
 
-	xlogreader = XLogReaderAllocate(wal_segment_size, &read_local_xlog_page, NULL);
+	xlogreader = XLogReaderAllocate(wal_segment_size,
+									NULL,
+									XL_ROUTINE(.page_read = &read_local_xlog_page,
+											   .segment_open = &wal_segment_open,
+											   .segment_close = &wal_segment_close),
+									NULL);
 	if (!xlogreader)
 		ereport(ERROR,
 				(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -528,6 +533,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	}
 
 	/* fill our filter */
+	XLogBeginRead(xlogreader, start_lsn);
 	do
 	{
 		XLogRecord *record;
@@ -536,7 +542,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 		int			node_id;
 		char		*gid = ""; /* for debugging */
 
-		record = XLogReadRecord(xlogreader, start_lsn, &errormsg);
+		record = XLogReadRecord(xlogreader, &errormsg);
 		if (record == NULL)
 		{
 			if (errormsg)
@@ -547,9 +553,6 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 						"load_filter_map: got NULL from XLogReadRecord, breaking");
 			break;
 		}
-
-		/* continue reading on next iteration */
-		start_lsn = InvalidXLogRecPtr;
 
 		/* skip local records */
 		origin_id = XLogRecGetOrigin(xlogreader);
@@ -599,7 +602,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 					{
 						xl_xact_parsed_prepare parsed;
 
-						ParsePrepareRecord(info, XLogRecGetData(xlogreader), &parsed);
+						ParsePrepareRecord(info, (xl_xact_prepare *) XLogRecGetData(xlogreader), &parsed);
 						entry.origin_lsn = parsed.origin_lsn;
 						gid = parsed.twophase_gid;
 						break;

@@ -6,12 +6,12 @@
  */
 #include "postgres.h"
 #include "access/transam.h"
-#include "access/xtm.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "postmaster/postmaster.h"
 #include "postmaster/bgworker.h"
+#include "postmaster/interrupt.h"
+#include "postmaster/postmaster.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -193,7 +193,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	rwctx->txlist_pos = -1;
 	rwctx->pool = poolDesc;
 	before_shmem_exit(BgwPoolBeforeShmemExit, PointerGetDatum(rwctx));
-	TM->DetectGlobalDeadLockArg = PointerGetDatum(&rwctx->mode);
+	curr_replication_mode = rwctx->mode;
 
 	/* Connect to the queue */
 	Assert(!dsm_find_mapping(poolDesc->dsmhandler));
@@ -223,7 +223,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	pqsignal(SIGINT, die);
 	pqsignal(SIGQUIT, die);
 	pqsignal(SIGTERM, BgwShutdownHandler);
-	pqsignal(SIGHUP, PostgresSigHupHandler);
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 
 	BackgroundWorkerUnblockSignals();
 	BackgroundWorkerInitializeConnectionByOid(poolDesc->db_id, poolDesc->user_id, 0);

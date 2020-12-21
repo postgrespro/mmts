@@ -419,7 +419,11 @@ MtmTwoPhaseCommit(void)
 	 */
 	if (!IsTransactionBlock())
 	{
+#ifdef PGPRO_EE /* atx */
 		BeginTransactionBlock(false);
+#else
+		BeginTransactionBlock();
+#endif
 		CommitTransactionCommand();
 		StartTransactionCommand();
 	}

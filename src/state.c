@@ -7,9 +7,10 @@
  */
 #include "postgres.h"
 
-/* mkdir */
+/* mkdir, read/write */
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "access/twophase.h"
 #include "access/xlogutils.h"
@@ -29,7 +30,8 @@
 #include "replication/slot.h"
 #include "replication/origin.h"
 #include "miscadmin.h"
-#include "replication/logicalfuncs.h"
+#include "postmaster/interrupt.h"
+#include "replication/logical.h"
 #include "replication/message.h"
 #include "utils/builtins.h"
 #include "funcapi.h"
@@ -1718,13 +1720,9 @@ CampaignerMain(Datum main_arg)
 		 * supporting each other)
 		 */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 					   campaign_retry_interval * pg_erand48(drandom_seed),
 					   PG_WAIT_EXTENSION);
-
-		/* Emergency bailout if postmaster has died */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);
@@ -3363,12 +3361,8 @@ ReplierMain(Datum main_arg)
 		if (!job_pending)
 		{
 			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_POSTMASTER_DEATH,
+						   WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
 						   0, PG_WAIT_EXTENSION);
-
-			/* Emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
 
 			if (rc & WL_LATCH_SET)
 				ResetLatch(MyLatch);
@@ -3663,8 +3657,11 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
 		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
 										false,	/* do not build snapshot */
-										logical_read_local_xlog_page, NULL, NULL,
-										NULL);
+										InvalidXLogRecPtr,
+										XL_ROUTINE(.page_read = read_local_xlog_page,
+												   .segment_open = wal_segment_open,
+												   .segment_close = wal_segment_close),
+										NULL, NULL, NULL);
 		DecodingContextFindStartpoint(ctx);
 		FreeDecodingContext(ctx);
 		ReplicationSlotPersist();
@@ -3760,7 +3757,7 @@ MtmMonitor(Datum arg)
 	MtmBgw *bgws = palloc0(sizeof(MtmBgw) * (MTM_SINGLE_BGWS_NUM + MTM_MAX_NODES));
 
 	pqsignal(SIGTERM, die);
-	pqsignal(SIGHUP, PostgresSigHupHandler);
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 
 	MtmBackgroundWorker = true;
 	before_shmem_exit(MtmMonitorOnExit, PointerGetDatum(bgws));
@@ -4050,12 +4047,8 @@ MtmMonitor(Datum arg)
 		}
 
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 					   wait_time, PG_WAIT_EXTENSION);
-
-		/* Emergency bailout if postmaster has died */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);
@@ -4098,7 +4091,12 @@ GetLoggedPreparedXactState(HTAB *txset)
 	if (start_lsn != InvalidXLogRecPtr)
 	{
 		MemoryContext memctx = CurrentMemoryContext;
-		xlogreader = XLogReaderAllocate(wal_segment_size, &read_local_xlog_page, NULL);
+		xlogreader = XLogReaderAllocate(wal_segment_size,
+										NULL,
+										XL_ROUTINE(.page_read = &read_local_xlog_page,
+												   .segment_open = &wal_segment_open,
+												   .segment_close = &wal_segment_close),
+										NULL);
 		if (!xlogreader)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -4120,15 +4118,14 @@ GetLoggedPreparedXactState(HTAB *txset)
 			/* loop over segments */
 			while (start_lsn != InvalidXLogRecPtr)
 			{
-				lsn = start_lsn;
+				lsn_bump(&start_lsn);
+				XLogBeginRead(xlogreader, start_lsn);
 				/* loop over records in the segment */
 				do
 				{
-					lsn_bump(&lsn);
-					record = XLogReadRecord(xlogreader, lsn, &errormsg);
+					record = XLogReadRecord(xlogreader, &errormsg);
 					if (record == NULL)
 						break;
-					lsn = InvalidXLogRecPtr; /* continue after the record */
 					if (XLogRecGetRmid(xlogreader) == RM_XACT_ID)
 					{
 						uint32 info = XLogRecGetInfo(xlogreader);
@@ -4139,8 +4136,8 @@ GetLoggedPreparedXactState(HTAB *txset)
 						{
 						case XLOG_XACT_PREPARE:
 						{
-							TwoPhaseFileHeader *hdr = (TwoPhaseFileHeader *)XLogRecGetData(xlogreader);
-							char *xact_gid = (char *)hdr + MAXALIGN(sizeof(TwoPhaseFileHeader));
+							xl_xact_prepare *hdr = (xl_xact_prepare *) XLogRecGetData(xlogreader);
+							char *xact_gid = (char *)hdr + MAXALIGN(sizeof(xl_xact_prepare));
 
 							txse = hash_search(txset, xact_gid, HASH_FIND, &found);
 							if (found)

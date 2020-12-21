@@ -1,9 +1,33 @@
 # run core regression tests on multimaster
 
+# tests known to fail currently and failure reasons:
+# - create_index (CREATE INDEX CONCURRENTLY not supported due to deadlock
+#     issues, see ddl.c)
+# - same for index_including, index_including_gist
+# - create_table (due to CTAS prepared statement)
+# - sanity check (due to pg_publication/subscription masking and other mtm tables)
+# - transactions (lack of COMMIT AND CHAIN support)
+# - rowsecurity
+# - atx, atx5
+# - rules (_pg_prepared_xacts and similar)
+# - publication, subscription (_pg_publication/subscription masking)
+# - prepare (CTAS prepared statement)
+# - indexing (again CIC).
+
 use Cluster;
 use File::Basename;
 use IPC::Run 'run';
-use Test::More tests => 1;
+use Test::More;
+
+# With PGXS the sources are unavailable, so we can't obtain schedules and core
+# test themselves.
+if ($ENV{'PGXS'})
+{
+	# Test::More doesn't like no tests at all
+	is(0, 0, "dummy");
+	done_testing();
+	exit(0);
+}
 
 # determenistic ports for expected files
 $PostgresNode::last_port_assigned = 55431;
@@ -24,12 +48,16 @@ my $port = $cluster->{nodes}->[0]->port;
 ###############################################################################
 
 # configure db output format like pg_regress
+# In particular, pg_regress explicitly sets PGTZ=PST8PDT, and it turns out some
+# tests (including DDL! (see volatile_partbound_test)) depend on current_time,
+# so mtm receiver ought to use the same timezone to pass them.
 $cluster->{nodes}->[0]->safe_psql('regression', q{
 	ALTER DATABASE "regression" SET lc_messages TO 'C';
 	ALTER DATABASE "regression" SET lc_monetary TO 'C';
 	ALTER DATABASE "regression" SET lc_numeric TO 'C';
 	ALTER DATABASE "regression" SET lc_time TO 'C';
 	ALTER DATABASE "regression" SET timezone_abbreviations TO 'Default';
+	ALTER DATABASE "regression" SET TimeZone TO 'PST8PDT';
 });
 
 # do not show transaction from concurrent backends in pg_prepared_xacts
@@ -39,9 +67,9 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 		select * from _pg_prepared_xacts where gid not like 'MTM-%'
 		ORDER BY transaction::text::bigint;
 	ALTER TABLE pg_publication RENAME TO _pg_publication;
-	CREATE VIEW pg_catalog.pg_publication AS SELECT oid,* FROM pg_catalog._pg_publication WHERE pubname<>'multimaster';
+	CREATE VIEW pg_catalog.pg_publication AS SELECT * FROM pg_catalog._pg_publication WHERE pubname<>'multimaster';
 	ALTER TABLE pg_subscription RENAME TO _pg_subscription;
-	CREATE VIEW pg_catalog.pg_subscription AS SELECT oid,* FROM pg_catalog._pg_subscription WHERE subname NOT LIKE 'mtm_sub_%';
+	CREATE VIEW pg_catalog.pg_subscription AS SELECT * FROM pg_catalog._pg_subscription WHERE subname NOT LIKE 'mtm_sub_%';
 });
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
@@ -56,10 +84,12 @@ $cluster->await_nodes( [0,1,2] );
 # to work with several postgreses on a single node
 my $schedule = TestLib::slurp_file('../../src/test/regress/parallel_schedule');
 $schedule =~ s/test: tablespace/#test: tablespace/g;
-$schedule =~ s/largeobject//;
+$schedule =~ s/test: largeobject//; # serial schedule
+$schedule =~ s/largeobject//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
+$ENV{'KEEP_OUT'} = '1';
 END {
 	if(! $ENV{'KEEP_OUT'}) {
 		unlink "../../src/test/regress/regression.diffs";
@@ -79,10 +109,15 @@ TestLib::system_log($ENV{'PG_REGRESS'},
 	'--inputdir=../../src/test/regress');
 unlink('parallel_schedule');
 
-# strip dates out of resulted regression.diffs
+# strip absolute paths and dates out of resulted regression.diffs
 my $res_diff = TestLib::slurp_file('../../src/test/regress/regression.diffs');
-$res_diff =~ s/(--- ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
-$res_diff =~ s/(\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
+# In <= 11 default diff format was context, since 12 unified; handing lines
+# starting with ---|+++|*** covers both.
+$res_diff =~ s/(--- |\+\+\+ |\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
+# Since 12 header like
+#   diff -U3 /blabla/contrib/mmts/../../src/test/regress/expected/opr_sanity.out /blabla/mmts/../../src/test/regress/results/opr_sanity.out
+# was added to each file diff
+$res_diff =~ s/(diff ).+(contrib\/mmts.+\.out).+(contrib\/mmts.+\.out\n)/$1$2 $3/g;
 $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 #SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
@@ -93,9 +128,10 @@ unlink('results/regression.diff');
 # Do not use diffs extension as some upper level testing systems are searching for all
 # *.diffs files.
 TestLib::append_to_file('results/regression.diff', $res_diff);
-$diff = TestLib::system_log("diff expected/regression.diff results/regression.diff");
-
-# save diff of diff in file
+$diff = TestLib::system_log("diff -U3 results/regression.diff expected/regression.diff");
 run [ "diff", "-U3", "expected/regression.diff", "results/regression.diff" ], ">", "regression.diff.diff";
 my $res = $?;
+
 is($res, 0, "postgres regress");
+
+done_testing();

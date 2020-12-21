@@ -10,6 +10,9 @@ typedef enum
 	REPLMODE_NORMAL		/* pull only sender changes, apply in parallel */
 } MtmReplicationMode;
 
+/* ugly exported for the sake of MtmDetectGlobalDeadLock */
+extern MtmReplicationMode curr_replication_mode;
+
 #define BGW_POOL_BY_NODE_ID(node_id) (&Mtm->pools[(node_id) - 1])
 
 extern char const *const MtmReplicationModeMnem[];

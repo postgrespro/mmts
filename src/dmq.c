@@ -40,6 +40,7 @@
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
 #include "storage/shm_toc.h"
+#include "postmaster/interrupt.h"
 #include "storage/shm_mq.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
@@ -1364,6 +1365,13 @@ dmq_receiver_at_exit(int status, Datum receiver)
 		dmq_receiver_stop_hook(sender_name);
 }
 
+/* EE pooler gets rid of static variable */
+#ifdef PGPRO_EE
+#define FeBeWaitSetCompat() (MyProcPort->pqcomm_waitset)
+#else
+#define FeBeWaitSetCompat() (FeBeWaitSet)
+#endif
+
 /* xxx should wrap all this in try/catch to turn any ERROR into FATAL */
 Datum
 dmq_receiver_loop(PG_FUNCTION_ARGS)
@@ -1390,7 +1398,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	recv_timeout = PG_GETARG_INT32(1);
 
 	proc_name = psprintf("mtm-dmq-receiver %s", sender_name);
-	set_ps_display(proc_name, true);
+	set_ps_display(proc_name);
 
 	segs = palloc0(MaxBackends * sizeof(dsm_segment *));
 	mq_handles = palloc0(MaxBackends * sizeof(shm_mq_handle *));
@@ -1438,7 +1446,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 	pq_startmsgread();
 
-	ModifyWaitEvent(MyProcPort->pqcomm_waitset, 0, WL_SOCKET_READABLE, NULL);
+	ModifyWaitEvent(FeBeWaitSetCompat(), 0, WL_SOCKET_READABLE, NULL);
 
 	if (dmq_receiver_start_hook)
 		extra = dmq_receiver_start_hook(sender_name);
@@ -1496,7 +1504,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 			break;
 		}
 
-		nevents = WaitEventSetWait(MyProcPort->pqcomm_waitset, 250, &event, 1,
+		nevents = WaitEventSetWait(FeBeWaitSetCompat(), 250, &event, 1,
 								   WAIT_EVENT_CLIENT_READ);
 
 		if (nevents > 0 && event.events & WL_LATCH_SET)
@@ -2027,11 +2035,9 @@ dmq_pop(int8 *sender_mask_pos, StringInfo msg, uint64 mask)
 			continue;
 
 		/* XXX cache that */
-		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 10.0,
+		rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   10.0,
 					   WAIT_EVENT_MQ_RECEIVE);
-
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);

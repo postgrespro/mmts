@@ -3,41 +3,46 @@ use warnings;
 use PostgresNode;
 use Cluster;
 use TestLib;
-use Test::More tests => 5;
+use Test::More;
 
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();
 $cluster->create_mm();
 
-$cluster->safe_psql(0, q{
-	CREATE EXTENSION pg_pathman;
-	CREATE SCHEMA test_update_node;
-	SET pg_pathman.enable_partitionrouter = ON;
+my $hash0; my $hash1; my $hash2; my $hash_query;
 
-	CREATE TABLE test_update_node.test_range(val NUMERIC NOT NULL, comment TEXT);
-	CREATE INDEX val_idx ON test_update_node.test_range (val);
-	INSERT INTO test_update_node.test_range SELECT i, i FROM generate_series(1, 100) i;
-	SELECT create_range_partitions('test_update_node.test_range', 'val', 1, 10);
+# run pathman test only on ee
+if (Cluster::is_ee())
+{
+	$cluster->safe_psql(0, q{
+						CREATE EXTENSION pg_pathman;
+						CREATE SCHEMA test_update_node;
+						SET pg_pathman.enable_partitionrouter = ON;
 
-	ALTER TABLE test_update_node.test_range DROP COLUMN comment CASCADE;
+						CREATE TABLE test_update_node.test_range(val NUMERIC NOT NULL, comment TEXT);
+						CREATE INDEX val_idx ON test_update_node.test_range (val);
+						INSERT INTO test_update_node.test_range SELECT i, i FROM generate_series(1, 100) i;
+						SELECT create_range_partitions('test_update_node.test_range', 'val', 1, 10);
 
-	UPDATE test_update_node.test_range SET val = 115 WHERE val = 55;
-	});
+						ALTER TABLE test_update_node.test_range DROP COLUMN comment CASCADE;
 
-my $hash0; my $hash1; my $hash2;
-my $hash_query = q{
-select
-    md5('(' || string_agg(val::text, '),(') || ')')
-from
-    (select * from test_update_node.test_range order by val) t;
-};
-$hash0 = $cluster->safe_psql(0, $hash_query);
-$hash1 = $cluster->safe_psql(1, $hash_query);
-$hash2 = $cluster->safe_psql(2, $hash_query);
-note("$hash0, $hash1, $hash2");
-is( (($hash0 eq $hash1) and ($hash1 eq $hash2)) , 1,
+						UPDATE test_update_node.test_range SET val = 115 WHERE val = 55;
+						});
+
+	$hash_query = q{
+	select
+	  md5('(' || string_agg(val::text, '),(') || ')')
+	  from
+	  (select * from test_update_node.test_range order by val) t;
+	};
+	$hash0 = $cluster->safe_psql(0, $hash_query);
+	$hash1 = $cluster->safe_psql(1, $hash_query);
+	$hash2 = $cluster->safe_psql(2, $hash_query);
+	note("$hash0, $hash1, $hash2");
+	is( (($hash0 eq $hash1) and ($hash1 eq $hash2)) , 1,
     "Check that hash is the same after query");
+}
 
 $cluster->safe_psql(0, q{
 	CREATE TABLE unique_tbl (i int UNIQUE DEFERRABLE, t text);
@@ -153,3 +158,5 @@ $cluster->safe_psql(0, "
 ");
 
 $cluster->stop();
+
+done_testing();

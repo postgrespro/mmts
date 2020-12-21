@@ -76,9 +76,6 @@ static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBu
 static void pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 							 XLogRecPtr lsn);
 
-static bool pg_filter_decode_txn(LogicalDecodingContext *ctx,
-					 ReorderBufferTXN *txn);
-
 static bool pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				  TransactionId xid, const char *gid);
 
@@ -138,7 +135,6 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->abort_cb = pg_decode_abort_txn;
 
 	cb->filter_prepare_cb = pg_filter_prepare;
-	cb->filter_decode_txn_cb = pg_filter_decode_txn;
 	cb->prepare_cb = pg_decode_prepare_txn;
 	cb->commit_prepared_cb = pg_decode_commit_prepared_txn;
 	cb->abort_prepared_cb = pg_decode_abort_prepared_txn;
@@ -668,38 +664,6 @@ pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	/*
 	 * decode all 2PC transactions
 	 */
-	return false;
-}
-
-/*
- * Check if we should continue to decode this transaction.
- *
- * If it has aborted in the meanwhile, then there's no sense
- * in decoding and sending the rest of the changes, we might
- * as well ask the subscribers to abort immediately.
- *
- * This should be called if we are streaming a transaction
- * before it's committed or if we are decoding a 2PC
- * transaction. Otherwise we always decode committed
- * transactions
- *
- * Additional checks can be added here, as needed
- */
-static bool
-pg_filter_decode_txn(LogicalDecodingContext *ctx,
-					 ReorderBufferTXN *txn)
-{
-	/* if txn is NULL, filter it out */
-	if (txn == NULL)
-		return true;
-
-	/*
-	 * XXX: that is called per-change and quite expensive for in-progress
-	 * transactions.
-	 */
-	if (TransactionIdIsValid(txn->xid) && TransactionIdDidAbort(txn->xid))
-		return true;
-
 	return false;
 }
 

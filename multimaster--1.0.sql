@@ -214,22 +214,6 @@ CREATE TABLE mtm.config(
     value jsonb
 );
 
--- min/max(pg_lsn) appeared only in 13, so put our own implementation here...
-CREATE FUNCTION mtm.pg_lsn_smaller_sql(lsn1 pg_lsn, lsn2 pg_lsn) RETURNS pg_lsn AS $$
-BEGIN
-    IF lsn1 < lsn2 THEN
-      RETURN lsn1;
-    ELSE
-      RETURN lsn2;
-    END IF;
-END
-$$ LANGUAGE plpgsql;
-
-CREATE AGGREGATE mtm.min(pg_lsn)
-(
-    sfunc = mtm.pg_lsn_smaller_sql,
-    stype = pg_lsn
-);
 
 CREATE TABLE mtm.syncpoints(
     receiver_node_id int not null,
@@ -373,7 +357,7 @@ CREATE or replace VIEW mtm.latest_syncpoints AS
 -- Returns NULL if there is no sender_node_id node; returns 0/0 if there is no
 -- suitable syncpoint (yet) for at least one node (possible immediately after init)
 CREATE FUNCTION mtm.get_recovery_horizon(sender_node_id int) RETURNS pg_lsn AS $$
-  SELECT mtm.min(CASE
+  SELECT min(CASE
                  WHEN origin_node_id = sender_node_id THEN origin_lsn
                  ELSE COALESCE((mtm.translate_syncpoint(origin_node_id,
                                                        origin_lsn,
@@ -401,7 +385,7 @@ $$ LANGUAGE sql STABLE;
 -- Returns 0/0 if some node syncpoint doesn't exist yet at all.
 -- would select oldest_absorbpoints in non-blocking implementation
 CREATE FUNCTION mtm.oldest_syncpoint(origin_node_id int) RETURNS pg_lsn AS $$
-    SELECT mtm.min(origin_lsn)
+    SELECT min(origin_lsn)
     FROM mtm.latest_syncpoints ls
     WHERE ls.origin_node_id = oldest_syncpoint.origin_node_id;
 $$ LANGUAGE sql STABLE;

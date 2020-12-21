@@ -688,7 +688,7 @@ ResolverMain(Datum main_arg)
 
 		/* Sleep untl somebody wakes us */
 		rc = WaitLatch(MyLatch,
-					   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 					   3000,
 					   PG_WAIT_TIMEOUT);
 
@@ -696,10 +696,6 @@ ResolverMain(Datum main_arg)
 		/* XXX ars: set it whenever any 3 seconds passed, not 3 idle seconds? */
 		if (rc & WL_TIMEOUT)
 			send_requests = true;
-
-		/* Emergency bailout if postmaster has died */
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);

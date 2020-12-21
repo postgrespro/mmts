@@ -18,9 +18,16 @@ my $port = $cluster->{nodes}->[0]->port;
 # multimaster regression tests
 ###############################################################################
 
+my @tests = ('multimaster');
+# run atx test only on ee
+if (Cluster::is_ee())
+{
+	push @tests, 'atx';
+}
+
 my $ret = TestLib::system_log($ENV{'PG_REGRESS'},
     '--host=' . $Cluster::mm_listen_address, "--port=$port",
-    '--use-existing', '--bindir=', 'multimaster');
+    '--use-existing', '--bindir=', @tests);
 if ($ret != 0)
 {
     print "### Got regression! \n", TestLib::slurp_file('regression.diffs');

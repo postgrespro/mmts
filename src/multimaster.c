@@ -9,12 +9,17 @@
  */
 #include "postgres.h"
 
-#include "access/xtm.h"
+#include "access/relscan.h"
+#include "access/table.h"
+#include "access/tableam.h"
+#include "access/heapam.h"
+#include "access/xact.h"
 #include "nodes/makefuncs.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
 #include "replication/logical.h"
 #include "storage/ipc.h"
+#include "storage/proc.h"
 #include "utils/builtins.h"
 #include "commands/publicationcmds.h"
 #include "commands/subscriptioncmds.h"
@@ -24,6 +29,7 @@
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_publication.h"
 #include "utils/rel.h"
+#include "utils/snapmgr.h"
 #include "commands/defrem.h"
 #include "replication/message.h"
 #include "utils/pg_lsn.h"
@@ -72,14 +78,15 @@ PG_FUNCTION_INFO_V1(mtm_init_cluster);
 PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
 PG_FUNCTION_INFO_V1(mtm_ping);
 
+#if 0
 static size_t MtmGetTransactionStateSize(void);
 static void MtmSerializeTransactionState(void *ctx);
 static void MtmDeserializeTransactionState(void *ctx);
-static void *MtmCreateSavepointContext(void);
-static void MtmRestoreSavepointContext(void *ctx);
-static void MtmReleaseSavepointContext(void *ctx);
+#endif
+#ifdef PGPRO_EE
 static void *MtmSuspendTransaction(void);
 static void MtmResumeTransaction(void *ctx);
+#endif
 
 static void MtmShmemStartup(void);
 
@@ -108,22 +115,6 @@ char const *const MtmMessageTagMnem[] =
 	"MtmHeartbeat",
 	"MtmGenVoteRequest",
 	"MtmGenVoteResponse"
-};
-
-/*  XXX: do we really need all this guys (except ddd)? */
-static TransactionManager MtmTM =
-{
-	MtmDetectGlobalDeadLock,
-	(Datum) 0,
-	MtmGetTransactionStateSize,
-	MtmSerializeTransactionState,
-	MtmDeserializeTransactionState,
-	PgInitializeSequence,
-	MtmCreateSavepointContext,
-	MtmRestoreSavepointContext,
-	MtmReleaseSavepointContext,
-	MtmSuspendTransaction,
-	MtmResumeTransaction
 };
 
 /*  XXX */
@@ -247,7 +238,6 @@ MtmSleep(int64 usec)
 
 	for (;;)
 	{
-		int			rc;
 		TimestampTz sleepfor;
 
 		CHECK_FOR_INTERRUPTS();
@@ -256,20 +246,19 @@ MtmSleep(int64 usec)
 		if (sleepfor < 0)
 			break;
 
-		rc = WaitLatch(MyLatch,
-					   WL_TIMEOUT | WL_POSTMASTER_DEATH,
-					   sleepfor / 1000.0, WAIT_EVENT_BGWORKER_STARTUP);
-
-		if (rc & WL_POSTMASTER_DEATH)
-			proc_exit(1);
+		WaitLatch(MyLatch,
+				  WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+				  sleepfor / 1000.0, WAIT_EVENT_BGWORKER_STARTUP);
 	}
 }
 
 
 /*
- * Distribute transaction manager functions
+ * These were once used to setup mtm state in parallel workers, but as long as
+ * they are read-only we don't really need it (historically it imported csn
+ * snapshot).
  */
-
+#if 0
 static size_t
 MtmGetTransactionStateSize(void)
 {
@@ -287,23 +276,12 @@ MtmDeserializeTransactionState(void *ctx)
 {
 	memcpy(&MtmTx, ctx, sizeof(MtmTx));
 }
+#endif
 
-static void *
-MtmCreateSavepointContext(void)
-{
-	return NULL;
-}
-
-static void
-MtmRestoreSavepointContext(void *ctx)
-{
-}
-
-static void
-MtmReleaseSavepointContext(void *ctx)
-{
-}
-
+/*
+ * ATX compatibility support.
+ */
+#ifdef PGPRO_EE
 static void *
 MtmSuspendTransaction(void)
 {
@@ -320,6 +298,7 @@ MtmResumeTransaction(void *ctx)
 	MtmTx = *(MtmCurrentTrans *) ctx;
 	free(ctx);
 }
+#endif
 
 /*
  * Perform initialization of multimaster state.
@@ -377,7 +356,6 @@ MtmSharedShmemStartup()
 
 	RegisterXactCallback(MtmXactCallback, NULL);
 
-	TM = &MtmTM;
 	LWLockRelease(AddinShmemInitLock);
 }
 
@@ -651,6 +629,8 @@ NULL);
 	 */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = MtmShmemStartup;
+
+	DetectGlobalDeadLock = MtmDetectGlobalDeadLock;
 }
 
 /*
@@ -1674,7 +1654,7 @@ void
 launcher_main(Datum main_arg)
 {
 	Relation	rel;
-	HeapScanDesc scan;
+	TableScanDesc scan;
 	HeapTuple	tup;
 	HASHCTL		hash_info;
 	HTAB	   *already_started;
@@ -1702,8 +1682,8 @@ launcher_main(Datum main_arg)
 	StartTransactionCommand();
 	(void) GetTransactionSnapshot();
 
-	rel = heap_open(SubscriptionRelationId, AccessShareLock);
-	scan = heap_beginscan_catalog(rel, 0, NULL);
+	rel = table_open(SubscriptionRelationId, AccessShareLock);
+	scan = table_beginscan_catalog(rel, 0, NULL);
 
 	/* is there any mtm subscriptions in a given database? */
 	while (HeapTupleIsValid(tup = heap_getnext(scan, ForwardScanDirection)))
@@ -1724,7 +1704,7 @@ launcher_main(Datum main_arg)
 	}
 
 	heap_endscan(scan);
-	heap_close(rel, AccessShareLock);
+	table_close(rel, AccessShareLock);
 
 	CommitTransactionCommand();
 }
@@ -1849,11 +1829,10 @@ gather(nodemask_t participants,
 		else /* WOULDBLOCK */
 		{
 			/* XXX cache that */
-			rc = WaitLatch(MyLatch, WL_LATCH_SET | WL_TIMEOUT, 100.0,
+			rc = WaitLatch(MyLatch,
+						   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+						   100.0,
 						   PG_WAIT_EXTENSION);
-
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
 
 			/* XXX tell the caller about latch reset */
 			if (rc & WL_LATCH_SET)

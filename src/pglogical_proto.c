@@ -17,7 +17,11 @@
 #include "replication/origin.h"
 
 #include "access/sysattr.h"
-#include "access/tuptoaster.h"
+#include "access/detoast.h"
+#include "access/heapam.h"
+#include "access/relscan.h"
+#include "access/table.h"
+#include "access/tableam.h"
 #include "access/xact.h"
 #include "access/clog.h"
 
@@ -186,10 +190,10 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 static void
 pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition *pos)
 {
-	Relation	rel = heap_open(pos->seqid, NoLock);
+	Relation	rel = table_open(pos->seqid, NoLock);
 
 	pglogical_write_rel(out, ctx->output_plugin_private, rel);
-	heap_close(rel, NoLock);
+	table_close(rel, NoLock);
 	pq_sendbyte(out, 'N');
 	pq_sendint64(out, pos->next);
 }
@@ -202,17 +206,17 @@ pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRe
 
 	if (BIT_CHECK(copy->targetNodes, hooks_data->receiver_node_id - 1))
 	{
-		HeapScanDesc scandesc;
+		TableScanDesc scandesc;
 		HeapTuple	tuple;
 		Relation	rel;
 
-		rel = heap_open(copy->sourceTable, ShareLock);
+		rel = table_open(copy->sourceTable, ShareLock);
 
 		pglogical_write_rel(out, ctx->output_plugin_private, rel);
 
 		pq_sendbyte(out, '0');
 
-		scandesc = heap_beginscan(rel, GetTransactionSnapshot(), 0, NULL);
+		scandesc = table_beginscan(rel, GetTransactionSnapshot(), 0, NULL);
 		while ((tuple = heap_getnext(scandesc, ForwardScanDirection)) != NULL)
 		{
 			MtmOutputPluginPrepareWrite(ctx, false, false);
@@ -221,7 +225,7 @@ pglogical_broadcast_table(StringInfo out, LogicalDecodingContext *ctx, MtmCopyRe
 			MtmOutputPluginWrite(ctx, false, false);
 		}
 		heap_endscan(scandesc);
-		heap_close(rel, ShareLock);
+		table_close(rel, ShareLock);
 	}
 }
 
@@ -468,7 +472,8 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	if (event == PGLOGICAL_PREPARE_PHASE2A)
 		pq_sendstring(out, txn->state_3pc);
 
-	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare %s", txn->gid);
+	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare gid=%s, state_3pc=%s, state_3pc_change=%d",
+			txn->gid, txn->state_3pc, txn->state_3pc_change);
 }
 
 /*

@@ -9,13 +9,20 @@
  */
 #include "postgres.h"
 
+#include "access/relscan.h"
+#include "access/table.h"
+#include "access/tableam.h"
+#include "access/heapam.h"
+#include "access/genam.h"
 #include "utils/guc_tables.h"
 #include "tcop/utility.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
 #include "executor/executor.h"
 #include "catalog/pg_proc.h"
+#ifdef PGPROEE
 #include "commands/partition.h"
+#endif
 #include "commands/tablecmds.h"
 #include "parser/parse_type.h"
 #include "parser/parse_func.h"
@@ -111,23 +118,22 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next);
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
 
-static void MtmProcessUtility(PlannedStmt *pstmt,
-				  const char *queryString,
-				  ProcessUtilityContext context, ParamListInfo params,
-				  QueryEnvironment *queryEnv, DestReceiver *dest,
-				  char *completionTag);
+static void MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
+							  ProcessUtilityContext context, ParamListInfo params,
+							  QueryEnvironment *queryEnv, DestReceiver *dest,
+							  QueryCompletion *qc);
 
 static void MtmProcessUtilityReceiver(PlannedStmt *pstmt,
 						  const char *queryString,
 						  ProcessUtilityContext context, ParamListInfo params,
 						  QueryEnvironment *queryEnv, DestReceiver *dest,
-						  char *completionTag);
+						  QueryCompletion *qc);
 
 static void MtmProcessUtilitySender(PlannedStmt *pstmt,
 						const char *queryString,
 						ProcessUtilityContext context, ParamListInfo params,
 						QueryEnvironment *queryEnv, DestReceiver *dest,
-						char *completionTag);
+						QueryCompletion *qc);
 
 static void MtmGucUpdate(const char *key);
 static void MtmInitializeRemoteFunctionsMap(void);
@@ -643,7 +649,7 @@ static void
 MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				  ProcessUtilityContext context, ParamListInfo params,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
-				  char *completionTag)
+				  QueryCompletion *qc)
 {
 
 	/*
@@ -658,13 +664,13 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		{
 			PreviousProcessUtilityHook(pstmt, queryString,
 									   context, params, queryEnv,
-									   dest, completionTag);
+									   dest, qc);
 		}
 		else
 		{
 			standard_ProcessUtility(pstmt, queryString,
 									context, params, queryEnv,
-									dest, completionTag);
+									dest, qc);
 		}
 		return;
 	}
@@ -672,12 +678,12 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	if (MtmIsLogicalReceiver)
 	{
 		MtmProcessUtilityReceiver(pstmt, queryString, context, params,
-								  queryEnv, dest, completionTag);
+								  queryEnv, dest, qc);
 	}
 	else
 	{
 		MtmProcessUtilitySender(pstmt, queryString, context, params,
-								queryEnv, dest, completionTag);
+								queryEnv, dest, qc);
 	}
 
 }
@@ -701,7 +707,7 @@ static void
 MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 						  ProcessUtilityContext context, ParamListInfo params,
 						  QueryEnvironment *queryEnv, DestReceiver *dest,
-						  char *completionTag)
+						  QueryCompletion *qc)
 {
 	Node	   *parsetree = pstmt->utilityStmt;
 
@@ -713,7 +719,8 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 
 		mtm_log(DDLProcessingTrace,
 				"MtmProcessUtilityReceiver: tag=%s, context=%d, issubtrans=%d,  statement=%s",
-				CreateCommandTag(parsetree), context, IsSubTransaction(), queryString);
+				GetCommandTagName(CreateCommandTag(parsetree)),
+				context, IsSubTransaction(), queryString);
 
 		Assert(oldMemContext != MtmApplyContext);
 		Assert(MtmApplyContext != NULL);
@@ -741,6 +748,7 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 					break;
 				}
 
+#ifdef PGPROEE
 			case T_PartitionStmt:
 				{
 					PartitionStmt *stmt = (PartitionStmt *) parsetree;
@@ -753,6 +761,7 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 					}
 					break;
 				}
+#endif
 
 			case T_AlterEnumStmt:
 				{
@@ -809,7 +818,8 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 		/* prevent captured statement from execution */
 		if (captured)
 		{
-			mtm_log(DDLProcessingTrace, "MtmCapturedDDL = %s", CreateCommandTag((Node *) MtmCapturedDDL));
+			mtm_log(DDLProcessingTrace, "MtmCapturedDDL = %s",
+					GetCommandTagName(CreateCommandTag((Node *) MtmCapturedDDL)));
 			return;
 		}
 	}
@@ -818,13 +828,13 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 	{
 		PreviousProcessUtilityHook(pstmt, queryString,
 								   context, params, queryEnv,
-								   dest, completionTag);
+								   dest, qc);
 	}
 	else
 	{
 		standard_ProcessUtility(pstmt, queryString,
 								context, params, queryEnv,
-								dest, completionTag);
+								dest, qc);
 	}
 }
 
@@ -833,7 +843,7 @@ static void
 MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 						ProcessUtilityContext context, ParamListInfo params,
 						QueryEnvironment *queryEnv, DestReceiver *dest,
-						char *completionTag)
+						QueryCompletion *qc)
 {
 	bool		skipCommand = false;
 	bool		executed = false;
@@ -888,6 +898,11 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				switch (stmt->kind)
 				{
 					case TRANS_STMT_COMMIT:
+						if (stmt->chain)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 MTM_ERRMSG("COMMIT AND CHAIN is not supported")));
+
 						if (MtmTwoPhaseCommit())
 							return;
 						break;
@@ -896,8 +911,8 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 						if (!MtmExplicitPrepare(stmt->gid))
 						{
 							/* report unsuccessful commit in completionTag */
-							if (completionTag)
-								strcpy(completionTag, "ROLLBACK");
+							if (qc)
+								SetQueryCompletion(qc, CMDTAG_ROLLBACK, 0);
 						}
 						return;
 
@@ -1073,6 +1088,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				break;
 			}
 
+#ifdef PGPROEE
 		case T_PartitionStmt:
 			{
 				PartitionStmt *stmt = (PartitionStmt *) parsetree;
@@ -1084,6 +1100,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				}
 				break;
 			}
+#endif
 
 		case T_DropStmt:
 			{
@@ -1116,12 +1133,12 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 						if (OidIsValid(relid))
 						{
-							Relation	rel = heap_open(relid, ShareLock);
+							Relation	rel = table_open(relid, ShareLock);
 
 							if (RelationNeedsWAL(rel))
 								MtmTx.contains_dml = true;
 
-							heap_close(rel, ShareLock);
+							table_close(rel, ShareLock);
 						}
 					}
 				}
@@ -1152,13 +1169,13 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 	{
 		PreviousProcessUtilityHook(pstmt, queryString,
 								   context, params, queryEnv,
-								   dest, completionTag);
+								   dest, qc);
 	}
 	else
 	{
 		standard_ProcessUtility(pstmt, queryString,
 								context, params, queryEnv,
-								dest, completionTag);
+								dest, qc);
 	}
 
 	/* Catch GUC assignment */
@@ -1407,6 +1424,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 					break;
 				}
 
+#ifdef PGPROEE
 			case T_PartitionStmt:
 				{
 					Oid			relid;
@@ -1418,6 +1436,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 									  pstmt->concurrent ? PDT_CONCURRENT : PDT_REGULAR);
 				}
 				break;
+#endif
 
 			case T_DropStmt:
 			{
@@ -1449,7 +1468,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 				break;
 
 			case T_AlterEnumStmt:
-				AlterEnum((AlterEnumStmt *) MtmCapturedDDL, true);
+				AlterEnum((AlterEnumStmt *) MtmCapturedDDL);
 				break;
 
 			default:
@@ -1501,7 +1520,7 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 	MtmMakeRelationLocal(reloid, false);
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
-	rel = heap_openrv(rv, RowExclusiveLock);
+	rel = table_openrv(rv, RowExclusiveLock);
 	if (rel != NULL)
 	{
 		char	   *tableName = get_rel_name(reloid);
@@ -1523,7 +1542,7 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 
 		/* Cleanup. */
 		heap_freetuple(tup);
-		heap_close(rel, RowExclusiveLock);
+		table_close(rel, RowExclusiveLock);
 
 		MtmTx.contains_dml = true;
 	}
@@ -1564,7 +1583,7 @@ MtmLoadLocalTables(void)
 	Assert(LWLockHeldByMeInMode(ddl_shared->localtab_lock, LW_EXCLUSIVE));
 
 	rv = makeRangeVar(MULTIMASTER_SCHEMA_NAME, MULTIMASTER_LOCAL_TABLES_TABLE, -1);
-	rel = heap_openrv_extended(rv, RowExclusiveLock, true);
+	rel = table_openrv_extended(rv, RowExclusiveLock, true);
 	if (rel != NULL)
 	{
 		scan = systable_beginscan(rel, 0, true, NULL, 0, NULL);
@@ -1577,7 +1596,7 @@ MtmLoadLocalTables(void)
 		}
 
 		systable_endscan(scan);
-		heap_close(rel, RowExclusiveLock);
+		table_close(rel, RowExclusiveLock);
 	}
 }
 

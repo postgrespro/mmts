@@ -7,25 +7,56 @@ src/pglogical_relid_map.o src/ddd.o src/bkb.o src/spill.o src/state.o \
 src/resolver.o src/ddl.o src/syncpoint.o src/global_tx.o
 MODULE_big = multimaster
 
-PG_CPPFLAGS += -I$(libpq_srcdir)
-SHLIB_LINK = $(libpq)
+ifndef USE_PGXS # hmm, user didn't requested to use pgxs
+# relative path to this makefile
+mkfile_path := $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
+# relative path to dir with this makefile
+mkfile_dir := $(dir $(mkfile_path))
+# abs path to dir with this makefile
+mkfile_abspath := $(shell cd $(mkfile_dir) && pwd -P)
+# parent dir name of directory with makefile
+parent_dir_name := $(shell basename $(shell dirname $(mkfile_abspath)))
+ifneq ($(parent_dir_name),contrib) # a-ha, but the extension is not inside 'contrib' dir
+USE_PGXS := 1 # so use it anyway, most probably that's what the user wants
+endif
+endif
+# $(info) is introduced in 3.81, and PG doesn't support makes older than 3.80
+ifeq ($(MAKE_VERSION),3.80)
+$(warning $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
+else
+$(info $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
+endif
 
-ifdef USE_PGXS
+ifdef USE_PGXS # use pgxs
+# You can specify path to pg_config in PG_CONFIG var
+ifndef PG_CONFIG
+	PG_CONFIG := pg_config
+endif
 PG_CPPFLAGS += -I$(CURDIR)/src/include
-PG_CONFIG = pg_config
+# add installation top include directory for libpq header
+# (seems like server/ dir is added by pgxs)
+PG_CPPFLAGS += -I$(shell $(PG_CONFIG) --includedir)
+SHLIB_LINK += -lpq # add libpq
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
-else
+
+else # assume the extension is in contrib/ dir of pg distribution
+# EXTRA_INSTALL=contrib/pg_pathman contrib/referee
 PG_CPPFLAGS += -I$(top_srcdir)/$(subdir)/src/include
+PG_CPPFLAGS += -I$(libpq_srcdir) # include libpq-fe, defined in Makefile.global.in
+SHLIB_LINK = $(libpq) # defined in Makefile.global.in
 subdir = contrib/mmts
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
-endif
+endif # USE_PGXS
 
 .PHONY: all
 
-EXTRA_INSTALL=contrib/pg_pathman contrib/referee
+# recurse down to referee/ on install
+referee-install:
+	USE_PGXS=$(USE_PGXS) $(MAKE) -C referee install
+install: referee-install
 
 all: multimaster.so
 
@@ -38,22 +69,38 @@ submake-regress:
 # PROVE_TESTS ?=
 # endif
 PROVE_FLAGS += --timer
+ifndef USE_PGXS
 check: temp-install submake-regress
 	$(prove_check)
+else # pgxs build
+# Note that for PGXS build we override here bail-out recipe defined in pgxs.mk,
+# but well, why should we chose another name?
+# submake-regress won't work as we have no access to the source; we assume
+# regress is already installed
+# final spell is inspired by
+# https://www.2ndquadrant.com/en/blog/using-postgresql-tap-framework-extensions/
+# and Makefile.global.in which is obviously the original source
+check:
+	rm -rf '$(CURDIR)'/tmp_check
+	$(MKDIR_P) '$(CURDIR)'/tmp_check
+	PGXS=$(PGXS) TESTDIR='$(CURDIR)' PATH="$(bindir):$$PATH" PG_REGRESS='$(top_builddir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
+endif
 
+# PG_PROVE_FLAGS adds PostgresNode and friends include dir
 start: temp-install
 	rm -rf '$(CURDIR)'/tmp_check
 	$(MKDIR_P) '$(CURDIR)'/tmp_check
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
-		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
-		perl run.pl --action=start $(RUN_OPTS)
+		PG_REGRESS='$(top_builddir)/src/test/regress/pg_regress' \
+		perl $(PG_PROVE_FLAGS) run.pl --action=start $(RUN_OPTS)
 
 stop:
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
-		$(with_temp_install) \
-		perl run.pl --action=stop $(RUN_OPTS)
+		PG_REGRESS='$(top_builddir)/src/test/regress/pg_regress' \
+		perl $(PG_PROVE_FLAGS) run.pl --action=stop $(RUN_OPTS)
 
+# for manual testing: runs core regress tests on 'make start'ed cluster
 run-pg-regress: submake-regress
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
 	$(with_temp_install) \
@@ -67,6 +114,7 @@ run-pg-regress: submake-regress
 	--dlpath=$(CURDIR)/$(top_builddir)/src/test/regress \
 	--inputdir=$(abs_top_srcdir)/src/test/regress
 
+# for manual testing: runs contrib/test_partition on 'make start'ed cluster
 run-pathman-regress:
 	cd $(CURDIR)/$(top_builddir)/src/test/regress && \
 	$(with_temp_install) \

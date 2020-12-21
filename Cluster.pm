@@ -80,15 +80,21 @@ sub init
 		$binary_basetypes = ($uname_arch =~ m/arm/) ? 0 : 1;
 	}
 
+	my $shared_preload_libraries = 'multimaster';
+	if (is_ee())
+	{
+		$shared_preload_libraries = $shared_preload_libraries . ', pg_pathman';
+	}
+
 	foreach my $node (@$nodes)
 	{
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', qq{
 			max_connections = 50
-			log_line_prefix = '%m [%p] %i '
+			log_line_prefix = '%m [%p] [xid%x] %i '
 			log_statement = all
 
-			shared_preload_libraries = 'multimaster, pg_pathman'
+			shared_preload_libraries = '${shared_preload_libraries}'
 
 			max_prepared_transactions = 250
 			max_worker_processes = 320
@@ -375,7 +381,18 @@ sub pgbench_async()
 sub pgbench_await()
 {
 	my ($self, $pgbench_handle) = @_;
-	IPC::Run::finish($pgbench_handle) or diag("WARNING: pgbench exited with $?");
+	IPC::Run::finish($pgbench_handle);
+	my $exit_code = ($? >> 8);
+	# XXX: early failure, i.e. connection from the main driver will be caught
+	# (exit code 1) here: everywhere in tests we assume node is healthy and
+	# online when pgbench starts. Later, if some connection gets error (which is
+	# normal once we put node down) it triggers exit code 2. Unfortunately, such
+	# error stops the connection, i.e. it won't try any more queries -- it would
+	# be nice to have it continue the bombardment.
+	if ($exit_code != 0 && $exit_code != 2)
+	{
+		diag("WARNING: pgbench exited with $exit_code")
+	}
 	note("finished pgbench");
 }
 
@@ -410,6 +427,20 @@ sub is_data_identic()
 
 	note($checksum);
 	return 1;
+}
+
+# are we dealing with pgproee?
+sub is_ee
+{
+	my ($stdout, $stderr);
+	my $result = IPC::Run::run [ 'pg_config', '--pgpro-edition' ], '>',
+	  \$stdout, '2>', \$stderr;
+	my $exit_code = ($? >> 8);
+	if ($exit_code != 0)
+	{
+		return 0;
+	}
+	return ($stdout =~ m/enterprise/);
 }
 
 # Override PostgresNode::start|stop to reserve the port while node is down

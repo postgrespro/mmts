@@ -14,11 +14,13 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 
+#include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/relscan.h"
 #include "access/xact.h"
 #include "access/clog.h"
-#include "access/tuptoaster.h"
+#include "access/detoast.h"
+#include "access/table.h"
 
 #include "catalog/catversion.h"
 #include "catalog/dependency.h"
@@ -59,7 +61,6 @@
 
 #include "utils/array.h"
 #include "utils/datum.h"
-#include "utils/tqual.h"
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/lsyscache.h"
@@ -175,15 +176,12 @@ create_rel_estate(Relation rel)
 	estate->es_result_relation_info = resultRelInfo;
 	estate->es_output_cid = GetCurrentCommandId(true);
 
-	/* Triggers might need a slot */
-	if (resultRelInfo->ri_TrigDesc)
-		estate->es_trig_tuple_slot = ExecInitExtraTupleSlot(estate, NULL);
-
 	rte = makeNode(RangeTblEntry);
 	rte->rtekind = RTE_RELATION;
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
-	estate->es_range_table = list_make1(rte);
+	rte->rellockmode = AccessShareLock;
+	ExecInitRangeTable(estate, list_make1(rte));
 
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
@@ -568,8 +566,7 @@ tuple_to_slot(EState *estate, Relation rel, TupleData *tuple, TupleTableSlot *sl
 
 	oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 	tup = heap_form_tuple(tupDesc, tuple->values, tuple->isnull);
-	// ExecStoreHeapTuple(tup, slot, false);
-	ExecStoreTuple(tup, slot, InvalidBuffer, false);
+	ExecStoreHeapTuple(tup, slot, false);
 	MemoryContextSwitchTo(oldctx);
 }
 
@@ -578,7 +575,7 @@ close_rel(Relation rel)
 {
 	if (rel != NULL)
 	{
-		heap_close(rel, NoLock);
+		table_close(rel, NoLock);
 	}
 }
 
@@ -607,7 +604,7 @@ read_rel(StringInfo s, LOCKMODE mode)
 		old_context = MemoryContextSwitchTo(TopMemoryContext);
 		pglogical_relid_map_put(remote_relid, local_relid);
 		MemoryContextSwitchTo(old_context);
-		return heap_open(local_relid, NoLock);
+		return table_open(local_relid, NoLock);
 	}
 	else
 	{
@@ -615,7 +612,7 @@ read_rel(StringInfo s, LOCKMODE mode)
 		s->cursor += nspnamelen;
 		relnamelen = pq_getmsgbyte(s);
 		s->cursor += relnamelen;
-		return heap_open(local_relid, mode);
+		return table_open(local_relid, mode);
 	}
 }
 
@@ -852,8 +849,6 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_PREPARE:
 			{
-				ListCell   *cur_item,
-						   *prev_item;
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				uint64 prepare_gen_num;
 				bool latch_set = false;
@@ -879,7 +874,7 @@ process_remote_commit(StringInfo in,
 
 					CHECK_FOR_INTERRUPTS();
 					rc = WaitLatch(MyLatch,
-								   WL_LATCH_SET | WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 								   100.0,
 								   PG_WAIT_EXTENSION);
 					if (rc & WL_LATCH_SET)
@@ -887,8 +882,6 @@ process_remote_commit(StringInfo in,
 						latch_set = true;
 						ResetLatch(&MyProc->procLatch);
 					}
-					if (rc & WL_POSTMASTER_DEATH)
-						proc_exit(1);
 				}
 				/* restore the latch cock if we've swallowed it above */
 				if (latch_set)
@@ -943,7 +936,11 @@ process_remote_commit(StringInfo in,
 				 * prepare TBLOCK_INPROGRESS state for
 				 * PrepareTransactionBlock()
 				 */
+#ifdef PGPRO_EE /* atx */
 				BeginTransactionBlock(false);
+#else
+				BeginTransactionBlock();
+#endif
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
@@ -993,24 +990,12 @@ process_remote_commit(StringInfo in,
 				 *
 				 * Temp schema is shared between pool workers so we can try to
 				 * truncate tables that were delete by other workers, but
-				 * still exist is pg_on_commit_actions which is static. So
+				 * still exist is on_commits which is static. So
 				 * clean it up: as sata is not replicated for temp tables
 				 * there is nothing to delete anyway.
 				 */
-				prev_item = NULL;
-				cur_item = list_head(pg_on_commit_actions);
-				while (cur_item != NULL)
-				{
-					void	   *oc = (void *) lfirst(cur_item);
-
-					pg_on_commit_actions = list_delete_cell(pg_on_commit_actions, cur_item, prev_item);
-					pfree(oc);
-					if (prev_item)
-						cur_item = lnext(prev_item);
-					else
-						cur_item = list_head(pg_on_commit_actions);
-				}
-				Assert(pg_on_commit_actions == NIL);
+				list_free_deep(on_commits);
+				on_commits = NIL;
 
 				MtmEndSession(origin_node, true);
 
@@ -1192,14 +1177,12 @@ process_remote_insert(StringInfo s, Relation rel)
 {
 	EState	   *estate;
 	TupleData	new_tuple;
-	TupleTableSlot *newslot;
 	ResultRelInfo *relinfo;
 	int			i;
 	TupleDesc	tupDesc = RelationGetDescr(rel);
 
 	PushActiveSnapshot(GetTransactionSnapshot());
 	estate = create_rel_estate(rel);
-	newslot = ExecInitExtraTupleSlot(estate, tupDesc);
 
 	ExecOpenIndices(estate->es_result_relation_info, false);
 	relinfo = estate->es_result_relation_info;
@@ -1210,26 +1193,26 @@ process_remote_insert(StringInfo s, Relation rel)
 	{
 		/* Use bulk insert */
 		BulkInsertState bistate = GetBulkInsertState();
-		HeapTuple	bufferedTuples[MAX_BUFFERED_TUPLES];
+		TupleTableSlot	*bufferedSlots[MAX_BUFFERED_TUPLES];
 		MemoryContext oldcontext;
-		int			nBufferedTuples = 1;
-		size_t		bufferedTuplesSize;
+		int			nBufferedSlots = 1;
+		size_t		bufferedSlotsSize;
 		CommandId	mycid = GetCurrentCommandId(true);
 
-		bufferedTuples[0] = heap_form_tuple(tupDesc, new_tuple.values, new_tuple.isnull);
-		bufferedTuplesSize = bufferedTuples[0]->t_len;
+		bufferedSlots[0] = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsHeapTuple);
+		tuple_to_slot(estate, rel, &new_tuple, bufferedSlots[0]);
+		bufferedSlotsSize = ((HeapTupleTableSlot *) bufferedSlots[0])->tuple->t_len;
 
-		while (nBufferedTuples < MAX_BUFFERED_TUPLES && bufferedTuplesSize < MAX_BUFFERED_TUPLES_SIZE)
+		while (nBufferedSlots < MAX_BUFFERED_TUPLES && bufferedSlotsSize < MAX_BUFFERED_TUPLES_SIZE)
 		{
 			if (pq_getmsgbyte(s) != 'I')
-			{
-				Assert(false);
-				mtm_log(PANIC, "unexpected insert message format");
-			}
+				mtm_log(PANIC, "Format of insert message was violated.");
+
 			read_tuple_parts(s, rel, &new_tuple);
-			bufferedTuples[nBufferedTuples] = heap_form_tuple(tupDesc,
-															  new_tuple.values, new_tuple.isnull);
-			bufferedTuplesSize += bufferedTuples[nBufferedTuples++]->t_len;
+			bufferedSlots[nBufferedSlots] = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsHeapTuple);
+			tuple_to_slot(estate, rel, &new_tuple, bufferedSlots[nBufferedSlots]);
+			bufferedSlotsSize += ((HeapTupleTableSlot *) bufferedSlots[nBufferedSlots])->tuple->t_len;
+			nBufferedSlots++;
 			if (pq_peekmsgbyte(s) != 'I')
 				break;
 		}
@@ -1240,15 +1223,14 @@ process_remote_insert(StringInfo s, Relation rel)
 		 */
 		oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 		heap_multi_insert(rel,
-						  bufferedTuples,
-						  nBufferedTuples,
+						  bufferedSlots,
+						  nBufferedSlots,
 						  mycid,
 						  0,
 						  bistate);
 		MemoryContextSwitchTo(oldcontext);
 
-
-		for (i = 0; i < nBufferedTuples; i++)
+		for (i = 0; i < nBufferedSlots; i++)
 		{
 			/*
 			 * If there are any indexes, update them for all the inserted tuples,
@@ -1258,26 +1240,26 @@ process_remote_insert(StringInfo s, Relation rel)
 			{
 				List	   *recheckIndexes;
 
-				ExecStoreTuple(bufferedTuples[i], newslot, InvalidBuffer, false);
-				recheckIndexes =
-					ExecInsertIndexTuples(newslot, &bufferedTuples[i]->t_self,
-										  estate, false, NULL, NIL);
+				recheckIndexes = ExecInsertIndexTuples(bufferedSlots[i],
+													   estate, false, NULL, NIL);
 
-				ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
-										 recheckIndexes, NULL);
+				/* AFTER ROW INSERT Triggers */
+				ExecARInsertTriggers(estate, relinfo, bufferedSlots[i],
+									 recheckIndexes, NULL);
 
 				list_free(recheckIndexes);
 			}
+
 			/*
 			 * There's no indexes, but see if we need to run AFTER ROW INSERT
 			 * triggers anyway.
 			 */
 			else if (relinfo->ri_TrigDesc != NULL &&
-							(relinfo->ri_TrigDesc->trig_insert_after_row ||
-								relinfo->ri_TrigDesc->trig_insert_new_table))
+					 (relinfo->ri_TrigDesc->trig_insert_after_row ||
+					  relinfo->ri_TrigDesc->trig_insert_new_table))
 			{
-					ExecARInsertTriggers(estate, relinfo, bufferedTuples[i],
-															NIL, NULL);
+				ExecARInsertTriggers(estate, relinfo, bufferedSlots[i],
+									 NIL, NULL);
 			}
 		}
 
@@ -1287,7 +1269,7 @@ process_remote_insert(StringInfo s, Relation rel)
 	{
 		TupleTableSlot *newslot;
 
-		newslot = ExecInitExtraTupleSlot(estate, tupDesc);
+		newslot = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsHeapTuple);
 		tuple_to_slot(estate, rel, &new_tuple, newslot);
 
 		ExecSimpleRelationInsert(estate, newslot);
@@ -1328,8 +1310,8 @@ process_remote_update(StringInfo s, Relation rel)
 	EPQState	epqstate;
 
 	estate = create_rel_estate(rel);
-	remoteslot = ExecInitExtraTupleSlot(estate, tupDesc);
-	localslot = ExecInitExtraTupleSlot(estate, tupDesc);
+	remoteslot = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsHeapTuple);
+	localslot = table_slot_create(rel, &estate->es_tupleTable);
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1);
 
 	action = pq_getmsgbyte(s);
@@ -1387,12 +1369,12 @@ process_remote_update(StringInfo s, Relation rel)
 	{
 		HeapTuple	remote_tuple = NULL;
 
-		remote_tuple = heap_modify_tuple(localslot->tts_tuple,
+		remote_tuple = heap_modify_tuple(ExecFetchSlotHeapTuple(localslot, true, NULL),
 										 tupDesc,
 										 new_tuple.values,
 										 new_tuple.isnull,
 										 new_tuple.changed);
-		ExecStoreTuple(remote_tuple, remoteslot, InvalidBuffer, false);
+		ExecStoreHeapTuple(remote_tuple, remoteslot, false);
 
 		EvalPlanQualSetSlot(&epqstate, remoteslot);
 		ExecSimpleRelationUpdate(estate, &epqstate, localslot, remoteslot);
@@ -1431,9 +1413,10 @@ process_remote_delete(StringInfo s, Relation rel)
 
 	estate = create_rel_estate(rel);
 	remoteslot = ExecInitExtraTupleSlot(estate,
-										RelationGetDescr(rel));
-	localslot = ExecInitExtraTupleSlot(estate,
-										RelationGetDescr(rel));
+										RelationGetDescr(rel),
+										&TTSOpsHeapTuple);
+	localslot = table_slot_create(rel,
+								  &estate->es_tupleTable);
 
 	read_tuple_parts(s, rel, &deltup);
 	tuple_to_slot(estate, rel, &deltup, remoteslot);
@@ -1559,6 +1542,11 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 					/* COMMIT */
 				case 'C':
 					close_rel(rel);
+					if (spill_file >= 0)
+					{
+						CloseTransientFile(spill_file);
+						spill_file = -1;
+					}
 					process_remote_commit(&s, rwctx);
 					inside_transaction = false;
 					break;

@@ -1,7 +1,7 @@
 #ifndef __DDD_H__
 #define __DDD_H__
 
-extern bool MtmDetectGlobalDeadLock(PGPROC *proc, Datum arg);
+extern bool MtmDetectGlobalDeadLock(PGPROC *proc);
 
 #if 0
 extern void MtmDeadlockDetectorInit(int n_nodes);

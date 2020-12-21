@@ -14,7 +14,6 @@
 #include <sys/time.h>
 
 #include "postgres.h"
-#include "access/xtm.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pqexpbuffer.h"
@@ -25,6 +24,7 @@
 #include "libpq/pqformat.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
+#include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
 #include "storage/proc.h"
@@ -68,6 +68,8 @@ typedef struct
 	TimestampTz last_send_time;
 	WalReceiverConn *wrconn;
 } MtmReceiverContext;
+
+MtmReplicationMode curr_replication_mode = REPLMODE_DISABLED;
 
 char const *const MtmReplicationModeMnem[] =
 {
@@ -590,7 +592,7 @@ pglogical_receiver_main(Datum main_arg)
 	initStringInfo(&spill_info);
 
 	/* Register functions for SIGTERM/SIGHUP management */
-	pqsignal(SIGHUP, PostgresSigHupHandler);
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 	pqsignal(SIGTERM, die);
 
 	MtmCreateSpillDirectory(sender);
@@ -661,7 +663,7 @@ pglogical_receiver_main(Datum main_arg)
 				Mtm->peers[sender - 1].receiver_mode = mode;
 				BIT_SET(Mtm->walreceivers_mask, rctx->w.sender_node_id - 1);
 				rctx->w.mode = mode;
-				TM->DetectGlobalDeadLockArg = PointerGetDatum(&rctx->w.mode);
+				curr_replication_mode = rctx->w.mode;
 			}
 			LWLockRelease(Mtm->lock);
 
@@ -677,12 +679,8 @@ pglogical_receiver_main(Datum main_arg)
 			MtmMaybeAdvanceSlot(rctx, conninfo);
 
 			rc = WaitLatch(MyLatch,
-						   WL_LATCH_SET | WL_POSTMASTER_DEATH,
+						   WL_LATCH_SET | WL_EXIT_ON_PM_DEATH,
 						   0, PG_WAIT_EXTENSION);
-
-			/* Emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-				proc_exit(1);
 
 			if (rc & WL_LATCH_SET)
 				ResetLatch(MyLatch);
@@ -877,7 +875,6 @@ pglogical_receiver_main(Datum main_arg)
 				char	   *copybuf = NULL;
 				int			len;
 				int			hdr_len;
-				bool		isRsocket = false;
 
 				CHECK_FOR_INTERRUPTS();
 				/*
@@ -894,7 +891,7 @@ pglogical_receiver_main(Datum main_arg)
 					proc_exit(0);
 				}
 
-				len = walrcv_receive(rctx->wrconn, &copybuf, &fd, &isRsocket);
+				len = walrcv_receive(rctx->wrconn, &copybuf, &fd);
 
 				if (len == 0)
 				{
@@ -1076,16 +1073,9 @@ pglogical_receiver_main(Datum main_arg)
 			/* no data, wait for it */
 			rc = WaitLatchOrSocket(MyLatch,
 								   WL_LATCH_SET | WL_SOCKET_READABLE |
-								   WL_TIMEOUT | WL_POSTMASTER_DEATH,
+								   WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 								   fd,
-								   PQisRsocket(fd),
 								   wait_time, PG_WAIT_EXTENSION);
-
-			/* Emergency bailout if postmaster has died */
-			if (rc & WL_POSTMASTER_DEATH)
-			{
-				proc_exit(1);
-			}
 
 			if (rc & WL_LATCH_SET)
 			{
