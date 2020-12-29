@@ -142,7 +142,7 @@ static shmem_startup_hook_type PreviousShmemStartupHook;
 
 /*
  * If you get really bored one day, you may try hardware-accelerated popcount
- * here and see if anything changes.
+ * here and see if anything changes (it won't, I'm sure).
  */
 int
 popcount(nodemask_t mask)

@@ -286,7 +286,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	 * wind term numbers in waste. Yeah, we could get some finished xact
 	 * statuses, but normal paxos resolution would surely fail.
 	 */
-	if (!MtmQuorum(mtm_cfg, MtmGetConnectedMaskWithMe(false)))
+	if (!MtmQuorum(mtm_cfg, popcount(MtmGetConnectedMaskWithMe(false))))
 	{
 		mtm_log(ResolverState, "not sending requests as there is no connected majority");
 		return;
@@ -307,7 +307,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 	new_term = GlobalTxGetMaxProposal();
 	new_term.ballot += 1;
 	new_term.node_id = mtm_cfg->my_node_id;
-	mtm_log(ResolverState, "New term is (%d,%d)", new_term.ballot, new_term.node_id);
+	mtm_log(ResolverState, "new term is (%d,%d)", new_term.ballot, new_term.node_id);
 
 	/*
 	 * Stamp all orphaned transactions with the new proposal and send status

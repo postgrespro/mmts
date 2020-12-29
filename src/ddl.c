@@ -928,7 +928,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 						break;
 				}
 			}
-			/* no break */
+			/* FALLTHROUGH */
 		case T_PlannedStmt:
 		case T_FetchStmt:
 		case T_DoStmt:

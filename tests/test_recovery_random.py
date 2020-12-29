@@ -44,7 +44,7 @@ class RecoveryTest(MMTestCase, TestHelper):
         log.info('### test_random_disasters ###')
 
         for i in range(1, 16):
-            log.info(f'Running round #{i} of test_random_disasters')
+            log.info(f'running round #{i} of test_random_disasters')
             node_number = random.choice(range(1, 4))
             port = 15431 + node_number
 

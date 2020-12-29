@@ -53,7 +53,8 @@ endif # USE_PGXS
 
 .PHONY: all
 
-# recurse down to referee/ on install
+# recurse down to referee/ on install.
+# (I'd use $(call recurse...), but how can we pass USE_PGXS there?
 referee-install:
 	USE_PGXS=$(USE_PGXS) $(MAKE) -C referee install
 install: referee-install
