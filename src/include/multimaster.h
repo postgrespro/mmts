@@ -137,7 +137,7 @@ typedef struct
 
 typedef struct
 {
-	int			n_nodes; /* does *not* include myself */
+	int			n_nodes; /* num of entries in nodes[]. *Does* include myself. */
 	int			my_node_id;
 	int			backup_node_id;
 	XLogRecPtr	backup_end_lsn;

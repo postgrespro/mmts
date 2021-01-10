@@ -1151,7 +1151,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	/* connect to a new node */
 	new_node = MtmNodeById(cfg, new_node_id);
 	if (new_node == NULL)
-		mtm_log(ERROR, "Node %d not found", new_node_id);
+		mtm_log(ERROR, "new node %d not found", new_node_id);
 	conninfo = new_node->conninfo;
 	conn = PQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
@@ -1186,6 +1186,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	{
 		int			node_id = cfg->nodes[i].node_id;
 
+		/* My node haven't workers for applying from myself. */
 		if (node_id == cfg->my_node_id)
 			continue;
 
@@ -1208,7 +1209,8 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			XLogRecPtr	olsn;
 			char	   *msg;
 
-			if (cfg->nodes[i].node_id == new_node_id)
+			if (cfg->nodes[i].node_id == new_node_id ||
+				cfg->nodes[i].node_id == cfg->my_node_id)
 				continue;
 
 			ro_name = psprintf(MULTIMASTER_SLOT_PATTERN, cfg->nodes[i].node_id);
@@ -1232,7 +1234,6 @@ mtm_join_node(PG_FUNCTION_ARGS)
 
 			if (node_id == cfg->my_node_id)
 				continue;
-
 
 			LWLockAcquire(&Mtm->pools[node_id - 1].lock, LW_EXCLUSIVE);
 			Mtm->pools[node_id - 1].n_holders -= 1;
@@ -1454,22 +1455,19 @@ MtmLoadConfig(int elevel_on_absent)
 		init_done = !isnull && DatumGetBool(init_done_datum);
 		Assert(TupleDescAttr(tupdesc, 3)->atttypid == BOOLOID);
 
-		/* Empty connstr mean that this is our node */
 		if (is_self)
 		{
 			/* Ensure that there is only one tuple representing our node */
 			Assert(cfg->my_node_id == MtmInvalidNodeId);
 			cfg->my_node_id = node_id;
 		}
-		else
-		{
-			/* Assume that connstr correctness was checked upon creation */
-			cfg->nodes[cfg->n_nodes].conninfo = MemoryContextStrdup(TopMemoryContext, connstr);
-			cfg->nodes[cfg->n_nodes].node_id = node_id;
-			cfg->nodes[cfg->n_nodes].init_done = init_done;
-			Assert(cfg->nodes[cfg->n_nodes].conninfo != NULL);
-			cfg->n_nodes++;
-		}
+
+		/* Assume that connstr correctness was checked upon creation */
+		cfg->nodes[cfg->n_nodes].conninfo = MemoryContextStrdup(TopMemoryContext, connstr);
+		cfg->nodes[cfg->n_nodes].node_id = node_id;
+		cfg->nodes[cfg->n_nodes].init_done = init_done;
+		Assert(cfg->nodes[cfg->n_nodes].conninfo != NULL);
+		cfg->n_nodes++;
 	}
 
 	/* Load origin_id's */
@@ -1478,6 +1476,9 @@ MtmLoadConfig(int elevel_on_absent)
 		char	   *origin_name;
 		RepOriginId origin_id;
 		int			node_id = cfg->nodes[i].node_id;
+
+		if (cfg->nodes[i].node_id == cfg->my_node_id)
+			continue;
 
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		origin_id = replorigin_by_name(origin_name, true);
@@ -1535,6 +1536,11 @@ MtmLoadConfig(int elevel_on_absent)
 	return cfg;
 }
 
+/*
+ * Calls node_add_cb for each node present in current (new) cfg but not in
+ * old_cfg; calls node_drop_cb for the reverse. Callbacks are never executed
+ * on myself. Returns new config.
+ */
 MtmConfig *
 MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 				mtm_cfg_change_cb node_drop_cb, Datum arg, int elevel_on_absent)
@@ -1556,10 +1562,21 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	if (old_cfg != NULL)
 	{
 		for (i = 0; i < old_cfg->n_nodes; i++)
+		{
+			if (old_cfg->nodes[i].node_id == old_cfg->my_node_id)
+				continue;
+
 			old_bms = bms_add_member(old_bms, old_cfg->nodes[i].node_id);
+		}
 	}
+
 	for (i = 0; i < new_cfg->n_nodes; i++)
+	{
+		if (new_cfg->nodes[i].node_id == new_cfg->my_node_id)
+			continue;
+
 		new_bms = bms_add_member(new_bms, new_cfg->nodes[i].node_id);
+	}
 
 	deleted = bms_difference(old_bms, new_bms);
 	created = bms_difference(new_bms, old_bms);
@@ -1622,8 +1639,8 @@ bool Quorum(int ntotal, int nvotes)
 }
 bool MtmQuorum(MtmConfig* mtm_cfg, int nvotes)
 {
-	/* n_nodes doesn't include me, so +1 */
-	return Quorum(mtm_cfg->n_nodes + 1, nvotes);
+	/* n_nodes does include me */
+	return Quorum(mtm_cfg->n_nodes, nvotes);
 }
 
 /* Helper to find node with specified id in cfg->nodes */

@@ -394,6 +394,9 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 
 		for (i = 0; i < private->cfg->n_nodes; i++)
 		{
+			if (private->cfg->nodes[i].node_id == private->cfg->my_node_id)
+				continue;
+
 			if (private->cfg->nodes[i].origin_id == txn->origin_id)
 			{
 				pq_sendbyte(out, private->cfg->nodes[i].node_id);
@@ -406,7 +409,7 @@ send_node_id(StringInfo out, ReorderBufferTXN *txn, MtmDecoderPrivate *private)
 		 * membership changes under load? Such records will be dropped by
 		 * filter on receiver side.
 		 */
-		mtm_log(WARNING, "Failed to map origin %d", txn->origin_id);
+		mtm_log(WARNING, "failed to map origin %d", txn->origin_id);
 		pq_sendbyte(out, MtmInvalidNodeId);
 	}
 	else

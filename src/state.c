@@ -3557,6 +3557,9 @@ is_basebackuped(MtmConfig *mtm_cfg)
 		char	   *slot_name = psprintf(MULTIMASTER_SLOT_PATTERN,
 										 mtm_cfg->nodes[i].node_id);
 
+		if (mtm_cfg->nodes[i].node_id == mtm_cfg->my_node_id)
+			continue;
+
 		if (mtm_cfg->nodes[i].init_done && !slot_exists(slot_name))
 			n_missing_slots++;
 	}
@@ -3564,7 +3567,7 @@ is_basebackuped(MtmConfig *mtm_cfg)
 
 	if (n_missing_slots == 0)
 		return false;
-	else if (n_missing_slots == mtm_cfg->n_nodes)
+	else if (n_missing_slots == mtm_cfg->n_nodes - 1) /* n_nodes includes me */
 		return true;
 	else
 		mtm_log(ERROR, "Missing %d replication slots out of %d",
