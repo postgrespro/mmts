@@ -100,7 +100,7 @@ ResolveForRefereeWinner(void)
 	 * consequently re-acquired by another node at any time. To enforce this,
 	 * do the job under generation lock.
 	 */
-	AcquirePBByPreparer();
+	AcquirePBByPreparer(true);
 
 	curr_gen = MtmGetCurrentGen(true);
 	/*

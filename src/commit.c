@@ -432,7 +432,7 @@ MtmTwoPhaseCommit(void)
 	PG_TRY();
 	{
 		/* Exclude concurrent gen switchers, c.f. AcquirePBByHolder call site */
-		AcquirePBByPreparer();
+		AcquirePBByPreparer(true);
 
 		/*
 		 * xact is allowed iff we are MTM_GEN_ONLINE in current gen, but

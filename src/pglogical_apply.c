@@ -890,7 +890,7 @@ process_remote_commit(StringInfo in,
 				MtmBeginSession(origin_node);
 
 				/* Exclude concurrent gen switchers, c.f. AcquirePBByHolder call site */
-				AcquirePBByPreparer(); /* xxx release it on shmem exit in workers */
+				AcquirePBByPreparer(false);
 
 				/*
 				 * With lock acquired, check again that our apply mode makes

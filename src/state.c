@@ -124,8 +124,10 @@ struct MtmState
 	 * during PREPARE is not nice.
 	 */
 	slock_t cb_lock;
-	int			n_committers;
-	int			n_prepare_holders;
+	int			n_apply_preparers;
+	int			n_backend_preparers;
+	int			n_backend_holders;
+	int			n_full_holders;
 	ConditionVariable commit_barrier_cv;
 	/*
 	 * Voters exclude each other and gen switch, but don't change current gen
@@ -203,8 +205,6 @@ static void CampaignerWake(void);
 
 static void MtmSetReceiveMode(uint32 mode);
 
-static void AcquirePBByHolder(void);
-
 static bool MtmIsConnectivityClique(nodemask_t mask);
 static nodemask_t MtmGetConnectivityClique(bool locked);
 
@@ -220,8 +220,17 @@ PG_FUNCTION_INFO_V1(mtm_state_create);
 PG_FUNCTION_INFO_V1(mtm_get_logged_prepared_xact_state);
 
 static bool pb_hook_registred = false;
-static bool pb_preparers_incremented = false;
-static bool pb_holders_incremented = false;
+
+/* Variation of acquired prepare barrier. */
+typedef enum
+{
+	PB_NONE,
+	PB_APPLY_PREPARER, /* applier who prepares */
+	PB_BACKEND_PREPARER, /* backend who prepares */
+	PB_BACKEND_HOLDER, /* blocks only backends from preparing */
+	PB_FULL_HOLDER, /* blocks everyone from preparing */
+} PrepareBarrierMode;
+static PrepareBarrierMode pb_acquired_in_mode;
 
 static bool	campaign_requested;
 
@@ -377,7 +386,7 @@ MtmGetCurrentGen(bool locked)
 
 	if (!locked)
 		LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
-	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_preparers_incremented);
+	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_acquired_in_mode);
 
 	res = (MtmGeneration)
 	{
@@ -458,7 +467,7 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	 * XXX these arguments seem somewhat weak. The first should be
 	 * investigated and the second can be hacked around with sleep request.
 	 */
-	AcquirePBByHolder();
+	AcquirePBByHolder(true);
 
 	/* voting for generation n <= m is pointless if gen m was already elected */
 	if (mtm_state->last_vote.num < gen.num)
@@ -603,7 +612,7 @@ MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
 	 * on live nodes / networking changes.
 	 */
 	LWLockAcquire(mtm_state->gen_lock, LW_EXCLUSIVE);
-	AcquirePBByHolder();
+	AcquirePBByHolder(true);
 
 	/*
 	 * Not interested in this P.S. if we are in newer gen. Otherwise, still
@@ -674,7 +683,7 @@ MtmGetCurrentStatusInGen(void)
 	if (me == MtmInvalidNodeId)
 		elog(ERROR, "multimaster is not configured");
 
-	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_preparers_incremented);
+	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_acquired_in_mode);
 	/*
 	 * If we care about MTM_GEN_DEAD/MTM_GEN_RECOVERY distinction, should also
 	 * keep either vote_lock or excl gen_lock, but some callers don't, so no
@@ -734,7 +743,7 @@ MtmGetCurrentStatus(bool gen_locked, bool vote_locked)
 	if (!vote_locked)
 		LWLockAcquire(mtm_state->vote_lock, LW_SHARED);
 
-	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_preparers_incremented);
+	Assert(LWLockHeldByMe(mtm_state->gen_lock) || pb_acquired_in_mode);
 	Assert(LWLockHeldByMe(mtm_state->vote_lock) ||
 		   LWLockHeldByMeInMode(mtm_state->gen_lock, LW_EXCLUSIVE));
 
@@ -2479,11 +2488,11 @@ PBOnExit(int code, Datum arg)
 	ReleasePB();
 }
 
-/* Exclude all holders */
+/* Exclude all (or full only, if backend=false) holders */
 void
-AcquirePBByPreparer(void)
+AcquirePBByPreparer(bool backend)
 {
-	Assert(!pb_preparers_incremented);
+	Assert(!pb_acquired_in_mode);
 	if (!pb_hook_registred)
 	{
 		before_shmem_exit(PBOnExit, (Datum) 0);
@@ -2492,14 +2501,26 @@ AcquirePBByPreparer(void)
 	for (;;)
 	{
 		SpinLockAcquire(&mtm_state->cb_lock);
-		if (mtm_state->n_prepare_holders == 0)
+		if (backend)
 		{
-			mtm_state->n_committers += 1;
-			pb_preparers_incremented = true;
+			if (mtm_state->n_backend_holders == 0 &&
+				mtm_state->n_full_holders == 0)
+			{
+				mtm_state->n_backend_preparers += 1;
+				pb_acquired_in_mode = PB_BACKEND_PREPARER;
+			}
+		}
+		else
+		{
+			if (mtm_state->n_full_holders == 0)
+			{
+				mtm_state->n_apply_preparers += 1;
+				pb_acquired_in_mode = PB_APPLY_PREPARER;
+			}
 		}
 		SpinLockRelease(&mtm_state->cb_lock);
 
-		if (pb_preparers_incremented)
+		if (pb_acquired_in_mode)
 			break;
 
 		ConditionVariableSleep(&mtm_state->commit_barrier_cv, PG_WAIT_EXTENSION);
@@ -2508,34 +2529,58 @@ AcquirePBByPreparer(void)
 }
 
 /*
- * Exclude all preparers. Note that there is no protection against multiple
- * concurrent holders, but there must be no need in it.
+ * Exclude all (or backends only, if full=false) preparers. Note that there is
+ * no protection against multiple concurrent holders, but there must be no
+ * need in it.
  */
-static void
-AcquirePBByHolder(void)
+extern void
+AcquirePBByHolder(bool full)
 {
-	Assert(!pb_holders_incremented);
+	Assert(!pb_acquired_in_mode);
 	if (!pb_hook_registred)
 	{
 		before_shmem_exit(PBOnExit, (Datum) 0);
 		pb_hook_registred = true;
 	}
-	/* Holder has the priority, so prevent new committers immediately */
+	/* Holder has the priority, so prevent new preparers immediately */
 	SpinLockAcquire(&mtm_state->cb_lock);
-	mtm_state->n_prepare_holders += 1;
+	if (full)
+	{
+		mtm_state->n_full_holders += 1;
+		pb_acquired_in_mode = PB_FULL_HOLDER;
+	}
+	else
+	{
+		mtm_state->n_backend_holders += 1;
+		pb_acquired_in_mode = PB_BACKEND_HOLDER;
+	}
 	SpinLockRelease(&mtm_state->cb_lock);
 
 	for (;;)
 	{
+		bool done = false;
+
 		SpinLockAcquire(&mtm_state->cb_lock);
-		if (mtm_state->n_committers == 0)
-			pb_holders_incremented = true;
+		if (mtm_state->n_backend_preparers == 0 &&
+			(!full || mtm_state->n_apply_preparers == 0))
+		{
+			done = true;
+		}
 		SpinLockRelease(&mtm_state->cb_lock);
 
-		if (pb_holders_incremented)
+		if (done)
 			break;
 
-		ConditionVariableSleep(&mtm_state->commit_barrier_cv, PG_WAIT_EXTENSION);
+		PG_TRY();
+		{
+			ConditionVariableSleep(&mtm_state->commit_barrier_cv, PG_WAIT_EXTENSION);
+		}
+		PG_CATCH();
+		{
+			ReleasePB();
+			PG_RE_THROW();
+		}
+		PG_END_TRY();
 	}
 	ConditionVariableCancelSleep();
 }
@@ -2544,22 +2589,22 @@ AcquirePBByHolder(void)
 void
 ReleasePB(void)
 {
-	Assert(!(pb_holders_incremented && pb_preparers_incremented));
-	if (pb_preparers_incremented)
-	{
-		SpinLockAcquire(&mtm_state->cb_lock);
-		mtm_state->n_committers -= 1;
-		SpinLockRelease(&mtm_state->cb_lock);
-		ConditionVariableBroadcast(&mtm_state->commit_barrier_cv);
-		pb_preparers_incremented = false;
-	} else if (pb_holders_incremented)
-	{
-		SpinLockAcquire(&mtm_state->cb_lock);
-		mtm_state->n_prepare_holders -= 1;
-		SpinLockRelease(&mtm_state->cb_lock);
-		ConditionVariableBroadcast(&mtm_state->commit_barrier_cv);
-		pb_holders_incremented = false;
-	}
+	if (!pb_acquired_in_mode)
+		return;
+	SpinLockAcquire(&mtm_state->cb_lock);
+	if (pb_acquired_in_mode == PB_APPLY_PREPARER)
+		mtm_state->n_apply_preparers -= 1;
+	else if (pb_acquired_in_mode == PB_BACKEND_PREPARER)
+		mtm_state->n_backend_preparers -= 1;
+	else if (pb_acquired_in_mode == PB_BACKEND_HOLDER)
+		mtm_state->n_backend_holders -= 1;
+	else if (pb_acquired_in_mode == PB_FULL_HOLDER)
+		mtm_state->n_full_holders -= 1;
+	else
+		Assert(false);
+	SpinLockRelease(&mtm_state->cb_lock);
+	ConditionVariableBroadcast(&mtm_state->commit_barrier_cv);
+	pb_acquired_in_mode = PB_NONE;
 }
 
 

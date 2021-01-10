@@ -135,7 +135,8 @@ extern void MtmOnDmqSenderConnect(char *node_name);
 extern void MtmOnDmqSenderHeartbeat(char *node_name, StringInfo buf);
 extern void MtmOnDmqSenderDisconnect(char *node_name);
 
-extern void AcquirePBByPreparer(void);
+extern void AcquirePBByPreparer(bool backend);
+extern void AcquirePBByHolder(bool full);
 extern void ReleasePB(void);
 
 /* bgws */
