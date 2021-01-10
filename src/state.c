@@ -1665,7 +1665,7 @@ CampaignerMain(Datum main_arg)
 		if (!mtm_config_valid)
 		{
 			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
-									  (Datum) NULL);
+									  (Datum) NULL, FATAL);
 			mtm_config_valid = true;
 		}
 
@@ -1971,7 +1971,7 @@ void *
 MtmOnDmqReceiverConnect(char *node_name)
 {
 	int			node_id;
-	MtmConfig  *cfg = MtmLoadConfig();
+	MtmConfig  *cfg = MtmLoadConfig(FATAL);
 
 	sscanf(node_name, MTM_DMQNAME_FMT, &node_id);
 
@@ -3347,7 +3347,7 @@ ReplierMain(Datum main_arg)
 		if (!mtm_config_valid)
 		{
 			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
-									  (Datum) NULL);
+									  (Datum) NULL, FATAL);
 			mtm_config_valid = true;
 		}
 
@@ -3833,12 +3833,12 @@ MtmMonitor(Datum arg)
 	 * committed, so we won't see config yet. Just wait for it to became
 	 * visible.
 	 */
-	mtm_cfg = MtmLoadConfig();
+	mtm_cfg = MtmLoadConfig(0);
 	while (mtm_cfg->n_nodes == 0)
 	{
-		pfree(mtm_cfg);
+		MtmConfigFree(mtm_cfg);
 		MtmSleep(USECS_PER_SEC);
-		mtm_cfg = MtmLoadConfig();
+		mtm_cfg = MtmLoadConfig(0);
 	}
 	/* check config sanity */
 	if (mtm_cfg->my_node_id == MtmInvalidNodeId)
@@ -3968,7 +3968,8 @@ MtmMonitor(Datum arg)
 			 * stop_node_workers will be skipped. Very unlikely, but not nice.
 			 */
 			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
-									  stop_node_workers, PointerGetDatum(bgws));
+									  stop_node_workers, PointerGetDatum(bgws),
+									  0);
 
 			/*
 			 * we were excluded from cluster

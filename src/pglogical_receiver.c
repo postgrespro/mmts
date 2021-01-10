@@ -615,7 +615,7 @@ pglogical_receiver_main(Datum main_arg)
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
 
-	receiver_mtm_cfg = MtmLoadConfig();
+	receiver_mtm_cfg = MtmLoadConfig(FATAL);
 	if (MtmNodeById(receiver_mtm_cfg, sender) == NULL)
 		proc_exit(0); /* our node was excluded */
 	conninfo = MtmNodeById(receiver_mtm_cfg, sender)->conninfo;

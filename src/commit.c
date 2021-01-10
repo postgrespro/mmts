@@ -68,19 +68,6 @@ proc_change_cb(Datum arg, int cacheid, uint32 hashvalue)
 	MtmSetRemoteFunction(NULL, NULL);
 }
 
-static void
-attach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	dmq_attach_receiver(psprintf(MTM_DMQNAME_FMT, node_id), node_id - 1);
-}
-
-static void
-detach_node(int node_id, MtmConfig *new_cfg, Datum arg)
-{
-	/* detach incoming queues from this node */
-	dmq_detach_receiver(psprintf(MTM_DMQNAME_FMT, node_id));
-}
-
 void
 MtmXactCallback(XactEvent event, void *arg)
 {
@@ -232,7 +219,8 @@ MtmBeginTransaction()
 	AcceptInvalidationMessages();
 	if (!config_valid)
 	{
-		mtm_cfg = MtmReloadConfig(mtm_cfg, attach_node, detach_node, (Datum) NULL);
+		mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
+								  (Datum) NULL, 0);
 		if (mtm_cfg->my_node_id == MtmInvalidNodeId) /* mtm was dropped */
 		{
 			MtmTx.distributed = false;

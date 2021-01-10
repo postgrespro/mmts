@@ -233,14 +233,16 @@ extern bool MtmBinaryBasetypes;
 extern void MtmSleep(int64 interval);
 extern TimestampTz MtmGetIncreasingTimestamp(void);
 extern bool MtmAllApplyWorkersFinished(void);
-extern MtmConfig *MtmLoadConfig(void);
+extern MtmConfig *MtmLoadConfig(int elevel_on_absent);
 
 typedef void (*mtm_cfg_change_cb) (int node_id, MtmConfig *new_cfg, Datum arg);
 
 extern MtmConfig *MtmReloadConfig(MtmConfig *old_cfg,
-				mtm_cfg_change_cb node_add_cb,
-				mtm_cfg_change_cb node_drop_cb,
-				Datum arg);
+								  mtm_cfg_change_cb node_add_cb,
+								  mtm_cfg_change_cb node_drop_cb,
+								  Datum arg,
+								  int elevel_on_absent);
+extern void MtmConfigFree(MtmConfig *cfg);
 extern bool Quorum(int ntotal, int nvotes);
 extern bool MtmQuorum(MtmConfig *mtm_cfg, int nvotes);
 extern MtmNode *MtmNodeById(MtmConfig *cfg, int node_id);

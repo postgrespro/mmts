@@ -1131,7 +1131,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	char	   *conninfo;
 	PGconn	   *conn;
 	PGresult   *res;
-	MtmConfig  *cfg = MtmLoadConfig();
+	MtmConfig  *cfg = MtmLoadConfig(ERROR);
 	XLogRecPtr	curr_lsn;
 	int			i;
 	MtmNode    *new_node;
@@ -1286,7 +1286,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	if (rc != SPI_OK_SELECT)
 		mtm_log(ERROR, "Failed to alter sequences");
 
-	pfree(cfg);
+	MtmConfigFree(cfg);
 	PQfinish(conn);
 	if (SPI_finish() != SPI_OK_FINISH)
 		mtm_log(ERROR, "could not finish SPI");
@@ -1307,12 +1307,9 @@ mtm_join_node(PG_FUNCTION_ARGS)
 Datum
 mtm_ping(PG_FUNCTION_ARGS)
 {
-	MtmConfig *cfg = MtmLoadConfig();
+	MtmConfig *cfg = MtmLoadConfig(ERROR);
 	int i;
 	MtmGeneration curr_gen;
-
-	if (!MtmIsEnabled())
-		elog(ERROR, "multimaster is not enabled");
 
 	curr_gen = MtmGetCurrentGen(false);
 	/*
@@ -1320,13 +1317,18 @@ mtm_ping(PG_FUNCTION_ARGS)
 	 * current gen, but of course things could've changed since then.
 	 */
 	if (MtmGetCurrentStatusInGenNotLocked() != MTM_GEN_ONLINE)
+	{
+		MtmConfigFree(cfg);
 		elog(ERROR, "multimaster node is not online in the current gen");
+	}
 	for (i = 0; i < cfg->n_nodes; i++)
 	{
 		MtmNode *peer = &cfg->nodes[i];
 		PGconn *conn;
 		PGresult *res;
 		uint64 peer_gen_num;
+		/* hack over MtmConfig allocation in top context */
+		char *peer_connstr = pstrdup(peer->conninfo);
 
 		/* poll only gen members */
 		if (!BIT_CHECK(curr_gen.members, peer->node_id - 1))
@@ -1338,9 +1340,10 @@ mtm_ping(PG_FUNCTION_ARGS)
 			char	   *msg = pchomp(PQerrorMessage(conn));
 
 			PQfinish(conn);
+			MtmConfigFree(cfg);
 			mtm_log(ERROR,
 					"Could not connect to a node '%s' from this node: %s",
-					peer->conninfo, msg);
+					peer_connstr, msg);
 		}
 
 		/*
@@ -1356,28 +1359,35 @@ mtm_ping(PG_FUNCTION_ARGS)
 
 			PQclear(res);
 			PQfinish(conn);
+			MtmConfigFree(cfg);
 			mtm_log(ERROR,
 					"Failed to query mtm.cluster_status on '%s': %s",
-					peer->conninfo, msg);
+					peer_connstr, msg);
 		}
 		peer_gen_num = pg_strtouint64(PQgetvalue(res, 0, 0), NULL, 10);
 		PQclear(res);
 		PQfinish(conn);
 		if (curr_gen.num != peer_gen_num)
+		{
+			int peer_node_id = peer->node_id;
+			MtmConfigFree(cfg);
 			mtm_log(ERROR, "ping failed: my curr gen num is " UINT64_FORMAT ", but %d's is " UINT64_FORMAT,
-					curr_gen.num, peer->node_id, peer_gen_num);
-
+					curr_gen.num, peer_node_id, peer_gen_num);
+		}
 	}
+	MtmConfigFree(cfg);
 	PG_RETURN_BOOL(true);
 }
 
 /*
  * Load mtm config.
  *
+ * elevel_on_absent allows to ERROR|FATAL out if multimaster is not
+ * configured.
  * In case of absense of configured nodes will return cfg->n_nodes = 0.
  */
 MtmConfig *
-MtmLoadConfig()
+MtmLoadConfig(int elevel_on_absent)
 {
 	MtmConfig  *cfg;
 	int			rc;
@@ -1510,22 +1520,24 @@ MtmLoadConfig()
 	if (!inside_tx)
 		CommitTransactionCommand();
 
-	/* TODO: we'd better have option to ERROR or FATAL here if me is invalid */
+	/* form configured mask */
+	cfg->mask = 0;
 	if (cfg->my_node_id != MtmInvalidNodeId)
 	{
-		/* form configured mask */
-		cfg->mask = 0;
 		BIT_SET(cfg->mask, cfg->my_node_id - 1);
-		for (i = 0; i < cfg->n_nodes; i++)
-			BIT_SET(cfg->mask, cfg->nodes[i].node_id - 1);
 	}
+	for (i = 0; i < cfg->n_nodes; i++)
+		BIT_SET(cfg->mask, cfg->nodes[i].node_id - 1);
+
+	if (cfg->my_node_id == MtmInvalidNodeId && elevel_on_absent)
+		mtm_log(elevel_on_absent, "multimaster is not configured");
 
 	return cfg;
 }
 
 MtmConfig *
 MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
-				mtm_cfg_change_cb node_drop_cb, Datum arg)
+				mtm_cfg_change_cb node_drop_cb, Datum arg, int elevel_on_absent)
 {
 	MtmConfig  *new_cfg;
 	Bitmapset  *old_bms = NULL,
@@ -1535,7 +1547,7 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	int			i,
 				node_id;
 
-	new_cfg = MtmLoadConfig();
+	new_cfg = MtmLoadConfig(elevel_on_absent);
 
 	/*
 	 * Construct bitmapsets from old and new mtm_config's and find out whether
@@ -1582,9 +1594,21 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	}
 
 	if (old_cfg != NULL)
-		pfree(old_cfg);
+		MtmConfigFree(old_cfg);
 
 	return new_cfg;
+}
+
+void
+MtmConfigFree(MtmConfig *cfg)
+{
+	int i;
+
+	for (i = 0; i < cfg->n_nodes; i++)
+	{
+		pfree(cfg->nodes[i].conninfo);
+	}
+	pfree(cfg);
 }
 
 /*

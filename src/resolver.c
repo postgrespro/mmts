@@ -656,11 +656,8 @@ ResolverMain(Datum main_arg)
 		AcceptInvalidationMessages();
 		if (!mtm_config_valid)
 		{
-			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node, (Datum) NULL);
-
-			if (mtm_cfg->my_node_id == 0)
-				proc_exit(0);
-
+			mtm_cfg = MtmReloadConfig(mtm_cfg, mtm_attach_node, mtm_detach_node,
+									  (Datum) NULL, FATAL);
 			mtm_config_valid = true;
 		}
 		Assert(mtm_cfg);

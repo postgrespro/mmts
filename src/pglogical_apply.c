@@ -1509,10 +1509,9 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		if (!receiver_mtm_cfg_valid)
 		{
 			if (receiver_mtm_cfg)
-				pfree(receiver_mtm_cfg);
-			receiver_mtm_cfg = MtmLoadConfig();
-			if (receiver_mtm_cfg->my_node_id == 0 ||
-				MtmNodeById(receiver_mtm_cfg, rwctx->sender_node_id) == NULL)
+				MtmConfigFree(receiver_mtm_cfg);
+			receiver_mtm_cfg = MtmLoadConfig(FATAL);
+			if (MtmNodeById(receiver_mtm_cfg, rwctx->sender_node_id) == NULL)
 				//XXX
 					proc_exit(0);
 

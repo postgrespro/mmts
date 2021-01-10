@@ -771,8 +771,8 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 	sscanf(MyReplicationSlot->data.name.data, MULTIMASTER_SLOT_PATTERN,
 		   &hooks_data->receiver_node_id);
 	hooks_data->is_recovery = false;
-	hooks_data->cfg = MtmLoadConfig();
-	/* shutdown_cb is not what we want is it won't be called on ERROR|FATAL */
+	hooks_data->cfg = MtmLoadConfig(FATAL);
+	/* shutdown_cb is not what we want as it won't be called on ERROR|FATAL */
 	before_shmem_exit(MtmWalsenderOnExit, Int32GetDatum(hooks_data->receiver_node_id));
 
 	/*

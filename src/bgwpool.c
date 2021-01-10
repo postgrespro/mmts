@@ -231,7 +231,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	ActivePortal->status = PORTAL_ACTIVE;
 	ActivePortal->sourceText = "";
 
-	receiver_mtm_cfg = MtmLoadConfig();
+	receiver_mtm_cfg = MtmLoadConfig(FATAL);
 	/* Keep us informed about subscription changes. */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONOID,
 								  subscription_change_cb,

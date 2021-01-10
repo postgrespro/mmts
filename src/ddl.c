@@ -1740,7 +1740,7 @@ AdjustCreateSequence(List *options)
 
 	if (!has_increment)
 	{
-		MtmConfig  *mtm_cfg = MtmLoadConfig();
+		MtmConfig  *mtm_cfg = MtmLoadConfig(ERROR);
 		int			i;
 		int			max_node;
 
@@ -1753,6 +1753,7 @@ AdjustCreateSequence(List *options)
 
 		defel = makeDefElem("increment", (Node *) makeInteger(max_node), -1);
 		options = lappend(options, defel);
+		MtmConfigFree(mtm_cfg);
 	}
 
 	if (!has_start)
