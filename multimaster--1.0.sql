@@ -516,3 +516,15 @@ CREATE FUNCTION mtm.get_logged_prepared_xact_state(gid text) RETURNS text
 
 CREATE FUNCTION mtm.ping() RETURNS bool AS 'MODULE_PATHNAME','mtm_ping'
 LANGUAGE C;
+
+CREATE FUNCTION mtm.check_query(query TEXT) RETURNS BOOL
+AS 'MODULE_PATHNAME','mtm_check_query'
+LANGUAGE C;
+
+CREATE FUNCTION mtm.hold_backends() RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_hold_backends'
+LANGUAGE C;
+
+CREATE FUNCTION mtm.release_backends() RETURNS VOID
+AS 'MODULE_PATHNAME','mtm_release_backends'
+LANGUAGE C;

@@ -1034,8 +1034,11 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				VariableSetStmt *stmt = (VariableSetStmt *) parsetree;
 
 				/* Prevent SET TRANSACTION from replication */
-				if (stmt->kind == VAR_SET_MULTI)
+				if (stmt->kind == VAR_SET_MULTI ||
+					strcmp(stmt->name, "application_name") == 0)
+				{
 					SkipCommand(true);
+				}
 
 				/*
 				 * SET (and RESET) issued in tx block have tx scope, so we

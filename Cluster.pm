@@ -153,7 +153,7 @@ sub init
 
 sub create_mm
 {
-	my ($self, $dbname) = @_;
+	my ($self, $dbname, $connect_timeout) = @_;
 	my $nodes = $self->{nodes};
 
 	$self->await_nodes([0..$#{$self->{nodes}}], 0);
@@ -211,8 +211,11 @@ sub create_mm
 		}
 	}
 
+	# identity_func uses connect_timeout as it tries connecting to shutdown
+	# node which hangs infinitely otherwise due to our hold_socket hack.
 	(my $my_connstr, my @peers) = map {
-		$_->connstr($_->{dbname})
+		$_->connstr($_->{dbname}) . ((defined $connect_timeout) ?
+		  " connect_timeout=${connect_timeout}" : "");
 	} @{$self->{nodes}};
 
 	my $node1 = $self->{nodes}->[0];

@@ -77,6 +77,9 @@ PG_FUNCTION_INFO_V1(mtm_join_node);
 PG_FUNCTION_INFO_V1(mtm_init_cluster);
 PG_FUNCTION_INFO_V1(mtm_get_bgwpool_stat);
 PG_FUNCTION_INFO_V1(mtm_ping);
+PG_FUNCTION_INFO_V1(mtm_hold_backends);
+PG_FUNCTION_INFO_V1(mtm_release_backends);
+PG_FUNCTION_INFO_V1(mtm_check_query);
 
 #if 0
 static size_t MtmGetTransactionStateSize(void);
@@ -87,6 +90,8 @@ static void MtmDeserializeTransactionState(void *ctx);
 static void *MtmSuspendTransaction(void);
 static void MtmResumeTransaction(void *ctx);
 #endif
+
+static void release_pb_holders_xact_cb(XactEvent event, void *arg);
 
 static void MtmShmemStartup(void);
 
@@ -2253,4 +2258,371 @@ MtmMesageToString(MtmMessage *anymsg)
 	appendStringInfoString(&si, "}");
 
 	return si.data;
+}
+
+
+/*
+ * Consistency checking machinery.
+ */
+
+static void
+_mtm_free_snapshots(MtmConfig *cfg, int *index, int n_nodes, PGconn **conns)
+{
+	int i;
+
+	for (i = 0; i < n_nodes; i++)
+	{
+		PGresult *res;
+		int pos = index[i];
+
+		Assert(pos >= 0 && pos < MTM_MAX_NODES);
+		Assert(conns[pos] != NULL);
+
+		res = PQexec(conns[pos], "END;");
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+			mtm_log(WARNING,
+				"cannot release snapshot on node%d: %s",
+				cfg->nodes[pos].node_id, PQerrorMessage(conns[pos]));
+
+		PQclear(res);
+		PQfinish(conns[pos]);
+	}
+
+	MtmConfigFree(cfg);
+}
+
+static void
+release_pb_holders_xact_cb(XactEvent event, void *arg)
+{
+	if (event != XACT_EVENT_COMMIT && event != XACT_EVENT_ABORT)
+		return;
+
+	ReleasePB();
+	UnregisterXactCallback(release_pb_holders_xact_cb, NULL);
+}
+
+Datum
+mtm_release_backends(PG_FUNCTION_ARGS)
+{
+	/* Simple protection from manual user call */
+	if (strcmp(application_name, "mtm_consistency_check") != 0)
+	{
+		mtm_log(WARNING, "this function should only be called by mtm.check_query()");
+		PG_RETURN_VOID();
+	}
+
+	ReleasePB();
+	UnregisterXactCallback(release_pb_holders_xact_cb, NULL);
+	PG_RETURN_VOID();
+}
+
+Datum
+mtm_hold_backends(PG_FUNCTION_ARGS)
+{
+	/* Simple protection from manual user call */
+	if (strcmp(application_name, "mtm_consistency_check") != 0)
+	{
+		mtm_log(WARNING, "this function should only be called by mtm.check_query()");
+		PG_RETURN_VOID();
+	}
+
+	/*
+	 * Register the callback on commit/abort of this transaction. It gives some
+	 * guarantee for release the MTM lock.
+	 * (do we really need this? backend will die on ERROR soon release
+	 * everything anyway)
+	 */
+	RegisterXactCallback(release_pb_holders_xact_cb, NULL);
+
+	/* Hold all future my own transactions */
+	AcquirePBByHolder(false);
+
+	/* And wait until current ones are finished */
+	for(;;)
+	{
+		int n_own_prepares = 0;
+		PreparedTransaction pxacts;
+		int i;
+		int n_prepares;
+
+		n_prepares = GetPreparedTransactions(&pxacts);
+		for (i = 0; i < n_prepares; i++)
+		{
+			int xact_coordinator = MtmGidParseNodeId(pxacts[i].gid);
+			if (Mtm->my_node_id == xact_coordinator)
+				n_own_prepares++;
+		}
+		if (pxacts)
+			pfree(pxacts);
+		if (n_own_prepares == 0)
+			break;
+		MtmSleep(USECS_PER_SEC / 10);
+	}
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Get snapshots from each node of multimaster, described in mcfg structure.
+ *
+ * 1. Hold receiver and wait while all workers will apply its current tasks.
+ * 2. Export current snapshot.
+ * 3. Release receiver.
+ */
+static void
+_mtm_get_snapshots(const MtmConfig *mcfg, PGconn **conns, char **snapnames,
+													int *index, int *n_nodes)
+{
+	PGresult *res;
+	int i;
+
+	Assert(n_nodes != NULL && *n_nodes == 0);
+
+	for (i = 0; i < mcfg->n_nodes; i++)
+	{
+		/* Establish connection to each node */
+		conns[i] = PQconnectdb(mcfg->nodes[i].conninfo);
+
+		if (conns[i] == NULL || PQstatus(conns[i]) == CONNECTION_BAD)
+		{
+			/*
+			 * Maybe not all nodes are working. We will get snapshots only from
+			 * online nodes.
+			 */
+			mtm_log(WARNING,
+				"connection to node%d failed: %s",
+				mcfg->nodes[i].node_id, PQerrorMessage(conns[i]));
+
+			if (conns[i] != NULL)
+			{
+				PQfinish(conns[i]);
+				conns[i] = NULL;
+			}
+
+			continue;
+		}
+
+		/* Keep in mind that we need to close the connection at last */
+		index[*n_nodes] = i;
+		(*n_nodes)++;
+
+		res = PQexec(conns[i],
+					"BEGIN; SET TRANSACTION ISOLATION LEVEL READ COMMITTED; "
+					"SET application_name=mtm_consistency_check; "
+					"SELECT mtm.hold_backends();");
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			/*
+			 * Will consider this error as critical. For simplification purposes
+			 * only.
+			 */
+			mtm_log(ERROR,
+				"cannot open snapshot on node%d: %s",
+				mcfg->nodes[index[i]].node_id, PQresultErrorMessage(res));
+		}
+		PQclear(res);
+	}
+
+	/*
+	 * Now the workers queue is empty, all non-applied transactions are waiting
+	 * and we can refresh an actualized snapshot.
+	 */
+	for (i = 0; i < *n_nodes; i++)
+	{
+		res = PQexec(conns[index[i]], "SELECT pg_export_snapshot();");
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			mtm_log(ERROR,
+				"cannot export snapshot on node%d: %s",
+				mcfg->nodes[index[i]].node_id, PQresultErrorMessage(res));
+		}
+
+		Assert(PQntuples(res) == 1 && !PQgetisnull(res, 0, 0));
+		snapnames[index[i]] = pstrdup(PQgetvalue(res, 0, 0));
+		PQclear(res);
+	}
+
+	for (i = 0; i < *n_nodes; i++)
+	{
+		res = PQexec(conns[index[i]], "SELECT mtm.release_backends();");
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		{
+			mtm_log(ERROR,
+				"cannot release snapshot on node%d: %s",
+				mcfg->nodes[index[i]].node_id, PQresultErrorMessage(res));
+		}
+	}
+}
+
+/*
+ * Check md5 equivalence on results of a query.
+ *
+ * Here we use results 'AS IS'. User need to compose correct query and
+ * keep in mind that a relation is an unsorted set of tuples.
+ *
+ * On any ERROR we will catch it, close connections and rethrow.
+ */
+Datum
+mtm_check_query(PG_FUNCTION_ARGS)
+{
+	char *expr = text_to_cstring(PG_GETARG_TEXT_P(0));
+	MtmConfig *cfg = MtmLoadConfig(ERROR);
+	PGconn *conns[MTM_MAX_NODES]; /* opened connections holds snapshots */
+	char *snapnames[MTM_MAX_NODES];
+	int index[MTM_MAX_NODES];
+	int n_nodes = 0;
+	PGresult *res[MTM_MAX_NODES];
+	bool check = true;
+	int i;
+	int ntup;
+	int base;
+
+	memset(res, 0, sizeof(PGresult *) * MTM_MAX_NODES);
+	memset(conns, 0, sizeof(PGconn *) * MTM_MAX_NODES);
+	memset(snapnames, 0, sizeof(char *) * MTM_MAX_NODES);
+	memset(index, 0xF, sizeof(int) * MTM_MAX_NODES); /* For debug purposes only */
+
+	/* Use try section for correct cleanup only. */
+	PG_TRY();
+	{
+		_mtm_get_snapshots(cfg, conns, snapnames, index, &n_nodes);
+		Assert(n_nodes > 0 && n_nodes <= cfg->n_nodes);
+		base = index[0];
+
+		if (n_nodes == 1)
+			/* Use error to close connection. */
+			mtm_log(ERROR,
+				"only node%d from %d is in online state: no nodes to compare with",
+				cfg->nodes[index[0]].node_id,
+				cfg->n_nodes);
+
+		/*
+		 * Create new session and backend at the each multimaster node. Sync the
+		 * backend snapshot in accordance with the snapnames.
+		 */
+		for (i = 0; i < n_nodes; i++)
+		{
+			PGconn *conn; /* Use to return query result corresponding to the snapshot */
+			char *query;
+			int pos = index[i];
+
+			/* Establish connection to each online node */
+			conn = PQconnectdb(cfg->nodes[pos].conninfo);
+
+			if (conn == NULL || PQstatus(conn) == CONNECTION_BAD)
+			{
+				/*
+				 * Maybe not all nodes are working. We will get snapshots only from
+				 * online nodes.
+				 */
+				mtm_log(ERROR,
+					"connection to node%d failed: %s",
+					cfg->nodes[pos].node_id, PQerrorMessage(conn));
+			}
+
+			query = psprintf("BEGIN;"
+							 "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;"
+							 "SET TRANSACTION SNAPSHOT '%s'; %s",
+							 snapnames[pos], expr);
+
+			res[pos] = PQexec(conn, query);
+			if (PQresultStatus(res[pos]) != PGRES_TUPLES_OK)
+				mtm_log(ERROR,
+					"failed to run query on node%d, snapshot '%s': %s",
+					cfg->nodes[pos].node_id, snapnames[pos],
+					PQresultErrorMessage(res[pos]));
+			pfree(query);
+			PQfinish(conn);
+		}
+
+		/* Now we have query results. Compare it. */
+		for (i = 1; i < n_nodes; i++)
+		{
+			int pos = index[i];
+
+			if (PQntuples(res[pos]) == PQntuples(res[base]) &&
+				PQnfields(res[pos]) == PQnfields(res[base]))
+				continue;
+
+			mtm_log(WARNING,
+				"query results mismatch: %d rows and %d columns on node%d, "
+				"%d rows and %d columns on node%d",
+				PQntuples(res[base]), PQnfields(res[base]),	cfg->nodes[base].node_id,
+				PQntuples(res[pos]), PQnfields(res[pos]), cfg->nodes[pos].node_id);
+			check = false;
+			goto end1;
+		}
+
+		/*
+		 * The results were placed in the arrays. Compare that.
+		 */
+		for (ntup = 0; ntup < PQntuples(res[base]); ntup++)
+		{
+			int nfield;
+
+			for (nfield = 0; nfield < PQnfields(res[base]); nfield++)
+			{
+				const char *val0 = PQgetisnull(res[base], ntup, nfield) ?
+									" " : PQgetvalue(res[base], ntup, nfield);
+
+				for (i = 1; i < n_nodes; i++)
+				{
+					int pos = index[i];
+
+					if (PQgetisnull(res[base], ntup, nfield) ||
+						PQgetisnull(res[pos], ntup, nfield))
+					{
+						if (PQgetisnull(res[base], ntup, nfield) &&
+							PQgetisnull(res[pos], ntup, nfield))
+							continue;
+
+						mtm_log(WARNING,
+							"mismatch in column '%s' of row %d: "
+							"%s on node%d, %s on node%d",
+							PQfname(res[i], nfield), ntup,
+							(PQgetisnull(res[base], ntup, nfield)) ? "null": PQgetvalue(res[base], ntup, nfield),
+							cfg->nodes[base].node_id,
+							(PQgetisnull(res[pos], ntup, nfield)) ? "null": PQgetvalue(res[pos], ntup, nfield),
+							cfg->nodes[pos].node_id);
+						check = false;
+						goto end1;
+					}
+					else if (strcmp(val0, PQgetvalue(res[pos], ntup, nfield)) == 0)
+						continue;
+
+					mtm_log(WARNING,
+						"mismatch in column '%s' of row %d: "
+						"%s on node%d, %s on node%d",
+						PQfname(res[i], nfield), ntup,
+						val0, cfg->nodes[base].node_id,
+						PQgetvalue(res[pos], ntup, nfield),
+						cfg->nodes[pos].node_id);
+
+						check = false;
+						goto end1;
+					}
+				}
+			}
+
+end1: /* cleanup */
+		for (i = 0; i < n_nodes; i++)
+		{
+			PQclear(res[index[i]]);
+			res[index[i]] = NULL;
+		}
+	}
+	PG_CATCH();
+	{
+		EmitErrorReport();
+
+		for (i = 0; i < n_nodes; i++)
+			PQclear(res[index[i]]);
+		_mtm_free_snapshots(cfg, index, n_nodes, conns);
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	/* Close connections that holds the snapshots */
+	_mtm_free_snapshots(cfg, index, n_nodes, conns);
+	PG_RETURN_BOOL(check);
 }
