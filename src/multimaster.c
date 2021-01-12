@@ -331,6 +331,14 @@ MtmSharedShmemStartup()
 		Mtm->localTablesHashLoaded = false;
 		Mtm->latestSyncpoint = InvalidXLogRecPtr;
 
+		/*
+		 * Enable sign for the database will be set at the MtmIsEnabled()
+		 * function call when the "multimaster" extension existence will be
+		 * detected.
+		 */
+		Mtm->IsEnabled = false;
+		Mtm->DatabaseId = InvalidOid;
+
 		Mtm->lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[0].lock);
 		Mtm->syncpoint_lock = &(GetNamedLWLockTranche(MULTIMASTER_NAME)[1].lock);
 
@@ -661,7 +669,37 @@ _PG_fini(void)
 bool
 MtmIsEnabled()
 {
-	return OidIsValid(get_publication_oid(MULTIMASTER_NAME, true));
+	bool enabled;
+	Oid dbOid;
+
+	LWLockAcquire(Mtm->lock, LW_SHARED);
+	enabled = Mtm->IsEnabled;
+	dbOid = Mtm->DatabaseId;
+	LWLockRelease(Mtm->lock);
+
+	/* Consistency check */
+	Assert((enabled && dbOid != InvalidOid) || (!enabled && dbOid == InvalidOid));
+
+	if (!enabled)
+	{
+		/*
+		 * Do not block another processes during possible long-time database
+		 * transaction and do not need to catch an error for release the lock.
+		 */
+		enabled = OidIsValid(get_publication_oid(MULTIMASTER_NAME, true));
+		if (enabled)
+		{
+			Assert(MyDatabaseId != InvalidOid);
+			LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+			Mtm->IsEnabled = true;
+			Mtm->DatabaseId = MyDatabaseId;
+			LWLockRelease(Mtm->lock);
+		}
+	}
+	else if (dbOid != MyDatabaseId)
+		return false;
+
+	return enabled;
 }
 
 /*  XXX: delete that */

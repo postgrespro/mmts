@@ -3956,6 +3956,14 @@ MtmMonitor(Datum arg)
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 
+		/*
+		 * Extension "multimaster" was dropped. Set the sign in disabled state.
+		 */
+		LWLockAcquire(Mtm->lock, LW_EXCLUSIVE);
+		Mtm->IsEnabled = false;
+		Mtm->DatabaseId = InvalidOid;
+		LWLockRelease(Mtm->lock);
+
 		proc_exit(0);
 	}
 

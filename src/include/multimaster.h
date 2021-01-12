@@ -157,6 +157,13 @@ typedef struct
 	LWLock	   *lock;
 	LWLock	   *syncpoint_lock;
 
+	/*
+	 * We do not need to go into the database everytime that we resolve
+	 * deadlocks.
+	 */
+	bool		IsEnabled;
+	Oid			DatabaseId;
+
 	int			my_node_id;
 	 /* configured members (initially + add/rm), maintained by monitor */
 	pg_atomic_uint64 configured_mask;
