@@ -353,6 +353,11 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 	switch (action)
 	{
 		case 'C':
+			/*
+			 * non-tx DDL which must be executed in receiver. It is just close
+			 * to 'C' on keyboard...
+			 */
+		case 'V':
 			{
 				char *activity = psprintf("non-tx ddl %s", messageBody);
 				pgstat_report_activity(STATE_RUNNING, activity);

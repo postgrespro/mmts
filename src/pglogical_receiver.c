@@ -963,6 +963,7 @@ pglogical_receiver_main(Datum main_arg)
 					if (stmt[0] == 'Z' || (stmt[0] == 'M' && (stmt[1] == 'L' ||
 															  stmt[1] == 'P' ||
 															  stmt[1] == 'C' ||
+															  stmt[1] == 'V' ||
 															  stmt[1] == 'S')))
 					{
 						/*

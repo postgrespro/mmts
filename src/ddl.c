@@ -231,18 +231,49 @@ MtmDDLReplicationShmemStartup(void)
  *
  *****************************************************************************/
 
+/*
+ * Log command to peers to remove all my temp schemas on apply. This ensures
+ * garbage mm temp schemas won't accumulate on node crash-restart.
+ */
+void
+temp_schema_reset_all(int my_node_id)
+{
+	char *query;
+
+	query = psprintf("do $$ "
+					 "declare "
+					 "	nsp record; "
+					 "begin "
+					 "	reset session_authorization; "
+					 "	for nsp in select nspname from pg_namespace where nspname ~ '^mtm_tmp_%d_.*' loop "
+					 "	  perform mtm.set_temp_schema(nsp.nspname); "
+					 "	  execute format('drop schema if exists %%I cascade', format('%%s_toast', nsp.nspname)); "
+					 "	  execute format('drop schema if exists %%I cascade', nsp.nspname); "
+					 "	end loop; "
+					 "end $$; ",
+					 my_node_id);
+	mtm_log(DDLStmtOutgoing, "Sending DDL: %s", query);
+	LogLogicalMessage("V", query, strlen(query) + 1, false);
+}
+
 /* Drop temp schemas on peer nodes */
 static void
 temp_schema_reset(void)
 {
 	Assert(TempDropRegistered);
 
+	/*
+	 * reset session_authorization restores permissions if previous ddl
+	 * dropped them; set_temp_schema allows us to see temporary objects,
+	 * otherwise they can't be dropped
+	 */
 	MtmProcessDDLCommand(
-						 psprintf("select mtm.set_temp_schema('%s'); "
-								  "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
-								  "DROP SCHEMA IF EXISTS %s CASCADE;",
-								  MtmTempSchema, MtmTempSchema, MtmTempSchema),
-						 false
+		psprintf("RESET session_authorization; "
+				 "select mtm.set_temp_schema('%s'); "
+				 "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
+				 "DROP SCHEMA IF EXISTS %s CASCADE;",
+				 MtmTempSchema, MtmTempSchema, MtmTempSchema),
+		false
 		);
 	MtmFinishDDLCommand();
 }

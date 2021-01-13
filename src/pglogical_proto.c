@@ -257,7 +257,9 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 			break;
 
 		case 'C':
-			mtm_log(ProtoTraceMessage, "Sent non-tx DDL message to node %d: %s",
+		case 'V':
+			mtm_log(ProtoTraceMessage, "Sent%s non-tx DDL message to node %d: %s",
+					*prefix == 'C' ? " concurrent" : " non-concurrent",
 					hooks_data->receiver_node_id, message);
 			break;
 

@@ -40,6 +40,7 @@
 #include "multimaster.h"
 #include "bkb.h"
 #include "commit.h"
+#include "ddl.h"
 #include "state.h"
 #include "syncpoint.h"
 #include "logger.h"
@@ -3966,6 +3967,9 @@ MtmMonitor(Datum arg)
 
 		proc_exit(0);
 	}
+
+	/* Remove obsolete temp schemas at peers */
+	temp_schema_reset_all(mtm_cfg->my_node_id);
 
 	/*
 	 * Reset mtm_cfg, as it need to be NULL during first call of
