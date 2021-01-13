@@ -104,7 +104,7 @@ typedef struct
 
 typedef struct
 {
-	char		stream_name[DMQ_NAME_MAXLEN];
+	char		stream_name[DMQ_STREAM_NAME_MAXLEN];
 	int			procno;
 	uint64		procno_gen;
 } DmqStreamSubscription;
@@ -220,7 +220,7 @@ struct
 	shm_mq_handle *mq_outh;
 
 	/* to receive */
-	char	curr_stream_name[DMQ_NAME_MAXLEN];
+	char	curr_stream_name[DMQ_STREAM_NAME_MAXLEN];
 	uint64	my_procno_gen;
 	int			n_inhandles;
 	struct
@@ -1625,7 +1625,7 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 
 	initStringInfo(&buf);
 	pq_sendbyte(&buf, dest_id);
-	pq_send_ascii_string(&buf, stream_name);
+	pq_sendbytes(&buf, stream_name, strlen(stream_name) + 1);
 	pq_send_ascii_string(&buf, msg);
 
 	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
@@ -1649,8 +1649,8 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 
 	initStringInfo(&buf);
 	pq_sendbyte(&buf, dest_id);
-	Assert(strlen(stream_name) + 1 <= DMQ_NAME_MAXLEN);
-	pq_send_ascii_string(&buf, stream_name);
+	Assert(strlen(stream_name) + 1 <= DMQ_STREAM_NAME_MAXLEN);
+	pq_sendbytes(&buf, stream_name, strlen(stream_name) + 1);
 	pq_sendbytes(&buf, payload, len);
 
 	mtm_log(DmqTraceOutgoing, "[DMQ] pushing l=%d '%.*s'",
@@ -1922,7 +1922,7 @@ dmq_stream_subscribe(char *stream_name)
 	sub->procno = MyProc->pgprocno;
 	sub->procno_gen = dmq_local.my_procno_gen;
 	LWLockRelease(dmq_state->lock);
-	strncpy(dmq_local.curr_stream_name, stream_name, DMQ_NAME_MAXLEN);
+	strncpy(dmq_local.curr_stream_name, stream_name, DMQ_STREAM_NAME_MAXLEN);
 
 	/*
 	 * The typical usage is

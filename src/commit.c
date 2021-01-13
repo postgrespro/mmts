@@ -384,7 +384,7 @@ MtmTwoPhaseCommit(void)
 	int 		nvotes;
 	nodemask_t	pc_success_cohort;
 	MtmGeneration xact_gen;
-	char dmq_stream_name[DMQ_NAME_MAXLEN];
+	char dmq_stream_name[DMQ_STREAM_NAME_MAXLEN];
 
 	if (MtmNo3PC)
 	{

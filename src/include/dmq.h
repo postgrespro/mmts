@@ -7,6 +7,8 @@
 typedef int8 DmqDestinationId;
 
 #define DMQ_NAME_MAXLEN 32
+/* mm currently uses xact gid as stream name, so this should be >= GIDSIZE */
+#define DMQ_STREAM_NAME_MAXLEN 200
 
 extern void dmq_init(int send_timeout, int connect_timeout);
 
