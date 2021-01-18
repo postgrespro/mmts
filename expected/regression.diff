@@ -1,6 +1,6 @@
-diff contrib/mmts/../../src/test/regress/expected/create_table.out contrib/mmts/../../src/test/regress/results/create_table.out
---- contrib/mmts/../../src/test/regress/expected/create_table.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/create_table.out	CENSORED
+diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_outdir/results/create_table.out
+--- ../../../src/test/regress/expected/create_table.out	CENSORED
++++ ../tmp_check/regress_outdir/results/create_table.out	CENSORED
 @@ -263,17 +263,17 @@
  DROP TABLE as_select1;
  PREPARE select1 AS SELECT 1 as a;
@@ -26,9 +26,9 @@ diff contrib/mmts/../../src/test/regress/expected/create_table.out contrib/mmts/
  DEALLOCATE select1;
  -- create an extra wide table to test for issues related to that
  -- (temporarily hide query, to avoid the long CREATE TABLE stmt)
-diff contrib/mmts/../../src/test/regress/expected/create_index.out contrib/mmts/../../src/test/regress/results/create_index.out
---- contrib/mmts/../../src/test/regress/expected/create_index.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/create_index.out	CENSORED
+diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_outdir/results/create_index.out
+--- ../../../src/test/regress/expected/create_index.out	CENSORED
++++ ../tmp_check/regress_outdir/results/create_index.out	CENSORED
 @@ -1367,31 +1367,33 @@
  CREATE TABLE concur_heap (f1 text, f2 text);
  -- empty table
@@ -213,9 +213,9 @@ diff contrib/mmts/../../src/test/regress/expected/create_index.out contrib/mmts/
  
  DROP TABLE concur_reindex_tab4;
  -- Check handling of indexes with expressions and predicates.  The
-diff contrib/mmts/../../src/test/regress/expected/index_including.out contrib/mmts/../../src/test/regress/results/index_including.out
---- contrib/mmts/../../src/test/regress/expected/index_including.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/index_including.out	CENSORED
+diff ../../../src/test/regress/expected/index_including.out ../tmp_check/regress_outdir/results/index_including.out
+--- ../../../src/test/regress/expected/index_including.out	CENSORED
++++ ../tmp_check/regress_outdir/results/index_including.out	CENSORED
 @@ -310,12 +310,12 @@
  CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box, UNIQUE(c1, c2) INCLUDE(c3,c4));
  INSERT INTO tbl SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,1000) AS x;
@@ -231,9 +231,9 @@ diff contrib/mmts/../../src/test/regress/expected/index_including.out contrib/mm
  
  DROP TABLE tbl;
  /*
-diff contrib/mmts/../../src/test/regress/expected/index_including_gist.out contrib/mmts/../../src/test/regress/results/index_including_gist.out
---- contrib/mmts/../../src/test/regress/expected/index_including_gist.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/index_including_gist.out	CENSORED
+diff ../../../src/test/regress/expected/index_including_gist.out ../tmp_check/regress_outdir/results/index_including_gist.out
+--- ../../../src/test/regress/expected/index_including_gist.out	CENSORED
++++ ../tmp_check/regress_outdir/results/index_including_gist.out	CENSORED
 @@ -74,11 +74,11 @@
  CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
  INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10) AS x;
@@ -250,9 +250,9 @@ diff contrib/mmts/../../src/test/regress/expected/index_including_gist.out contr
  
  DROP TABLE tbl_gist;
  /*
-diff contrib/mmts/../../src/test/regress/expected/sanity_check.out contrib/mmts/../../src/test/regress/results/sanity_check.out
---- contrib/mmts/../../src/test/regress/expected/sanity_check.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/sanity_check.out	CENSORED
+diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_outdir/results/sanity_check.out
+--- ../../../src/test/regress/expected/sanity_check.out	CENSORED
++++ ../tmp_check/regress_outdir/results/sanity_check.out	CENSORED
 @@ -11,6 +11,8 @@
     FROM pg_class c LEFT JOIN pg_namespace n ON n.oid = relnamespace
     WHERE relkind IN ('r', 'p') AND (nspname ~ '^pg_temp_') IS NOT TRUE
@@ -311,9 +311,9 @@ diff contrib/mmts/../../src/test/regress/expected/sanity_check.out contrib/mmts/
  tableam_parted_a_heap2|f
  tableam_parted_b_heap2|f
  tableam_parted_c_heap2|f
-diff contrib/mmts/../../src/test/regress/expected/transactions.out contrib/mmts/../../src/test/regress/results/transactions.out
---- contrib/mmts/../../src/test/regress/expected/transactions.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/transactions.out	CENSORED
+diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_outdir/results/transactions.out
+--- ../../../src/test/regress/expected/transactions.out	CENSORED
++++ ../tmp_check/regress_outdir/results/transactions.out	CENSORED
 @@ -685,50 +685,38 @@
  INSERT INTO abc VALUES (1);
  INSERT INTO abc VALUES (2);
@@ -451,9 +451,9 @@ diff contrib/mmts/../../src/test/regress/expected/transactions.out contrib/mmts/
  
  DROP TABLE abc;
  -- Test for successful cleanup of an aborted transaction at session exit.
-diff contrib/mmts/../../src/test/regress/expected/prepared_xacts_1.out contrib/mmts/../../src/test/regress/results/prepared_xacts.out
---- contrib/mmts/../../src/test/regress/expected/prepared_xacts_1.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/prepared_xacts.out	CENSORED
+diff ../../../src/test/regress/expected/prepared_xacts_1.out ../tmp_check/regress_outdir/results/prepared_xacts.out
+--- ../../../src/test/regress/expected/prepared_xacts_1.out	CENSORED
++++ ../tmp_check/regress_outdir/results/prepared_xacts.out	CENSORED
 @@ -18,8 +18,7 @@
  (1 row)
  
@@ -587,9 +587,9 @@ diff contrib/mmts/../../src/test/regress/expected/prepared_xacts_1.out contrib/m
  SELECT * FROM pxtest3;
   fff 
  -----
-diff contrib/mmts/../../src/test/regress/expected/brin.out contrib/mmts/../../src/test/regress/results/brin.out
---- contrib/mmts/../../src/test/regress/expected/brin.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/brin.out	CENSORED
+diff ../../../src/test/regress/expected/brin.out ../tmp_check/regress_outdir/results/brin.out
+--- ../../../src/test/regress/expected/brin.out	CENSORED
++++ ../tmp_check/regress_outdir/results/brin.out	CENSORED
 @@ -539,7 +539,9 @@
  -- vacuum actually removes the TOAST rows. Creating an index concurrently
  -- is a one way to achieve that, because it does exactly such wait.
@@ -600,9 +600,9 @@ diff contrib/mmts/../../src/test/regress/expected/brin.out contrib/mmts/../../sr
  -- vacuum the table, to discard TOAST data
  VACUUM brintest_3;
  -- retry insert with a different random-looking (but deterministic) value
-diff contrib/mmts/../../src/test/regress/expected/rowsecurity.out contrib/mmts/../../src/test/regress/results/rowsecurity.out
---- contrib/mmts/../../src/test/regress/expected/rowsecurity.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/rowsecurity.out	CENSORED
+diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_outdir/results/rowsecurity.out
+--- ../../../src/test/regress/expected/rowsecurity.out	CENSORED
++++ ../tmp_check/regress_outdir/results/rowsecurity.out	CENSORED
 @@ -113,30 +113,7 @@
  (3 rows)
  
@@ -664,9 +664,9 @@ diff contrib/mmts/../../src/test/regress/expected/rowsecurity.out contrib/mmts/.
  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename like '%part_document%' ORDER BY policyname;
       schemaname     |   tablename   | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
  --------------------+---------------+------------+-------------+--------------------+-----+--------------------------------------------+------------
-diff contrib/mmts/../../src/test/regress/expected/rules.out contrib/mmts/../../src/test/regress/results/rules.out
---- contrib/mmts/../../src/test/regress/expected/rules.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/rules.out	CENSORED
+diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/results/rules.out
+--- ../../../src/test/regress/expected/rules.out	CENSORED
++++ ../tmp_check/regress_outdir/results/rules.out	CENSORED
 @@ -1285,6 +1285,15 @@
  SELECT viewname, definition FROM pg_views
  WHERE schemaname IN ('pg_catalog', 'public')
@@ -769,9 +769,9 @@ diff contrib/mmts/../../src/test/regress/expected/rules.out contrib/mmts/../../s
  pg_tables| SELECT n.nspname AS schemaname,
      c.relname AS tablename,
      pg_get_userbyid(c.relowner) AS tableowner,
-diff contrib/mmts/../../src/test/regress/expected/publication.out contrib/mmts/../../src/test/regress/results/publication.out
---- contrib/mmts/../../src/test/regress/expected/publication.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/publication.out	CENSORED
+diff ../../../src/test/regress/expected/publication.out ../tmp_check/regress_outdir/results/publication.out
+--- ../../../src/test/regress/expected/publication.out	CENSORED
++++ ../tmp_check/regress_outdir/results/publication.out	CENSORED
 @@ -11,9 +11,9 @@
  RESET client_min_messages;
  COMMENT ON PUBLICATION testpub_default IS 'test publication';
@@ -785,9 +785,9 @@ diff contrib/mmts/../../src/test/regress/expected/publication.out contrib/mmts/.
  (1 row)
  
  SET client_min_messages = 'ERROR';
-diff contrib/mmts/../../src/test/regress/expected/subscription.out contrib/mmts/../../src/test/regress/results/subscription.out
---- contrib/mmts/../../src/test/regress/expected/subscription.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/subscription.out	CENSORED
+diff ../../../src/test/regress/expected/subscription.out ../tmp_check/regress_outdir/results/subscription.out
+--- ../../../src/test/regress/expected/subscription.out	CENSORED
++++ ../tmp_check/regress_outdir/results/subscription.out	CENSORED
 @@ -32,9 +32,9 @@
  WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
  COMMENT ON SUBSCRIPTION regress_testsub IS 'test subscription';
@@ -801,9 +801,9 @@ diff contrib/mmts/../../src/test/regress/expected/subscription.out contrib/mmts/
  (1 row)
  
  -- fail - name already exists
-diff contrib/mmts/../../src/test/regress/expected/temp.out contrib/mmts/../../src/test/regress/results/temp.out
---- contrib/mmts/../../src/test/regress/expected/temp.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/temp.out	CENSORED
+diff ../../../src/test/regress/expected/temp.out ../tmp_check/regress_outdir/results/temp.out
+--- ../../../src/test/regress/expected/temp.out	CENSORED
++++ ../tmp_check/regress_outdir/results/temp.out	CENSORED
 @@ -328,32 +328,32 @@
  create function pg_temp.twophase_func() returns void as
    $$ select '2pc_func'::text $$ language sql;
@@ -873,9 +873,9 @@ diff contrib/mmts/../../src/test/regress/expected/temp.out contrib/mmts/../../sr
  PREPARE TRANSACTION 'twophase_search';
 -ERROR:  cannot PREPARE a transaction that has operated on temporary objects
 +ERROR:  multimaster doesn't support two-phase commit
-diff contrib/mmts/../../src/test/regress/expected/prepare.out contrib/mmts/../../src/test/regress/results/prepare.out
---- contrib/mmts/../../src/test/regress/expected/prepare.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/prepare.out	CENSORED
+diff ../../../src/test/regress/expected/prepare.out ../tmp_check/regress_outdir/results/prepare.out
+--- ../../../src/test/regress/expected/prepare.out	CENSORED
++++ ../tmp_check/regress_outdir/results/prepare.out	CENSORED
 @@ -126,34 +126,18 @@
  	SELECT * FROM tenk1 WHERE unique1 = $1 OR stringu1 = $2
  	ORDER BY unique1;
@@ -919,9 +919,9 @@ diff contrib/mmts/../../src/test/regress/expected/prepare.out contrib/mmts/../..
  -- unknown or unspecified parameter types: should succeed
  PREPARE q6 AS
      SELECT * FROM tenk1 WHERE unique1 = $1 AND stringu1 = $2;
-diff contrib/mmts/../../src/test/regress/expected/indexing.out contrib/mmts/../../src/test/regress/results/indexing.out
---- contrib/mmts/../../src/test/regress/expected/indexing.out	CENSORED
-+++ contrib/mmts/../../src/test/regress/results/indexing.out	CENSORED
+diff ../../../src/test/regress/expected/indexing.out ../tmp_check/regress_outdir/results/indexing.out
+--- ../../../src/test/regress/expected/indexing.out	CENSORED
++++ ../tmp_check/regress_outdir/results/indexing.out	CENSORED
 @@ -54,7 +54,7 @@
  create table idxpart (a int, b int, c text) partition by range (a);
  create table idxpart1 partition of idxpart for values from (0) to (10);

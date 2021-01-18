@@ -13,6 +13,10 @@
 # - publication, subscription (_pg_publication/subscription masking)
 # - prepare (CTAS prepared statement)
 # - indexing (again CIC).
+#
+# original test output/diffs are at $ENV{TESTDIR}/tmp_check/regress_outdir;
+# (in normal build TESTDIR is just mmts/; in vpath it is 'external' mmts/)
+# then diff is censored and copied to $ENV{TESTDIR}/results.
 
 use Cluster;
 use File::Basename;
@@ -89,47 +93,51 @@ $schedule =~ s/largeobject//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
-$ENV{'KEEP_OUT'} = '1';
-END {
-	if(! $ENV{'KEEP_OUT'}) {
-		unlink "../../src/test/regress/regression.diffs";
-		my @outfiles = <../../src/test/regress/results/*.out>;
-		unlink @outfiles;
-	}
-}
-
 my $regress_shlib = TestLib::perl2host($ENV{REGRESS_SHLIB});
 my $regress_libdir = dirname($regress_shlib);
+my $regress_outdir = "$ENV{TESTDIR}/tmp_check/regress_outdir";
+mkdir($regress_outdir);
+# REMOVEME: not needed in 14+, pg_regress fixed in upstream
+mkdir("${regress_outdir}/sql");
+mkdir("${regress_outdir}/expected");
 TestLib::system_log($ENV{'PG_REGRESS'},
 	'--host=' . $Cluster::mm_listen_address, "--port=$port",
 	'--use-existing', '--bindir=',
 	'--schedule=parallel_schedule',
 	"--dlpath=${regress_libdir}",
-	'--outputdir=../../src/test/regress',
-	'--inputdir=../../src/test/regress');
+	'--inputdir=../../src/test/regress',
+    "--outputdir=${regress_outdir}");
 unlink('parallel_schedule');
 
+# rename s/diffs/diff as some upper level testing systems are searching for all
+# *.diffs files.
+rename "${regress_outdir}/regression.diffs", "${regress_outdir}/regression.diff"
+  or die "cannot rename file: $!";
+
 # strip absolute paths and dates out of resulted regression.diffs
-my $res_diff = TestLib::slurp_file('../../src/test/regress/regression.diffs');
+my $res_diff = TestLib::slurp_file("${regress_outdir}/regression.diff");
 # In <= 11 default diff format was context, since 12 unified; handing lines
 # starting with ---|+++|*** covers both.
-$res_diff =~ s/(--- |\+\+\+ |\*\*\* ).+(contrib\/mmts.+\.out)\t.+\n/$1$2\tCENSORED\n/g;
+# To make someone's life easier, we prepend .. to make relative paths correct.
+# (it allows goto file comparison in editors)
+# This of course unfortunately doesn't work for VPATH.
+$res_diff =~ s/(--- |\+\+\+ |\*\*\* ).+contrib\/mmts(.+\.out)\t.+\n/$1..$2\tCENSORED\n/g;
 # Since 12 header like
 #   diff -U3 /blabla/contrib/mmts/../../src/test/regress/expected/opr_sanity.out /blabla/mmts/../../src/test/regress/results/opr_sanity.out
 # was added to each file diff
-$res_diff =~ s/(diff ).+(contrib\/mmts.+\.out).+(contrib\/mmts.+\.out\n)/$1$2 $3/g;
+$res_diff =~ s/(diff ).+contrib\/mmts(.+\.out).+contrib\/mmts(.+\.out\n)/$1..$2 ..$3/g;
 $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 #SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
-mkdir('results');
-unlink('results/regression.diff');
+mkdir("$ENV{TESTDIR}/results");
+unlink("$ENV{TESTDIR}/results/regression.diff");
 
 # finally compare regression.diffs with our version
 # Do not use diffs extension as some upper level testing systems are searching for all
 # *.diffs files.
-TestLib::append_to_file('results/regression.diff', $res_diff);
-$diff = TestLib::system_log("diff -U3 results/regression.diff expected/regression.diff");
-run [ "diff", "-U3", "expected/regression.diff", "results/regression.diff" ], ">", "regression.diff.diff";
+TestLib::append_to_file("$ENV{TESTDIR}/results/regression.diff", $res_diff);
+$diff = TestLib::system_log("diff -U3 $ENV{TESTDIR}/results/regression.diff expected/regression.diff");
+run [ "diff", "-U3", "expected/regression.diff", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
 
 is($res, 0, "postgres regress");
