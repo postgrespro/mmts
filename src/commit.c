@@ -127,7 +127,9 @@ mtm_commit_cleanup(int status, Datum arg)
 		if (mtm_commit_state.gtx->prepared)
 		{
 			if ((term_cmp(mtm_commit_state.gtx->state.accepted,
-						  InvalidGTxTerm) == 0))
+						  InvalidGTxTerm) == 0) ||
+				/* explicit prepare never does precommit and can be rolled back */
+				IS_EXPLICIT_2PC_GID(mtm_commit_state.gid))
 			{
 				/* there was no precommit, we can abort */
 				PG_TRY();
@@ -701,20 +703,22 @@ commit_tour_done:
 	return true;
 }
 
-/* TODO: explicit prepares are not adapted to generations yet, i.e. broken */
+/*
+ * The idea is to to pass through the generation barrier, i.e. prepare xact at
+ * all generation members. Transaction will be finished in explicit
+ * COMMIT|ROLLBACK PREPARED call.
+ */
 bool
 MtmExplicitPrepare(char *gid)
 {
-	nodemask_t	participants;
+	nodemask_t	cohort;
 	bool		ret;
 	TransactionId xid;
-	char		stream[DMQ_NAME_MAXLEN];
-	MtmPrepareResponse *messages[MTM_MAX_NODES];
-	int			n_messages;
+	char		stream[DMQ_STREAM_NAME_MAXLEN];
 	int			i;
-
-	EndTransactionBlock(false);
-	elog(ERROR, "multimaster doesn't support two-phase commit");
+	MtmGeneration xact_gen;
+	MtmPrepareResponse *p_messages[MTM_MAX_NODES];
+	int			n_messages;
 
 	/*
 	 * GetTopTransactionId() will fail for aborted tx, but we still need to
@@ -727,53 +731,152 @@ MtmExplicitPrepare(char *gid)
 		return false;
 	}
 
-	xid = GetTopTransactionId();
-	sprintf(stream, "xid" XID_FMT, xid);
-	dmq_stream_subscribe(stream);
-	mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
+	/* prepare for cleanup */
+	mtm_commit_state.gtx = NULL;
+	mtm_commit_state.inside_commit_sequence = true;
 
-	participants = MtmGetEnabledNodeMask(false) &
-		~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-
-	ret = PrepareTransactionBlock(gid);
-	if (!ret)
-		return false;
-
-	CommitTransactionCommand();
-
-	mtm_log(MtmTxFinish, "TXFINISH: %s prepared", gid);
-
-	gather(participants,
-		   (MtmMessage **) messages, NULL, &n_messages,
-		   NULL, 0,
-		   NULL, 0);
-	dmq_stream_unsubscribe();
-
-	for (i = 0; i < n_messages; i++)
+	/*
+	 * Mostly subcopy of MtmTwoPhaseCommit; take care to maintain both of them
+	 */
+	PG_TRY();
 	{
-		/* Assert(messages[i]->status == GTXPrepared || messages[i]->status == GTXAborted); */
+		/* Exclude concurrent gen switchers, c.f. AcquirePBByHolder call site */
+		AcquirePBByPreparer(true);
 
-		if (!messages[i]->prepared)
+		/*
+		 * xact is allowed iff we are MTM_GEN_ONLINE in current gen, but
+		 * MtmGetCurrentGenStatus is more useful for error reporting.
+		 */
+		if (MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
 		{
-			StartTransactionCommand();
-			FinishPreparedTransaction(gid, false, false);
-			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-
-			if (MtmVolksWagenMode)
-				ereport(ERROR,
-						(errcode(messages[i]->errcode),
-						 errmsg("[multimaster] failed to prepare transaction at peer node")));
-			else
-				ereport(ERROR,
-						(errcode(messages[i]->errcode),
-						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
-								gid, messages[i]->node_id),
-						 errdetail("sqlstate %s (%s)",
-								   unpack_sql_state(messages[i]->errcode), messages[i]->errmsg)));
+			ereport(MtmBreakConnection ? FATAL : ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("multimaster node is not online: current status \"%s\"",
+							MtmNodeStatusMnem[MtmGetCurrentStatus(true, false)])));
 		}
-	}
 
-	StartTransactionCommand();
+		xact_gen = MtmGetCurrentGen(true);
+		xid = GetTopTransactionId();
+		strncpy(mtm_commit_state.gid, gid, GIDSIZE);
+
+		/* prepare transaction on our node */
+		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true,
+											   false, NULL, 0);
+		if (mtm_commit_state.gtx->prepared)
+		{
+			/*
+			 * Vups, gtx with such gid already prepared -- gid
+			 * collision. Disarm mtm_commit_cleanup and bail out.
+			 */
+			GlobalTxRelease(mtm_commit_state.gtx);
+			mtm_commit_state.gtx = NULL;
+			/*
+			 * XXX is there a better way? we must be out of xact block at the
+			 * end.
+			 */
+			UserAbortTransactionBlock(false);
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("transaction identifier \"%s\" is already in use",
+							gid)));
+		}
+		/*
+		 * it is simpler to mark gtx originated here as orphaned from the
+		 * beginning rather than in error handler; resolver won't touch gtx
+		 * while it is locked on us anyway
+		 */
+		mtm_commit_state.gtx->orphaned = true;
+		mtm_commit_state.gtx->xinfo.coordinator = mtm_cfg->my_node_id;
+		mtm_commit_state.gtx->xinfo.xid = xid;
+		mtm_commit_state.gtx->xinfo.gen_num = xact_gen.num;
+		mtm_commit_state.gtx->xinfo.configured = xact_gen.configured;
+		Assert(mtm_commit_state.gtx->state.status == GTXInvalid);
+
+		sprintf(stream, "xid" XID_FMT, xid);
+		dmq_stream_subscribe(stream);
+		mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
+
+
+		ret = PrepareTransactionBlockWithState3PC(
+			gid,
+			serialize_xstate(&mtm_commit_state.gtx->xinfo,
+							 &mtm_commit_state.gtx->state));
+		if (!ret)
+		{
+			Assert(false);
+			elog(PANIC, "unexpected PrepareTransactionBlock failure");
+		}
+		CommitTransactionCommand(); /* prepared */
+		mtm_commit_state.gtx->prepared = true;
+		ReleasePB(); /* don't hold generation switch anymore */
+		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
+				mtm_commit_state.gid,
+				(uint32) (XactLastCommitEnd >> 32),
+				(uint32) (XactLastCommitEnd));
+
+		/*
+		 * Allocate gather() and other stuff in dummy xact which we need
+		 * anyway to avoid confusing xact.c machinery after exit
+		 */
+		StartTransactionCommand();
+
+		/* collect all gen members acks */
+		cohort = xact_gen.members;
+		BIT_CLEAR(cohort, mtm_cfg->my_node_id - 1);
+		ret = gather(cohort,
+					 (MtmMessage **) p_messages, NULL, &n_messages,
+					 PrepareGatherHook, TransactionIdGetDatum(xid),
+					 NULL, xact_gen.num);
+
+		if (!ret)
+		{
+			MtmGeneration new_gen = MtmGetCurrentGen(false);
+			ereport(ERROR,
+					(errcode(ERRCODE_INTERNAL_ERROR),
+					 errmsg("[multimaster] failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+							xact_gen.num,
+							maskToString(xact_gen.members),
+							new_gen.num,
+							maskToString(new_gen.members))));
+		}
+		if (n_messages != popcount(cohort))
+		{
+			nodemask_t failed_cohort = cohort;
+			for (i = 0; i < n_messages; i++)
+				BIT_CLEAR(failed_cohort, p_messages[i]->node_id - 1);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("[multimaster] failed to collect prepare acks from nodemask %s due to network error",
+							maskToString(failed_cohort))));
+		}
+		for (i = 0; i < n_messages; i++)
+		{
+			if (!p_messages[i]->prepared)
+			{
+				ereport(ERROR,
+						(errcode(p_messages[i]->errcode),
+						 errmsg("[multimaster] failed to prepare transaction %s at node %d",
+								mtm_commit_state.gid, p_messages[i]->node_id),
+						 errdetail("sqlstate %s (%s)",
+								   unpack_sql_state(p_messages[i]->errcode),
+								   p_messages[i]->errmsg)));
+			}
+		}
+		/* good, everyone prepared */
+		GlobalTxRelease(mtm_commit_state.gtx);
+		mtm_commit_state.gtx = NULL;
+		dmq_stream_unsubscribe();
+		mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
+		mtm_commit_state.inside_commit_sequence = false;
+	}
+	PG_CATCH();
+	{
+		mtm_commit_cleanup(0, Int32GetDatum(0));
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
 
 	return true;
 }
@@ -781,48 +884,92 @@ MtmExplicitPrepare(char *gid)
 void
 MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 {
-	nodemask_t	participants;
-	Mtm2AResponse *messages[MTM_MAX_NODES];
+	Mtm2AResponse *twoa_messages[MTM_MAX_NODES]; /* wow, great name */
 	int			n_messages;
+	GlobalTx volatile *gtx;
+	nodemask_t cohort;
+	char	   stream[DMQ_STREAM_NAME_MAXLEN];
+	MtmGeneration gen;
+	bool		  ret;
+	int			  i;
 
 	PreventInTransactionBlock(isTopLevel,
 							  isCommit ? "COMMIT PREPARED" : "ROLLBACK PREPARED");
 
-	/* leave loophole for manual admin xact finalization */
-	if (strcmp(application_name, MULTIMASTER_ADMIN) == 0)
+	gtx = GlobalTxAcquire(gid, false, false, NULL, 0);
+	if (gtx == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("prepared transaction with identifier \"%s\" does not exist",
+						gid)));
+	PG_TRY();
+	{
+		/*
+		 * With MtmWaitPeerCommits we try to collect acks from current gen
+		 * members (supposedly live nodes), but not too hard: in particular,
+		 * we don't check current generation liveness (node might be in
+		 * recovery if check in MtmBeginTransaction was ignored with mtm_admin
+		 * or failure happened later). Doing so doesn't seem to be too bad.
+		 */
+		if (isCommit && MtmWaitPeerCommits)
+		{
+			sprintf(stream, "xid" XID_FMT, gtx->xinfo.xid);
+			dmq_stream_subscribe(stream);
+		}
+
+		FinishPreparedTransaction(gid, isCommit, false);
+		gtx->state.status = isCommit ? GTXCommitted : GTXAborted;
+		mtm_log(MtmTxFinish, "TXFINISH: %s %s", gid,
+				isCommit ? "committed" : "aborted");
+		GlobalTxRelease((GlobalTx *) gtx);
+	}
+	PG_CATCH();
+	{
+		GlobalTxRelease((GlobalTx *) gtx);
+
+		PG_RE_THROW();
+	}
+	PG_END_TRY();
+
+	if (!isCommit || !MtmWaitPeerCommits)
 		return;
-	elog(ERROR, "multimaster doesn't support two-phase commit");
 
-	if (isCommit)
+	gen = MtmGetCurrentGen(false);
+	cohort = gen.members;
+	BIT_CLEAR(cohort, mtm_cfg->my_node_id - 1);
+
+	ret = gather(cohort,
+				 (MtmMessage **) twoa_messages, NULL, &n_messages,
+				 Paxos2AGatherHook, PointerGetDatum(gid),
+				 NULL, gen.num);
+	if (!ret)
 	{
-		dmq_stream_subscribe(gid);
-
-		participants = MtmGetEnabledNodeMask(false) &
-			~((nodemask_t) 1 << (mtm_cfg->my_node_id - 1));
-
-		SetPreparedTransactionState(gid, MULTIMASTER_PRECOMMITTED, false);
-		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
-		gather(participants,
-			   (MtmMessage **) messages, NULL, &n_messages,
-			   NULL, 0,
-			   NULL, 0);
-
-		FinishPreparedTransaction(gid, true, false);
-
-		/* XXX: make this conditional */
-		mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
-		gather(participants,
-			   (MtmMessage **) messages, NULL, &n_messages,
-			   NULL, 0,
-			   NULL, 0);
-
-		dmq_stream_unsubscribe();
+		MtmGeneration new_gen = MtmGetCurrentGen(false);
+		ereport(WARNING,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("[multimaster] failed to collect commit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+						gid,
+						gen.num,
+						maskToString(gen.members),
+						new_gen.num,
+						maskToString(new_gen.members))));
 	}
-	else
+	else if (n_messages != popcount(cohort))
 	{
-		FinishPreparedTransaction(gid, false, false);
-		mtm_log(MtmTxFinish, "TXFINISH: %s abort", gid);
+		nodemask_t failed_cohort = cohort;
+		for (i = 0; i < n_messages; i++)
+		{
+			BIT_CLEAR(failed_cohort, twoa_messages[i]->node_id - 1);
+		}
+		ereport(WARNING,
+				(errcode(ERRCODE_INTERNAL_ERROR),
+				 errmsg("[multimaster] failed to collect commit acks of transaction %s at nodes %s due to network error",
+						gid,
+						maskToString(failed_cohort))));
 	}
+
+	dmq_stream_unsubscribe();
+	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
 }
 
 /*

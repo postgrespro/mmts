@@ -17,6 +17,12 @@
 
 #include "messaging.h"
 
+/*
+ * gid starting with MTM is used by internal multimaster 2PC xacts; clients
+ * shouldn't use them for their own prepares.
+ */
+#define IS_EXPLICIT_2PC_GID(gid) (strncmp((gid), "MTM-", 4) != 0)
+
 extern void MtmGenerateGid(char *gid, int node_id, TransactionId xid,
 						   uint64 gen_num);
 extern uint64 MtmGidParseGenNum(const char *gid);

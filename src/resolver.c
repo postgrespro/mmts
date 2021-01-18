@@ -209,7 +209,8 @@ finish_ready(void)
 		 * own xacts is not safe.
 		 */
 		if (gtx->xinfo.coordinator == Mtm->my_node_id &&
-			gtx->state.status == GTXInvalid)
+			gtx->state.status == GTXInvalid &&
+			!IS_EXPLICIT_2PC_GID(gtx->gid))
 		{
 			Assert(n_agids < max_prepared_xacts);
 			strcpy(agids[n_agids], gtx->gid);
@@ -339,13 +340,26 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				gtx->state.status
 			};
 
-			SetPreparedTransactionState(
-				gtx->gid,
-				serialize_xstate(&gtx->xinfo, &new_gtx_state),
-				false);
-			gtx->state.proposal = new_term;
-			mtm_log(ResolverState, "proposal term (%d, %d) stamped to transaction %s",
-					new_term.ballot, new_term.node_id, gtx->gid);
+			/*
+			 * Explicit 2PC doesn't participate in Paxos resolving; it is
+			 * user's responsibility to determine the outcome (so don't stamp
+			 * term here). However, we send MtmTxRequest for them to learn it
+			 * if another node already did commit|abort. This allows to finish
+			 * prepare in e.g. scenario
+			 * - ABC did PREPARE, A coordinator
+			 * - user issued CP on A, A died but managed to send CP to B.
+			 * - Now C should ask B what's happened to it.
+			 */
+			if (!IS_EXPLICIT_2PC_GID(gtx->gid))
+			{
+				SetPreparedTransactionState(
+					gtx->gid,
+					serialize_xstate(&gtx->xinfo, &new_gtx_state),
+					false);
+				gtx->state.proposal = new_term;
+				mtm_log(ResolverState, "proposal term (%d, %d) stamped to transaction %s",
+						new_term.ballot, new_term.node_id, gtx->gid);
+			}
 			/*
 			 * We should set GTRS_AwaitStatus here, otherwise if one
 			 * attempt to to resolve failed in GTRS_AwaitAcks, we would
@@ -471,7 +485,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			GlobalTxRelease(gtx);
 			return;
 		}
-		else if (quorum(mtm_cfg, gtx->phase1_acks))
+		else if (quorum(mtm_cfg, gtx->phase1_acks) &&
+				 !IS_EXPLICIT_2PC_GID(gtx->gid))
 		{
 			int			i;
 			char	   *xstate;
@@ -567,6 +582,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 		msg = (Mtm2AResponse *) raw_msg;
 		Assert(msg->gid[0] != '\0');
+		Assert(!IS_EXPLICIT_2PC_GID(gtx->gid));
 		/* If GTXInvalid, node refused to accept the ballot */
 		if (!(msg->status == GTXPreAborted || msg->status == GTXPreCommitted))
 		{

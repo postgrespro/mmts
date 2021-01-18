@@ -337,39 +337,37 @@ begin;
 create table twopc_test(i int primary key);
 insert into twopc_test  values (1);
 prepare transaction 'x';
-ERROR:  multimaster doesn't support two-phase commit
 begin;
 create table twopc_test2(i int primary key);
 insert into twopc_test2 values (2);
 prepare transaction 'y';
-ERROR:  multimaster doesn't support two-phase commit
 rollback prepared 'y';
-ERROR:  multimaster doesn't support two-phase commit
 commit prepared 'x';
-ERROR:  multimaster doesn't support two-phase commit
 begin;
 create table twopc_test2(i int primary key);
 insert into twopc_test2 values (2);
 prepare transaction 'y';
-ERROR:  multimaster doesn't support two-phase commit
 begin;
 commit prepared 'y';
 ERROR:  COMMIT PREPARED cannot run inside a transaction block
 rollback;
 commit prepared 'y';
-ERROR:  multimaster doesn't support two-phase commit
 begin;
 select 1/0;
 ERROR:  division by zero
 prepare transaction 'noprep';
 table twopc_test;
-ERROR:  relation "twopc_test" does not exist
-LINE 1: table twopc_test;
-              ^
+ i 
+---
+ 1
+(1 row)
+
 table twopc_test2;
-ERROR:  relation "twopc_test2" does not exist
-LINE 1: table twopc_test2;
-              ^
+ i 
+---
+ 2
+(1 row)
+
 -- check ring buffer in receiver
 CREATE TABLE bmscantest (a int, b int, t text);
 -- that tx is approx 4mb and move rb tail to the center

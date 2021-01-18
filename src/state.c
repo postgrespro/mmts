@@ -2959,7 +2959,14 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy, msg->coordinator);
 	if (gtx != NULL)
 	{
-		handle_1a_gtx(msg, gtx, resp);
+		/*
+		 * For explicit 2PC, we only answer 'dunno, still prepared' or the
+		 * final outcome.
+		 */
+		if (!IS_EXPLICIT_2PC_GID(gtx->gid))
+		{
+			handle_1a_gtx(msg, gtx, resp);
+		}
 		GlobalTxRelease(gtx);
 		goto reply_1a;
 	}
@@ -3039,7 +3046,10 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 		gtx = GlobalTxAcquire(msg->gid, false, false, NULL, 0);
 		if (gtx != NULL)
 		{
-			handle_1a_gtx(msg, gtx, resp);
+			if (!IS_EXPLICIT_2PC_GID(gtx->gid))
+			{
+				handle_1a_gtx(msg, gtx, resp);
+			}
 			GlobalTxRelease(gtx);
 			goto reply_1a;
 		}
