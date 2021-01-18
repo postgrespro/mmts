@@ -134,7 +134,7 @@ ResolveForRefereeWinner(void)
 	{
 		bool commit;
 
-		gtx = GlobalTxAcquire(gids[i], false, false, NULL);
+		gtx = GlobalTxAcquire(gids[i], false, false, NULL, 0);
 		if (!gtx)
 			continue;
 
@@ -182,7 +182,6 @@ finish_ready(void)
 	pgid_t *agids = palloc(sizeof(pgid_t) * max_prepared_xacts);
 	int n_agids = 0;
 	int i;
-	int coordinator;
 
 	LWLockAcquire(gtx_shared->lock, LW_SHARED);
 	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
@@ -198,7 +197,6 @@ finish_ready(void)
 			continue;
 		}
 
-		coordinator = MtmGidParseNodeId(gtx->gid);
 		/*
 		 * Directly aborting own xacts which never got precommitted is not
 		 * required (we could resolve them as usual as well), but this is
@@ -210,7 +208,7 @@ finish_ready(void)
 		 * precommitted this is no longer true and direct abort even of my
 		 * own xacts is not safe.
 		 */
-		if (coordinator == Mtm->my_node_id &&
+		if (gtx->xinfo.coordinator == Mtm->my_node_id &&
 			gtx->state.status == GTXInvalid)
 		{
 			Assert(n_agids < max_prepared_xacts);
@@ -227,7 +225,7 @@ finish_ready(void)
 	/* finish ready xacts */
 	for (i = 0; i < n_agids; i++)
 	{
-		gtx = GlobalTxAcquire(agids[i], false, false, NULL);
+		gtx = GlobalTxAcquire(agids[i], false, false, NULL, 0);
 		if (!gtx)
 			continue;
 
@@ -331,14 +329,19 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 				MTReq_Status,
 				new_term,
 				gtx->gid,
+				gtx->xinfo.coordinator,
+				gtx->xinfo.gen_num,
 				gtx->coordinator_end_lsn
 			};
+			GTxState new_gtx_state = {
+				new_term,
+				gtx->state.accepted,
+				gtx->state.status
+			};
 
-			SetPreparedTransactionState(gtx->gid,
-				serialize_gtx_state(
-					gtx->state.status,
-					new_term,
-					gtx->state.accepted),
+			SetPreparedTransactionState(
+				gtx->gid,
+				serialize_xstate(&gtx->xinfo, &new_gtx_state),
 				false);
 			gtx->state.proposal = new_term;
 			mtm_log(ResolverState, "proposal term (%d, %d) stamped to transaction %s",
@@ -389,11 +392,10 @@ handle_responses(MtmConfig *mtm_cfg)
 }
 
 static bool
-quorum(MtmConfig *mtm_cfg, GTxState *all_states, char *gid)
+quorum(MtmConfig *mtm_cfg, GTxState *all_states)
 {
 	int i, n_states = 0;
 	GTxState my_state = all_states[mtm_cfg->my_node_id - 1];
-	nodemask_t configured;
 
 	/*
 	 * Make sure it is actually our term we are trying to assemble majority
@@ -419,13 +421,7 @@ quorum(MtmConfig *mtm_cfg, GTxState *all_states, char *gid)
 			n_states++;
 	}
 
-	/*
-	 * only configured mask of xact generation participates in resolving --
-	 * this guarantees two successfull votings with non-intersecting quorums
-	 * are not possible
-	 */
-	configured = MtmGidParseConfigured(gid);
-	return Quorum(popcount(configured), n_states);
+	return MtmQuorum(mtm_cfg, n_states);
 }
 
 static void
@@ -443,7 +439,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 
 	mtm_log(ResolverTx, "handle_response: got '%s'", MtmMesageToString(raw_msg));
 
-	gtx = GlobalTxAcquire(gid, false, false, NULL);
+	gtx = GlobalTxAcquire(gid, false, false, NULL, 0);
 	if (!gtx)
 		return;
 
@@ -475,15 +471,16 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			GlobalTxRelease(gtx);
 			return;
 		}
-		else if (quorum(mtm_cfg, gtx->phase1_acks, gtx->gid))
+		else if (quorum(mtm_cfg, gtx->phase1_acks))
 		{
 			int			i;
-			char	   *sstate;
+			char	   *xstate;
 			bool		done;
 			GlobalTxStatus decision = GTXInvalid;
 			GlobalTxTerm max_accepted = gtx->state.accepted;
 			MtmTxRequest request_msg;
 			uint64		connected;
+			GTxState	new_gtx_state;
 
 			/*
 			 * Determine the highest term of collected prevVote's
@@ -529,9 +526,11 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			}
 
 			Assert(decision != GTXInvalid);
-			sstate = serialize_gtx_state(decision, gtx->state.proposal,
-										 gtx->state.proposal);
-			done = SetPreparedTransactionState(gtx->gid, sstate, false);
+			new_gtx_state.proposal = gtx->state.proposal;
+			new_gtx_state.accepted = gtx->state.proposal;
+			new_gtx_state.status = decision;
+			xstate = serialize_xstate(&gtx->xinfo, &new_gtx_state);
+			done = SetPreparedTransactionState(gtx->gid, xstate, false);
 			/*
 			 * If acquired gtx exists, it must not be finished yet, so state
 			 * change ought to succeed.
@@ -552,6 +551,8 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				decision == GTXPreCommitted ? MTReq_Precommit : MTReq_Preabort,
 				gtx->state.accepted,
 				gtx->gid,
+				gtx->xinfo.coordinator, /* actually doesn't matter in 2a */
+				gtx->xinfo.gen_num, /* actually doesn't matter in 2a */
 				InvalidXLogRecPtr
 			};
 			connected = MtmGetConnectedMask(false);
@@ -581,7 +582,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			msg->status
 		};
 
-		if (quorum(mtm_cfg, gtx->phase2_acks, gtx->gid))
+		if (quorum(mtm_cfg, gtx->phase2_acks))
 		{
 			MtmTxRequest request_msg;
 			uint64		connected;
@@ -599,7 +600,10 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 				T_MtmTxRequest,
 				msg->status == GTXPreCommitted ? MTReq_Commit : MTReq_Abort,
 				InvalidGTxTerm,
-				gid
+				gid,
+				MtmInvalidNodeId, /* doesn't matter */
+				MtmInvalidGenNum, /* doesn't matter */
+				InvalidXLogRecPtr
 			};
 			connected = MtmGetConnectedMask(false);
 			scatter(mtm_cfg, connected, "reqresp",

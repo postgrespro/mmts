@@ -277,25 +277,17 @@ MtmBeginTransaction()
 }
 
 /*
- * Genenerate global transaction identifier for two-phase commit.
- * It should be unique for all nodes.
- * MTM-node_id-xid is part ensuring uniqueness; the rest is necessary payload.
- * gen_num identifies the number of generation xact belongs to.
- * configured is mask of configured nodes of this generation; it is required
- * by resolver.
- * (in theory we could get rid of it if we remembered generation history for
- *  some time, but we don't currently)
- *
- * Beware that GlobalTxGCInTableProposals parses gid from SQL.
- *
- * TODO: add version and kinda backwards compatibility.
+ * Generate global transaction identifier for two-phase commit.
+ * It should be unique for all nodes. This is basically the only requirement;
+ * we have some important metadata associated with xact, but we put
+ * everything into state_3pc for seamless integration with explicit 2PC.
+ * (we still keep gen_num here for logging)
  */
 void
-MtmGenerateGid(char *gid, int node_id, TransactionId xid, uint64 gen_num,
-			   nodemask_t configured)
+MtmGenerateGid(char *gid, int node_id, TransactionId xid, uint64 gen_num)
 {
-	sprintf(gid, "MTM-%d-" XID_FMT "-%" INT64_MODIFIER "X-%" INT64_MODIFIER "X",
-			node_id, xid, gen_num, configured);
+	sprintf(gid, "MTM-%d-" XID_FMT "-" UINT64_FORMAT,
+			node_id, xid, gen_num);
 	return;
 }
 
@@ -327,20 +319,6 @@ MtmGidParseXid(const char *gid)
 	sscanf(gid, "MTM-%*d-" XID_FMT, &xid);
 	Assert(xid != InvalidTransactionId);
 	return xid;
-}
-
-/* parse generation configured mask from gid */
-nodemask_t
-MtmGidParseConfigured(const char *gid)
-{
-	TransactionId xid;
-	uint64 gen_num;
-	nodemask_t configured = 0;
-
-	sscanf(gid, "MTM-%*d-" XID_FMT "-%" INT64_MODIFIER "X-%" INT64_MODIFIER "X",
-		   &xid, &gen_num, &configured);
-	Assert(configured != 0);
-	return configured;
 }
 
 /* ensure we get the right PREPARE ack */
@@ -385,6 +363,7 @@ MtmTwoPhaseCommit(void)
 	nodemask_t	pc_success_cohort;
 	MtmGeneration xact_gen;
 	char dmq_stream_name[DMQ_STREAM_NAME_MAXLEN];
+	GTxState gtx_state;
 
 	if (MtmNo3PC)
 	{
@@ -449,28 +428,33 @@ MtmTwoPhaseCommit(void)
 		xact_gen = MtmGetCurrentGen(true);
 		xid = GetTopTransactionId();
 		MtmGenerateGid(mtm_commit_state.gid, mtm_cfg->my_node_id, xid,
-					   xact_gen.num, xact_gen.configured);
+					   xact_gen.num);
 		sprintf(dmq_stream_name, "xid" XID_FMT, xid);
 		dmq_stream_subscribe(dmq_stream_name);
 		mtm_log(MtmTxTrace, "%s subscribed for %s", mtm_commit_state.gid,
 				dmq_stream_name);
 
 		/* prepare transaction on our node */
-
 		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true,
-											   false, NULL);
+											   false, NULL, 0);
 		/*
 		 * it is simpler to mark gtx originated here as orphaned from the
 		 * beginning rather than in error handler; resolver won't touch gtx
 		 * while it is locked on us anyway
 		 */
 		mtm_commit_state.gtx->orphaned = true;
+		mtm_commit_state.gtx->xinfo.coordinator = mtm_cfg->my_node_id;
+		mtm_commit_state.gtx->xinfo.xid = xid;
+		mtm_commit_state.gtx->xinfo.gen_num = xact_gen.num;
+		mtm_commit_state.gtx->xinfo.configured = xact_gen.configured;
 		Assert(mtm_commit_state.gtx->state.status == GTXInvalid);
 		/*
 		 * PREPARE doesn't happen here; ret 0 just means we were already in
 		 * aborted transaction block and we expect the callee to handle this.
 		 */
-		ret = PrepareTransactionBlock(mtm_commit_state.gid);
+		ret = PrepareTransactionBlockWithState3PC(
+			mtm_commit_state.gid,
+			serialize_xstate(&mtm_commit_state.gtx->xinfo, &mtm_commit_state.gtx->state));
 		if (!ret)
 		{
 			Assert(false);
@@ -559,18 +543,18 @@ MtmTwoPhaseCommit(void)
 		}
 
 		/* ok, we have all prepare responses, precommit */
-		SetPreparedTransactionState(mtm_commit_state.gid,
-			serialize_gtx_state(GTXPreCommitted,
-								InitialGTxTerm,
-								InitialGTxTerm),
+		gtx_state.status = GTXPreCommitted;
+		gtx_state.proposal = InitialGTxTerm;
+		gtx_state.accepted = InitialGTxTerm;
+		SetPreparedTransactionState(
+			mtm_commit_state.gid,
+			serialize_xstate(&mtm_commit_state.gtx->xinfo, &gtx_state),
 			false);
 		/*
 		 * since this moment direct aborting is not allowed; others can
 		 * receive our precommit and resolve xact to commit without us
 		 */
-		mtm_commit_state.gtx->state.status = GTXPreCommitted;
-		mtm_commit_state.gtx->state.proposal = InitialGTxTerm;
-		mtm_commit_state.gtx->state.accepted = InitialGTxTerm;
+		mtm_commit_state.gtx->state = gtx_state;
 		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", mtm_commit_state.gid);
 
 		/*

@@ -97,6 +97,8 @@ typedef struct
 	MtmTxRequestValue	type;
 	GlobalTxTerm		term;
 	const char		   *gid;
+	int					coordinator;
+	uint64				gen_num;
 	XLogRecPtr			coordinator_end_lsn; /* matters for 1a */
 } MtmTxRequest;
 

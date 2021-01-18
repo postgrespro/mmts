@@ -441,13 +441,13 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	 */
 	if (txn->state_3pc_change)
 	{
-		GlobalTxStatus status;
-		GlobalTxTerm prop, acc;
+		GTxState gtx_state;
+		XactInfo xinfo;
 
-		parse_gtx_state(txn->state_3pc, &status, &prop, &acc);
-		if (status != GTXPreCommitted ||
-			term_cmp(prop, InitialGTxTerm) != 0 ||
-			term_cmp(acc, InitialGTxTerm) != 0)
+		deserialize_xstate(txn->state_3pc, &xinfo, &gtx_state, ERROR);
+		if (gtx_state.status != GTXPreCommitted ||
+			term_cmp(gtx_state.proposal, InitialGTxTerm) != 0 ||
+			term_cmp(gtx_state.accepted, InitialGTxTerm) != 0)
 		{
 			return;
 		}
@@ -467,15 +467,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, txn->origin_lsn);
 
 	pq_sendstring(out, txn->gid);
-	/*
-	 * Non-empty state_3pc in PREPARE might be only if node participated in
-	 * resolving before getting P. There is no need to send it; normally
-	 * prepares are streamed without state at all meaning initial proposal
-	 * term and invalid state. Resolver will take care of, well, resolving via
-	 * dmq if the need arises.
-	 */
-	if (event == PGLOGICAL_PREPARE_PHASE2A)
-		pq_sendstring(out, txn->state_3pc);
+	pq_sendstring(out, txn->state_3pc);
 
 	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare gid=%s, state_3pc=%s, state_3pc_change=%d",
 			txn->gid, txn->state_3pc, txn->state_3pc_change);
@@ -509,6 +501,7 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 	pq_sendint64(out, 42);
 
 	pq_sendstring(out, txn->gid);
+	pq_sendint64(out, txn->xid);
 
 	mtm_log(ProtoTraceSender, "pglogical_write_commit_prepared %s", txn->gid);
 }

@@ -67,78 +67,81 @@ term_cmp(GlobalTxTerm t1, GlobalTxTerm t2)
 		return 1;
 }
 
+#define XStateVersion 1
 
 char *
-serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop, GlobalTxTerm term_acc)
+serialize_xstate(XactInfo *xinfo, GTxState *gtx_state)
 {
 	char	   *state;
 	char	   *status_abbr;
 
-	if (status == GTXInvalid)
+	if (gtx_state->status == GTXInvalid)
 		status_abbr = "in";
-	else if (status == GTXPreCommitted)
+	else if (gtx_state->status == GTXPreCommitted)
 		status_abbr = "pc";
-	else if (status == GTXPreAborted)
+	else if (gtx_state->status == GTXPreAborted)
 		status_abbr = "pa";
-	else if (status == GTXCommitted)
+	else if (gtx_state->status == GTXCommitted)
 		status_abbr = "cm";
 	else
 	{
-		Assert(status == GTXAborted);
+		Assert(gtx_state->status == GTXAborted);
 		status_abbr = "ab";
 	}
 
-	state = psprintf("%s-%d:%d-%d:%d",
+	state = psprintf("%d-%d-" XID_FMT "-%" INT64_MODIFIER "X-%" INT64_MODIFIER "X-%s-%d:%d-%d:%d",
+					 XStateVersion,
+					 xinfo->coordinator,
+					 xinfo->xid,
+					 xinfo->gen_num,
+					 xinfo->configured,
 					 status_abbr,
-					 term_prop.ballot, term_prop.node_id,
-					 term_acc.ballot, term_acc.node_id);
+					 gtx_state->proposal.ballot, gtx_state->proposal.node_id,
+					 gtx_state->accepted.ballot, gtx_state->accepted.node_id);
 	return state;
 }
 
-void
-parse_gtx_state(const char *state, GlobalTxStatus *status,
-				GlobalTxTerm *term_prop, GlobalTxTerm *term_acc)
+/* returns 0 on success */
+int
+deserialize_xstate(const char *state, XactInfo *xinfo, GTxState *gtx_state,
+				   int elevel)
 {
 	int			n_parsed = 0;
+	char		status_abbr[3]; /* must be big enough for '\0' */
 
 	Assert(state);
 
-	/*
-	 * Might be immediately after PrepareTransaction. It would be better to
-	 * also pass state_3pc to it, but...
-	 */
-	if (state[0] == '\0')
+	n_parsed = sscanf(state, "%*d-%d-" XID_FMT "-%" INT64_MODIFIER "X-%" INT64_MODIFIER "X-%2s-%d:%d-%d:%d",
+					  &xinfo->coordinator,
+					  &xinfo->xid,
+					  &xinfo->gen_num,
+					  &xinfo->configured,
+					  status_abbr,
+					  &gtx_state->proposal.ballot,
+					  &gtx_state->proposal.node_id,
+					  &gtx_state->accepted.ballot,
+					  &gtx_state->accepted.node_id);
+	if (n_parsed != 9)
 	{
-		*status = GTXInvalid;
-		*term_prop = InitialGTxTerm;
-		*term_acc = InvalidGTxTerm;
+		mtm_log(elevel, "GlobalTxLoadAll: failed to deparse state_3pc %s, ignoring it (res=%d)",
+				state, n_parsed);
+		return n_parsed;
 	}
+
+	if (strncmp(status_abbr, "in", 2) == 0)
+		gtx_state->status = GTXInvalid;
+	else if (strncmp(status_abbr, "pc", 2) == 0)
+		gtx_state->status = GTXPreCommitted;
+	else if (strncmp(status_abbr, "pa", 2) == 0)
+		gtx_state->status = GTXPreAborted;
+	else if (strncmp(status_abbr, "cm", 3) == 0)
+		gtx_state->status = GTXCommitted;
 	else
 	{
-		if (strncmp(state, "in-", 3) == 0)
-			*status = GTXInvalid;
-		else if (strncmp(state, "pc-", 3) == 0)
-			*status = GTXPreCommitted;
-		else if (strncmp(state, "pa-", 3) == 0)
-			*status = GTXPreAborted;
-		else if (strncmp(state, "cm-", 3) == 0)
-			*status = GTXCommitted;
-		else
-		{
-			Assert((strncmp(state, "ab-", 3) == 0));
-			*status = GTXAborted;
-		}
-
-		n_parsed = sscanf(state + 3, "%d:%d-%d:%d",
-						&term_prop->ballot, &term_prop->node_id,
-						&term_acc->ballot, &term_acc->node_id);
-
-		if (n_parsed != 4)
-		{
-			Assert(false);
-			mtm_log(PANIC, "wrong state_3pc format: %s", state);
-		}
+		Assert((strncmp(status_abbr, "ab", 2) == 0));
+		gtx_state->status = GTXAborted;
 	}
+	return 0;
 }
 
 void
@@ -219,10 +222,11 @@ GlobalTxEnsureBeforeShmemExitHook(void)
  * If nowait_own_live is true, gtx is already locked, I am the coordinator and
  * gtx is not orphaned, don't wait for release -- backend is still working on
  * xact, which may be very long. *busy (if provided) is set to true in this
- * case.
+ * case. coordinator must be passed for this to work.
  */
 GlobalTx *
-GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live, bool *busy)
+GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live, bool *busy,
+				int coordinator)
 {
 	GlobalTx   *gtx = NULL;
 	bool		found;
@@ -274,9 +278,7 @@ GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live, bool *busy)
 
 		if (nowait_own_live)
 		{
-			int			tx_node_id = MtmGidParseNodeId(gid);
-
-			if (tx_node_id == Mtm->my_node_id && !gtx->orphaned)
+			if (coordinator == Mtm->my_node_id && !gtx->orphaned)
 			{
 				if (busy)
 					*busy = true;
@@ -374,8 +376,15 @@ GlobalTxLoadAll()
 		Assert(!found);
 
 		gtx->acquired_by = InvalidBackendId;
-		parse_gtx_state(pxacts[i].state_3pc, &gtx->state.status,
-						&gtx->state.proposal, &gtx->state.accepted);
+		/*
+		 * Allow instance to start even if we have problems parsing xstate...
+		 */
+		if (deserialize_xstate(pxacts[i].state_3pc, &gtx->xinfo, &gtx->state,
+							   WARNING) != 0)
+		{
+			hash_search(gtx_shared->gid2gtx, pxacts[i].gid, HASH_REMOVE, &found);
+			continue;
+		}
 		gtx->prepared = true;
 		gtx->orphaned = true;
 		gtx->resolver_stage = GTRS_AwaitStatus;
@@ -420,8 +429,7 @@ GlobalTxMarkOrphaned(int node_id)
 	hash_seq_init(&hash_seq, gtx_shared->gid2gtx);
 	while ((gtx = hash_seq_search(&hash_seq)) != NULL)
 	{
-		int			tx_node_id = MtmGidParseNodeId(gtx->gid);
-		if (tx_node_id == node_id)
+		if (gtx->xinfo.coordinator == node_id)
 		{
 			gtx->orphaned = true;
 			mtm_log(MtmTxTrace, "%s is orphaned", gtx->gid);

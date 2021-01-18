@@ -2015,6 +2015,8 @@ MtmMessagePack(MtmMessage *anymsg)
 			pq_sendint32(s, msg->term.ballot);
 			pq_sendint32(s, msg->term.node_id);
 			pq_send_ascii_string(s, msg->gid);
+			pq_sendint32(s, msg->coordinator);
+			pq_sendint64(s, msg->gen_num);
 			pq_sendint64(s, msg->coordinator_end_lsn);
 			break;
 		}
@@ -2123,6 +2125,8 @@ MtmMessageUnpack(StringInfo s)
 			msg->term.ballot = pq_getmsgint(s, 4);
 			msg->term.node_id = pq_getmsgint(s, 4);
 			msg->gid = pstrdup(pq_getmsgrawstring(s));
+			msg->coordinator = pq_getmsgint(s, 4);
+			msg->gen_num = pq_getmsgint64(s);
 			msg->coordinator_end_lsn = pq_getmsgint64(s);
 
 			anymsg = (MtmMessage *) msg;
@@ -2244,6 +2248,8 @@ MtmMesageToString(MtmMessage *anymsg)
 			appendStringInfo(&si, ", \"type\": \"%s\"", MtmTxRequestValueMnem[msg->type]);
 			appendStringInfo(&si, ", \"ballot\": [%d, %d]", msg->term.ballot, msg->term.node_id);
 			appendStringInfo(&si, ", \"gid\": \"%s\"", msg->gid);
+			appendStringInfo(&si, ", \"coordinator\": %d", msg->coordinator);
+			appendStringInfo(&si, ", \"gen_num\": \"" UINT64_FORMAT "\"", msg->gen_num);
 			appendStringInfo(&si, ", \"coordinator_end_lsn\": \"%X/%X\"",
 							 (uint32) (msg->coordinator_end_lsn >> 32),
 							 (uint32) msg->coordinator_end_lsn);
@@ -2386,8 +2392,12 @@ mtm_hold_backends(PG_FUNCTION_ARGS)
 		n_prepares = GetPreparedTransactions(&pxacts);
 		for (i = 0; i < n_prepares; i++)
 		{
-			int xact_coordinator = MtmGidParseNodeId(pxacts[i].gid);
-			if (Mtm->my_node_id == xact_coordinator)
+			XactInfo xinfo;
+			GTxState gtx_state;
+
+			deserialize_xstate(pxacts[i].state_3pc, &xinfo, &gtx_state, PANIC);
+
+			if (Mtm->my_node_id == xinfo.coordinator)
 				n_own_prepares++;
 		}
 		if (pxacts)

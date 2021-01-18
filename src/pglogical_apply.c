@@ -668,13 +668,12 @@ mtm_send_prepare_reply(TransactionId xid, int dst_node_id,
  * COMMIT PREPARED ack is also sent from here.
  */
 static void
-mtm_send_2a_reply(char *gid, GlobalTxStatus status,
+mtm_send_2a_reply(char *gid, TransactionId xid, GlobalTxStatus status,
 				  GlobalTxTerm accepted_term, int dst_node_id)
 {
 	DmqDestinationId dest_id;
 	StringInfo	packed_msg;
 	Mtm2AResponse msg;
-	TransactionId xid = MtmGidParseXid(gid);
 
 	LWLockAcquire(Mtm->lock, LW_SHARED);
 	dest_id = Mtm->peers[dst_node_id - 1].dmq_dest_id;
@@ -737,24 +736,24 @@ process_remote_commit(StringInfo in,
 	{
 		case PGLOGICAL_PREPARE_PHASE2A:
 			{
-				const char *state_3pc;
-				GlobalTxStatus msg_status;
-				GlobalTxTerm _msg_prop, msg_term;
+				const char *xstate;
 				GlobalTxStatus reply_status = GTXInvalid;
 				GlobalTxTerm reply_acc = InvalidGTxTerm;
+				XactInfo xinfo;
+				GTxState msg_gtx_state;
 
 				Assert(!IsTransactionState());
 				Assert(!query_cancel_allowed);
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
-				state_3pc = pq_getmsgstring(in);
-				parse_gtx_state(state_3pc, &msg_status, &_msg_prop, &msg_term);
+				xstate = pq_getmsgstring(in);
+				deserialize_xstate(xstate, &xinfo, &msg_gtx_state, ERROR);
 				/*
 				 * coordinator ever sends PRECOMMIT via walsender; PREABORTs
 				 * is the territory of the resolver who operates via dmq.
 				 */
-				Assert(msg_status == GTXPreCommitted);
+				Assert(msg_gtx_state.status == GTXPreCommitted);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL, 0);
 				if (!rwctx->gtx)
 				{
 					/*
@@ -762,7 +761,9 @@ process_remote_commit(StringInfo in,
 					 * so he doesn't wait for us.
 					 */
 					if (rwctx->mode == REPLMODE_NORMAL)
-						mtm_send_2a_reply(gid, GTXInvalid, InvalidGTxTerm, origin_node);
+						mtm_send_2a_reply(gid, xinfo.xid,
+										  GTXInvalid, InvalidGTxTerm,
+										  origin_node);
 					break;
 				}
 
@@ -780,26 +781,24 @@ process_remote_commit(StringInfo in,
 				/*
 				 * give vote iff paxos rules allow it.
 				 */
-				if (term_cmp(msg_term, rwctx->gtx->state.proposal) >= 0)
+				if (term_cmp(msg_gtx_state.proposal, rwctx->gtx->state.proposal) >= 0)
 				{
 					bool		done = false;
-					char	   *sstate;
+					char	   *xstate;
 
 					MtmBeginSession(origin_node);
 					StartTransactionCommand();
 
-					sstate = serialize_gtx_state(msg_status, msg_term, msg_term);
-					done = SetPreparedTransactionState(gid, sstate, false);
+					xstate = serialize_xstate(&xinfo, &msg_gtx_state);
+					done = SetPreparedTransactionState(gid, xstate, false);
 					if (!done)
 						Assert(false);
 
 					CommitTransactionCommand();
 					MemoryContextSwitchTo(MtmApplyContext);
-					rwctx->gtx->state.proposal = msg_term;
-					rwctx->gtx->state.accepted = msg_term;
-					rwctx->gtx->state.status = msg_status;
-					reply_status = msg_status;
-					reply_acc = msg_term;
+					rwctx->gtx->state = msg_gtx_state;
+					reply_status = msg_gtx_state.status;
+					reply_acc = msg_gtx_state.proposal;
 
 					mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
 
@@ -807,7 +806,7 @@ process_remote_commit(StringInfo in,
 				}
 
 				if (rwctx->mode == REPLMODE_NORMAL)
-					mtm_send_2a_reply(gid, reply_status,
+					mtm_send_2a_reply(gid, xinfo.xid, reply_status,
 									  reply_acc, origin_node);
 				rwctx->reply_pending = false;
 
@@ -857,12 +856,17 @@ process_remote_commit(StringInfo in,
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				uint64 prepare_gen_num;
 				bool latch_set = false;
+				const char *xstate;
+				XactInfo xinfo;
+				GTxState gtx_state;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
 				Assert(xid == rwctx->my_xid);
 
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
-				prepare_gen_num = MtmGidParseGenNum(gid); /* xxx user 2pc */
+				xstate = pq_getmsgstring(in);
+				deserialize_xstate(xstate, &xinfo, &gtx_state, ERROR);
+				prepare_gen_num = xinfo.gen_num;
 
 				/*
 				 * Before applying, make sure our node had switched to gen of
@@ -872,6 +876,9 @@ process_remote_commit(StringInfo in,
 				 * We could remove the waiting altogether if we carried the
 				 * full gen info in xact itself (members, donors), but that
 				 * seems like gid size bloating for no reason.
+				 *
+				 * XXX: log logical message on generation switch and get rid
+				 * of this
 				 */
 				while(unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
 				{
@@ -949,14 +956,15 @@ process_remote_commit(StringInfo in,
 				CommitTransactionCommand();
 				StartTransactionCommand();
 
-				rwctx->gtx = GlobalTxAcquire(gid, true, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, true, false, NULL, 0);
 				/*
 				 * it must be brand new gtx, we don't do anything before P
 				 */
 				Assert(!rwctx->gtx->prepared);
 				Assert(term_cmp(rwctx->gtx->state.proposal, InitialGTxTerm) == 0);
+				rwctx->gtx->xinfo = xinfo;
 
-				PrepareTransactionBlock(gid);
+				PrepareTransactionBlockWithState3PC(gid, xstate);
 				AllowTempIn2PC = true;
 				/* PREPARE itself */
 				CommitTransactionCommand();
@@ -1013,11 +1021,14 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_COMMIT_PREPARED:
 			{
+				TransactionId xid;
+
 				Assert(!query_cancel_allowed);
 				pq_getmsgint64(in); /* csn */
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
+				xid = pq_getmsgint64(in);
 
-				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL, 0);
 
 				/* normal path: we have PREPARE, finish it */
 				if (rwctx->gtx)
@@ -1069,8 +1080,18 @@ process_remote_commit(StringInfo in,
 				 * that's much more cumbersome and it is not clear how to
 				 * obtain PREPARE's end_lsn here to know when we can purge the
 				 * entry.
+				 *
+				 * XXX this doesn't work for user 2PC as state_3pc with gen
+				 * num is not preserved in CP record. Instead of adding it
+				 * there, seems like the better idea is to WAL log generation
+				 * switch (immediately, unlike ParallelSafe which logged once
+				 * node gets online); it will entirely rule out the
+				 * possibility of applying normally when node should recover;
+				 * and getting CP before P is possible iff node applies
+				 * normally instead of recovering.
 				 */
-				else if (rwctx->mode == REPLMODE_NORMAL)
+				else if (rwctx->mode == REPLMODE_NORMAL &&
+						 strncmp("MTM", gid, Max(3, strlen(gid))) == 0)
 				{
 					uint64 prepare_gen_num = MtmGidParseGenNum(gid);
 
@@ -1098,7 +1119,7 @@ process_remote_commit(StringInfo in,
 
 				/* send CP ack */
 				if (rwctx->mode == REPLMODE_NORMAL)
-					mtm_send_2a_reply(gid, GTXCommitted,
+					mtm_send_2a_reply(gid, xid, GTXCommitted,
 									  InvalidGTxTerm, origin_node);
 				rwctx->reply_pending = false;
 
@@ -1138,7 +1159,7 @@ process_remote_commit(StringInfo in,
 									rwctx->txlist_pos);
 				}
 
-				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL);
+				rwctx->gtx = GlobalTxAcquire(gid, false, false, NULL, 0);
 				if (!rwctx->gtx)
 				{
 					mtm_log(MtmApplyTrace, "skipping ABORT PREPARED of %s as there is no xact", gid);

@@ -2905,15 +2905,17 @@ handle_1a_gtx(MtmTxRequest *msg, GlobalTx *gtx, MtmTxStatusResponse *resp)
 	if (term_cmp(msg->term, gtx->state.proposal) > 0)
 	{
 		bool		done;
-		char	   *sstate;
+		char	   *xstate;
 		MemoryContext oldcontext = CurrentMemoryContext;
+		GTxState new_gtx_state = {
+			msg->term,
+			gtx->state.accepted,
+			gtx->state.status
+		};
 
-		sstate = serialize_gtx_state(gtx->state.status,
-									 msg->term,
-									 gtx->state.accepted);
 		StartTransactionCommand();
-		done = SetPreparedTransactionState(gtx->gid, sstate,
-										   false);
+		xstate = serialize_xstate(&gtx->xinfo, &new_gtx_state);
+		done = SetPreparedTransactionState(gtx->gid, xstate, false);
 		CommitTransactionCommand();
 		MemoryContextSwitchTo(oldcontext);
 
@@ -2954,7 +2956,7 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 	bool		gtx_busy;
 
 	/* fast check before digging WAL */
-	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy);
+	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy, msg->coordinator);
 	if (gtx != NULL)
 	{
 		handle_1a_gtx(msg, gtx, resp);
@@ -3034,7 +3036,7 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 		 */
 
 		/* xact obviously could appear after fast path check */
-		gtx = GlobalTxAcquire(msg->gid, false, false, NULL);
+		gtx = GlobalTxAcquire(msg->gid, false, false, NULL, 0);
 		if (gtx != NULL)
 		{
 			handle_1a_gtx(msg, gtx, resp);
@@ -3042,7 +3044,7 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 			goto reply_1a;
 		}
 
-		xact_gen_num = MtmGidParseGenNum(msg->gid);
+		xact_gen_num = msg->gen_num;
 		/*
 		 * prepare_seen check is needed as xact could have been quickly
 		 * finished after WAL reading but before GlobalTxAcquire above. We
@@ -3121,7 +3123,12 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 	};
 	bool		gtx_busy;
 
-	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy);
+	/*
+	 * Explicit 2PC never does paxos resolving with 2a, so MtmGidParseNodeId
+	 * is ok here.
+	 */
+	gtx = GlobalTxAcquire(msg->gid, false, true, &gtx_busy,
+						  MtmGidParseNodeId(msg->gid));
 	/*
 	 * Finalized statuses are sent in 1a, no need to bother with this here.
 	 */
@@ -3142,19 +3149,17 @@ handle_2a(MtmTxRequest *msg, int dest_id, int dest_node_id)
 	{
 		GlobalTxStatus new_status;
 		bool		done;
-		char	   *sstate;
+		char	   *xstate;
 		MemoryContext oldcontext = CurrentMemoryContext;
+		GTxState new_gtx_state;
 
 		new_status = msg->type == MTReq_Precommit ?
 			GTXPreCommitted : GTXPreAborted;
 
-
-		sstate = serialize_gtx_state(new_status,
-									 msg->term,
-									 msg->term);
+		new_gtx_state = (GTxState) {msg->term, msg->term, new_status};
 		StartTransactionCommand();
-		done = SetPreparedTransactionState(gtx->gid, sstate,
-										   false);
+		xstate = serialize_xstate(&gtx->xinfo, &new_gtx_state);
+		done = SetPreparedTransactionState(gtx->gid, xstate, false);
 		if (!done)
 			Assert(false);
 		CommitTransactionCommand();
@@ -3275,7 +3280,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 
 				Assert(msg->type == MTReq_Abort || msg->type == MTReq_Commit);
 
-				gtx = GlobalTxAcquire(msg->gid, false, false, NULL);
+				gtx = GlobalTxAcquire(msg->gid, false, false, NULL, 0);
 				if (!gtx)
 					goto got_message;
 

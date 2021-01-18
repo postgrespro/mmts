@@ -45,14 +45,38 @@ typedef enum
 
 typedef struct
 {
-	GlobalTxTerm	proposal; /* nextBal in terms of The Part-Time Paliament */
-	GlobalTxTerm	accepted; /* prevBal in terms of The Part-Time Paliament */
-	GlobalTxStatus	status; /* prevDec in terms of The Part-Time Paliament */
+	GlobalTxTerm	proposal; /* nextBal in terms of The Part-Time Parliament */
+	GlobalTxTerm	accepted; /* prevBal in terms of The Part-Time Parliament */
+	GlobalTxStatus	status; /*
+							 * prevDec in terms of The Part-Time Parliament
+							 * (or special never voted | commit | abort)
+							 */
 } GTxState;
+
+/*
+ * Constant xact metadata which we encode into state_3pc. We could (and
+ * previously did) carry that directly in gid, but this intervenes with
+ * explicit 2PC usage: applier must know generation of the xact, and
+ * scribbling over user-provided gid is ugly and/or inefficient.
+ */
+typedef struct
+{
+	int coordinator; /* node id who initiated the transaction */
+	TransactionId xid; /* xid at coordinator */
+	uint64 gen_num; /* the number of generation xact belongs to */
+	nodemask_t configured; /* mask of configured nodes of this generation;
+							* the idea was to use this by resolver, but it
+							* wasn't finished. We shouldn't have any problems
+							* with this anyway if all xacts created before
+							* first node add-rm are resolved before the
+							* second one is started
+							*/
+} XactInfo;
 
 typedef struct GlobalTx
 {
 	char		gid[GIDSIZE];
+	XactInfo	xinfo;
 	XLogRecPtr	coordinator_end_lsn;
 	BackendId	acquired_by;
 	/* paxos voting state for this xact */
@@ -86,21 +110,18 @@ void MtmGlobalTxInit(void);
 void MtmGlobalTxShmemStartup(void);
 void GlobalTxEnsureBeforeShmemExitHook(void);
 GlobalTx *GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live,
-						  bool *busy);
+						  bool *busy, int coordinator);
 void GlobalTxRelease(GlobalTx *gtx);
 void GlobalTxAtExit(int code, Datum arg);
 void GlobalTxLoadAll(void);
-char *serialize_gtx_state(GlobalTxStatus status, GlobalTxTerm term_prop,
-						  GlobalTxTerm term_acc);
+char *serialize_xstate(XactInfo *xinfo, GTxState *gtx_state);
 int term_cmp(GlobalTxTerm t1, GlobalTxTerm t2);
-void parse_gtx_state(const char *state, GlobalTxStatus *status,
-				GlobalTxTerm *term_prop, GlobalTxTerm *term_acc);
+int deserialize_xstate(const char *state, XactInfo *xinfo, GTxState *gtx_state,
+					   int elevel);
 GlobalTxTerm GlobalTxGetMaxProposal(void);
 void GlobalTxSaveInTable(const char *gid, XLogRecPtr coordinator_end_lsn,
 						 GlobalTxStatus status,
 						 GlobalTxTerm term_prop, GlobalTxTerm term_acc);
-void GlobalTxDeleteFromTable(const char *gid);
-void GlobalTxGCInTableProposals(void);
 void GlobalTxMarkOrphaned(int node_id);
 
 char *GlobalTxToString(GlobalTx *gtx);
