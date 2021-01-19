@@ -418,6 +418,13 @@ MtmTwoPhaseCommit(void)
 		 */
 		if (MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
 		{
+			/*
+			 * XXX this ensures we are out of transaction block (no 'commands
+			 * ignored until end of transaction block') after abort. This is
+			 * fragile, as we must put it before each ERROR till prepare is
+			 * done; same for MtmExplicitPrepare. Is there a better way?
+			 */
+			UserAbortTransactionBlock(false);
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("multimaster node is not online: current status \"%s\"",
@@ -728,6 +735,15 @@ MtmExplicitPrepare(char *gid)
 		return false;
 	}
 
+	if (!IS_EXPLICIT_2PC_GID(gid))
+	{
+		UserAbortTransactionBlock(false); /* see same call above */
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("invalid transaction identifier \"%s\": identifiers starting with \"MTM-\" are used by multimaster internally",
+						gid)));
+	}
+
 	/* prepare for cleanup */
 	mtm_commit_state.gtx = NULL;
 	mtm_commit_state.inside_commit_sequence = true;
@@ -746,6 +762,7 @@ MtmExplicitPrepare(char *gid)
 		 */
 		if (MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
 		{
+			UserAbortTransactionBlock(false); /* see same call above */
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("multimaster node is not online: current status \"%s\"",
@@ -767,11 +784,7 @@ MtmExplicitPrepare(char *gid)
 			 */
 			GlobalTxRelease(mtm_commit_state.gtx);
 			mtm_commit_state.gtx = NULL;
-			/*
-			 * XXX is there a better way? we must be out of xact block at the
-			 * end.
-			 */
-			UserAbortTransactionBlock(false);
+			UserAbortTransactionBlock(false); /* see same call above */
 			ereport(ERROR,
 					(errcode(ERRCODE_DUPLICATE_OBJECT),
 					 errmsg("transaction identifier \"%s\" is already in use",
@@ -800,8 +813,8 @@ MtmExplicitPrepare(char *gid)
 							 &mtm_commit_state.gtx->state));
 		if (!ret)
 		{
-			Assert(false);
-			elog(PANIC, "unexpected PrepareTransactionBlock failure");
+			mtm_commit_cleanup(0, Int32GetDatum(0));
+			return false;
 		}
 		CommitTransactionCommand(); /* prepared */
 		mtm_commit_state.gtx->prepared = true;
