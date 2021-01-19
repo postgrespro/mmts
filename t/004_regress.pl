@@ -136,8 +136,18 @@ unlink("$ENV{TESTDIR}/results/regression.diff");
 # Do not use diffs extension as some upper level testing systems are searching for all
 # *.diffs files.
 TestLib::append_to_file("$ENV{TESTDIR}/results/regression.diff", $res_diff);
-$diff = TestLib::system_log("diff -U3 $ENV{TESTDIR}/results/regression.diff expected/regression.diff");
-run [ "diff", "-U3", "expected/regression.diff", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
+# TODO: work with diffs on per-test basis
+my $expected_file;
+if (Cluster::is_ee())
+{
+	$expected_file = "expected/regression_ee.diff"
+}
+else
+{
+	$expected_file = "expected/regression_vanilla.diff"
+}
+$diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
+run [ "diff", "-U3", "${expected_file}", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
 
 is($res, 0, "postgres regress");

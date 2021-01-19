@@ -29,6 +29,7 @@
 #include "storage/ipc.h"
 
 #include "multimaster.h"
+#include "compat.h"
 #include "logger.h"
 #include "ddl.h"
 #include "state.h"
@@ -388,11 +389,7 @@ MtmTwoPhaseCommit(void)
 	 */
 	if (!IsTransactionBlock())
 	{
-#ifdef PGPRO_EE /* atx */
-		BeginTransactionBlock(false);
-#else
-		BeginTransactionBlock();
-#endif
+		BeginTransactionBlockCompat();
 		CommitTransactionCommand();
 		StartTransactionCommand();
 	}

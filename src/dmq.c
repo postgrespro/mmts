@@ -30,6 +30,7 @@
 
 #include "dmq.h"
 #include "logger.h"
+#include "compat.h"
 
 #include "access/transam.h"
 #include "libpq/libpq.h"
@@ -1364,13 +1365,6 @@ dmq_receiver_at_exit(int status, Datum receiver)
 	if (dmq_receiver_stop_hook)
 		dmq_receiver_stop_hook(sender_name);
 }
-
-/* EE pooler gets rid of static variable */
-#ifdef PGPRO_EE
-#define FeBeWaitSetCompat() (MyProcPort->pqcomm_waitset)
-#else
-#define FeBeWaitSetCompat() (FeBeWaitSet)
-#endif
 
 /* xxx should wrap all this in try/catch to turn any ERROR into FATAL */
 Datum

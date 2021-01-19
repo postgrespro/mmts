@@ -70,6 +70,7 @@
 #include "utils/inval.h"
 
 #include "multimaster.h"
+#include "compat.h"
 #include "ddd.h"
 #include "pglogical_relid_map.h"
 #include "spill.h"
@@ -948,11 +949,7 @@ process_remote_commit(StringInfo in,
 				 * prepare TBLOCK_INPROGRESS state for
 				 * PrepareTransactionBlock()
 				 */
-#ifdef PGPRO_EE /* atx */
-				BeginTransactionBlock(false);
-#else
-				BeginTransactionBlock();
-#endif
+				BeginTransactionBlockCompat();
 				CommitTransactionCommand();
 				StartTransactionCommand();
 

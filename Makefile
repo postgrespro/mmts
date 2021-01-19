@@ -41,13 +41,16 @@ PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 
 else # assume the extension is in contrib/ dir of pg distribution
-# EXTRA_INSTALL=contrib/pg_pathman contrib/referee
 PG_CPPFLAGS += -I$(top_srcdir)/$(subdir)/src/include
 PG_CPPFLAGS += -I$(libpq_srcdir) # include libpq-fe, defined in Makefile.global.in
 SHLIB_LINK = $(libpq) # defined in Makefile.global.in
 subdir = contrib/mmts
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
+# in ee, install pathman as well
+ifeq (${PGPRO_EDITION}, enterprise)
+EXTRA_INSTALL=contrib/pg_pathman
+endif
 include $(top_srcdir)/contrib/contrib-global.mk
 endif # USE_PGXS
 
