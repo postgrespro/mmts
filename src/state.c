@@ -3907,7 +3907,7 @@ MtmMonitor(Datum arg)
 	/* check config sanity */
 	if (mtm_cfg->my_node_id == MtmInvalidNodeId)
 		elog(ERROR, "multimaster is not configured");
-	if (mtm_cfg->n_nodes > 1 && IS_REFEREE_ENABLED())
+	if (mtm_cfg->n_nodes > 2 && IS_REFEREE_ENABLED())
 		ereport(ERROR,
 				(errmsg("referee mode supports only 2 nodes, but %d configured",
 					mtm_cfg->n_nodes + 1),

@@ -1471,8 +1471,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 				}
 				else
 				{
-					mtm_log(ERROR, "[DMQ] invalid message type %c, %s",
-							qtype, s.data);
+					mtm_log(ERROR, "[DMQ] invalid message type %c",
+							qtype);
 				}
 			}
 		}

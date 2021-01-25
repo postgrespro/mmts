@@ -86,7 +86,8 @@ static size_t MtmGetTransactionStateSize(void);
 static void MtmSerializeTransactionState(void *ctx);
 static void MtmDeserializeTransactionState(void *ctx);
 #endif
-#ifdef PGPRO_EE
+/* TODO: Remove last E once atx lands */
+#ifdef PGPRO_EEE
 static void *MtmSuspendTransaction(void);
 static void MtmResumeTransaction(void *ctx);
 #endif
@@ -285,8 +286,9 @@ MtmDeserializeTransactionState(void *ctx)
 
 /*
  * ATX compatibility support.
+ * TODO: remove last E once atx lands
  */
-#ifdef PGPRO_EE
+#ifdef PGPRO_EEE
 static void *
 MtmSuspendTransaction(void)
 {
