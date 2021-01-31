@@ -856,7 +856,6 @@ process_remote_commit(StringInfo in,
 			{
 				TransactionId xid = GetCurrentTransactionIdIfAny();
 				uint64 prepare_gen_num;
-				bool latch_set = false;
 				const char *xstate;
 				XactInfo xinfo;
 				GTxState gtx_state;
@@ -869,65 +868,36 @@ process_remote_commit(StringInfo in,
 				deserialize_xstate(xstate, &xinfo, &gtx_state, ERROR);
 				prepare_gen_num = xinfo.gen_num;
 
-				/*
-				 * Before applying, make sure our node had switched to gen of
-				 * PREPARE or higher one. Normally this would be no-op or
-				 * imperceptible amount of time (until the next heartbeat).
-				 *
-				 * We could remove the waiting altogether if we carried the
-				 * full gen info in xact itself (members, donors), but that
-				 * seems like gid size bloating for no reason.
-				 *
-				 * XXX: log logical message on generation switch and get rid
-				 * of this
-				 */
-				while(unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
-				{
-					int			rc;
-
-					CHECK_FOR_INTERRUPTS();
-					rc = WaitLatch(MyLatch,
-								   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-								   100.0,
-								   PG_WAIT_EXTENSION);
-					if (rc & WL_LATCH_SET)
-					{
-						latch_set = true;
-						ResetLatch(&MyProc->procLatch);
-					}
-				}
-				/* restore the latch cock if we've swallowed it above */
-				if (latch_set)
-					SetLatch(&MyProc->procLatch);
-
 				MtmBeginSession(origin_node);
 
 				/* Exclude concurrent gen switchers, c.f. AcquirePBByHolder call site */
 				AcquirePBByPreparer(false);
 
 				/*
-				 * With lock acquired, check again that our apply mode makes
-				 * sense: applying normally when we are in recovery is
-				 * unacceptable as we might get xact out of order. Applying in
-				 * recovery when we are online is also not ok because we would
-				 * miss reply to coordinator; though we hardly would ever end
-				 * up doing this.
-				 *
-				 * As for the second check, under extremely unlikely
-                 * circumstances due to slow wareceivers convergence we might
-                 * get P of gen where we are in RECOVERY before corresponding
-                 * ParallelSafe, if we happen to have working walreceiver in
-                 * REPLMODE_RECOVERY from non-donor gen member. We could
-                 * safely enable us right away in this case, but for that we
-                 * need to re-acquire exclusive gen lock, recheck that gen
-                 * hadn't changed... seems simpler to just restart as we will
-                 * learn the real donor with ParallelSafe eventually.
+				 * Before applying, make sure our node had switched to gen of
+				 * PREPARE or higher one. This must be always true, as any
+				 * switch into online in gen is preceded by logging
+				 * ParallelSafe message which is applied by receiver itself.
 				 */
-				if (unlikely((rwctx->mode != MtmGetReceiverMode(rwctx->sender_node_id)) ||
-							 (MtmGetCurrentStatusInGen() == MTM_GEN_RECOVERY &&
-							  prepare_gen_num == MtmGetCurrentGenNum())))
+				if (unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
 				{
-					proc_exit(0);
+					elog(FATAL, "received PREPARE %s of higher gen num " UINT64_FORMAT " but current is " UINT64_FORMAT,
+						 gid,
+						 prepare_gen_num,
+						 MtmGetCurrentGenNum());
+				}
+
+				/*
+				 * ParallelSafe in WAL before new gen's xacts also means we
+				 * must either already apply in recovery or be online in this
+				 * gen (or just switched to higher).
+				 */
+				if (!(rwctx->mode == REPLMODE_RECOVERY ||
+					  MtmGetCurrentGenNum() > prepare_gen_num ||
+					  MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE))
+				{
+					elog(FATAL, "applying prepare %s normally while being not online in gen " UINT64_FORMAT,
+						 gid, MtmGetCurrentGenNum());
 				}
 
 				/*
@@ -1067,49 +1037,27 @@ process_remote_commit(StringInfo in,
 				 * possible. Luckily there is an easy way to detect such
 				 * out-of-order CP: it can happen only when we are still
 				 * applying in normal mode while in fact we must recover in
-				 * this xact's gen. Because normal apply is allowed only when
+				 * this xact's gen, because normal apply is allowed only when
 				 * we are member of the gen (and recovered in it), and member
 				 * of the gen can't get CP before P by definition of
 				 * generations; or we are ONLINE in higher gen, which means we
 				 * already got all committable prepares of this one.
-				 *
-				 * Alternatively we could persist CP outcome somewhere, but
-				 * that's much more cumbersome and it is not clear how to
-				 * obtain PREPARE's end_lsn here to know when we can purge the
-				 * entry.
-				 *
-				 * XXX this doesn't work for user 2PC as state_3pc with gen
-				 * num is not preserved in CP record. Instead of adding it
-				 * there, seems like the better idea is to WAL log generation
-				 * switch (immediately, unlike ParallelSafe which logged once
-				 * node gets online); it will entirely rule out the
-				 * possibility of applying normally when node should recover;
-				 * and getting CP before P is possible iff node applies
-				 * normally instead of recovering.
+				 * So, ParallelSafe message always logged to WAL
+				 * before getting online in gen ensures we learn about gen
+				 * switch in time and won't get CP out of order.
 				 */
+				#ifdef USE_ASSERT_CHECKING
 				else if (rwctx->mode == REPLMODE_NORMAL &&
-						 strncmp("MTM", gid, Max(3, strlen(gid))) == 0)
+						 IS_EXPLICIT_2PC_GID(gid))
 				{
 					uint64 prepare_gen_num = MtmGidParseGenNum(gid);
 
-					/*
-					 * Could wait until we switch into it, but bailing out
-					 * here seems like incredibly rare situation.
-					 */
-					if (unlikely(MtmGetCurrentGenNum() < prepare_gen_num))
-					{
-						ereport(ERROR,
-								(errcode(ERRCODE_INTERNAL_ERROR),
-								 MTM_ERRMSG("refusing COMMIT PREPARED of transaction %s due to generation switch: prepare_gen_num=" UINT64_FORMAT ", current_gen_num=" UINT64_FORMAT,
-											gid, prepare_gen_num, MtmGetCurrentGenNum())));
-					}
-
-					if (unlikely((rwctx->mode !=
-								  MtmGetReceiverMode(rwctx->sender_node_id))))
-					{
-						proc_exit(0);
-					}
+					Assert(MtmGetCurrentGenNum() >= prepare_gen_num);
+					Assert(rwctx->mode == REPLMODE_RECOVERY ||
+						   MtmGetCurrentGenNum() > prepare_gen_num ||
+						   MtmGetCurrentStatusInGen() == MTM_GEN_ONLINE);
 				}
+				#endif
 
 				/* restore ctx after CommitTransaction */
 				MemoryContextSwitchTo(MtmApplyContext);

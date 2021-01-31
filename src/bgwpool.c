@@ -150,8 +150,14 @@ BgwPoolBeforeShmemExit(int status, Datum arg)
 	 * If we were unfortunate enough to die with possibly already applied
 	 * change (PREPARE if origin_xid is valid, 2A|COMMIT if reply_pending) but
 	 * before ack, cut the link down to tell sender not to wait for us.
+	 *
+	 * Do that only if we are online in curr gen; if we aren't, nobody
+	 * expects a reply from us yet (or never will). OTOH, it prevents random
+	 * connection reset on node which just got up and spinned parallel workers
+	 * just to immediately learn it was excluded.
 	 */
-	if (TransactionIdIsValid(rwctx->origin_xid) || rwctx->reply_pending)
+	if ((TransactionIdIsValid(rwctx->origin_xid) || rwctx->reply_pending) &&
+		(MtmGetCurrentStatusInGenNotLocked() == MTM_GEN_ONLINE))
 	{
 		mtm_log(BgwPoolEvent, "forcing dmq sender reconnection to node %d as applier exits with unsent reply",
 				rwctx->sender_node_id);

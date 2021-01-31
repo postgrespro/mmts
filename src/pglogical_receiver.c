@@ -878,13 +878,9 @@ pglogical_receiver_main(Datum main_arg)
 
 				CHECK_FOR_INTERRUPTS();
 				/*
-				 * Do we need to reconnect?
+				 * Do we need to reconnect in recovery?
 				 * Note that parallel workers don't check this; we expect main
 				 * receiver to notice the change and kill them.
-				 *
-				 * This test is not required for correctness -- we recheck the
-				 * mode under lock on each PREPARE apply. However, it ensures
-				 * receivers converge in the absense of prepares.
 				 */
 				if (unlikely(rctx->w.mode != MtmGetReceiverMode(sender)))
 				{

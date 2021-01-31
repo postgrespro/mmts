@@ -413,6 +413,20 @@ PackGenAndDonors(StringInfo s, MtmGeneration gen, nodemask_t donors)
 	pq_sendint64(s, donors);
 }
 
+static XLogRecPtr
+LogParallelSafe(MtmGeneration gen, nodemask_t donors)
+{
+	StringInfoData s;
+	XLogRecPtr msg_xptr;
+
+	PackGenAndDonors(&s, gen, donors);
+	/* xxx we should add versioning to logical messages */
+	msg_xptr = LogLogicalMessage("P", s.data, s.len, false);
+	pfree(s.data);
+	XLogFlush(msg_xptr);
+	return msg_xptr;
+}
+
 /* Switch into newer generation, if not yet */
 void
 MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
@@ -528,7 +542,6 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	if (BIT_CHECK(donors, Mtm->my_node_id - 1))
 	{
 		XLogRecPtr msg_xptr;
-		StringInfoData s;
 
 		/* no need to recover, we already have all xacts of lower gens */
 		mtm_state->last_online_in = gen.num;
@@ -543,11 +556,7 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 		 * well if we carried full gen info with it; but this
 		 * guarantees convergence in the absence of xacts.
 		 */
-		/* xxx we should add versioning to logical messages */
-		PackGenAndDonors(&s, gen, donors);
-		msg_xptr = LogLogicalMessage("P", s.data, s.len, false);
-		pfree(s.data);
-		XLogFlush(msg_xptr);
+		msg_xptr = LogParallelSafe(gen, donors);
 		MtmStateSave(); /* fsync state update */
 
 		MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
@@ -599,6 +608,14 @@ bool
 MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
 					  bool is_recovery, XLogRecPtr end_lsn)
 {
+	/*
+	 * In MtmConsiderGenSwitch (and below) we might log ParallelSafe. Ensure
+	 * it is originated by *us* so anyone pulling from us sees the gen switch
+	 * before new gen xacts regardless of his apply mode; this makes it
+	 * impossible to receive PREPARE in wrong mode or CP before P, see theirs
+	 * apply comments.
+	 */
+	MtmEndSession(42, false);
 	/* make sure we are at least in ParallelSafe's gen */
 	MtmConsiderGenSwitch(ps_gen, ps_donors);
 
@@ -639,37 +656,43 @@ MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
 		LWLockRelease(mtm_state->gen_lock);
 		return true;
 	}
-
 	/*
 	 * Ok, so this parallel safe indeed switches us into ONLINE.
+	 *
+	 * Though we are definitely not donor and thus we expect nobody will
+	 * recover from us in this gen, log ParallelSafe anyway to ensure the mark
+	 * symbolizing switch into online-in-gen is always present in
+	 * WAL. Applying PREPARE and especially COMMIT PREPARED (to prevent
+	 * out-of-order CP apply) rely on this.
 	 */
-   mtm_state->last_online_in = ps_gen.num;
-   MtmStateSave();
+	LogParallelSafe(ps_gen, ps_donors);
+	mtm_state->last_online_in = ps_gen.num;
+	MtmStateSave();
 
-   MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
-   if (IS_REFEREE_ENABLED() && popcount(ps_gen.configured) == 2)
-   {
-	   /*
-		* In referee mode we may switch to online by applying P.S. only in
-		* full generation; referee winner doesn't need recovery and switches
-		* to online directly in MtmConsiderGenSwitch in both referee gen and
-		* the following full gen.
-		*/
-	   Assert(popcount(ps_gen.members) == 2);
-	   /*
-		* Now that both nodes are online we can clear the grant.
-		*/
-	   mtm_state->referee_grant_turn_in_pending = ps_gen.num;
-   }
-   mtm_log(MtmStateSwitch, "[STATE] switched to online in generation num=" UINT64_FORMAT ", members=%s, donors=%s by applying ParallelSafe logged at %X/%X",
-				ps_gen.num,
-				maskToString(ps_gen.members),
-				maskToString(ps_donors),
-				(uint32) (end_lsn >> 32), (uint32) end_lsn);
+	MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
+	if (IS_REFEREE_ENABLED() && popcount(ps_gen.configured) == 2)
+	{
+		/*
+		 * In referee mode we may switch to online by applying P.S. only in
+		 * full generation; referee winner doesn't need recovery and switches
+		 * to online directly in MtmConsiderGenSwitch in both referee gen and
+		 * the following full gen.
+		 */
+		Assert(popcount(ps_gen.members) == 2);
+		/*
+		 * Now that both nodes are online we can clear the grant.
+		 */
+		mtm_state->referee_grant_turn_in_pending = ps_gen.num;
+	}
+	mtm_log(MtmStateSwitch, "[STATE] switched to online in generation num=" UINT64_FORMAT ", members=%s, donors=%s by applying ParallelSafe logged at %X/%X",
+			ps_gen.num,
+			maskToString(ps_gen.members),
+			maskToString(ps_donors),
+			(uint32) (end_lsn >> 32), (uint32) end_lsn);
 
-   ReleasePB();
-   LWLockRelease(mtm_state->gen_lock);
-   return false;
+	ReleasePB();
+	LWLockRelease(mtm_state->gen_lock);
+	return false;
 }
 
 /*
