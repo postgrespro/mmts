@@ -117,6 +117,11 @@ struct MtmState
 	 * who are donors during the voting.
 	 */
 	MtmGeneration last_vote;
+	/*
+	 * When getting online we must 1) update state file 2) log message to WAL,
+	 * apply.c relies on that. This flag makes sure both actions are done.
+	 */
+	bool ps_logged;
 
 	/* Guards generation switch */
 	LWLock	   *gen_lock;
@@ -206,6 +211,8 @@ static void CampaignerWake(void);
 
 static void MtmSetReceiveMode(uint32 mode);
 
+static XLogRecPtr LogParallelSafe(MtmGeneration gen, nodemask_t donors);
+
 static bool MtmIsConnectivityClique(nodemask_t mask);
 static nodemask_t MtmGetConnectivityClique(bool locked);
 
@@ -292,8 +299,9 @@ MtmStateShmemStartup()
 void
 MtmStateStartup(void)
 {
-	/* xxx: AcquirePBByHolder */
+	AcquirePBByHolder(true);
 	LWLockAcquire(mtm_state->gen_lock, LW_EXCLUSIVE);
+
 	MtmStateLoad();
 	/* restore receive_mode */
 	switch (MtmGetCurrentStatusInGen())
@@ -312,7 +320,21 @@ MtmStateStartup(void)
 			pg_atomic_write_u32(&mtm_state->receive_mode, RECEIVE_MODE_DISABLED);
 			break;
 	}
+
+	/*
+	 * if we crashed after file update to online but before logging PS,
+	 * do it now
+	 */
+	if ((MtmGetCurrentGenNum() == mtm_state->last_online_in) &&
+		(!mtm_state->ps_logged))
+	{
+		LogParallelSafe(MtmGetCurrentGen(true), mtm_state->donors);
+		mtm_state->ps_logged = true;
+		MtmStateSave();
+	}
+
 	LWLockRelease(mtm_state->gen_lock);
+	ReleasePB();
 }
 
 /* Create persistent state during cluster initialization */
@@ -446,7 +468,30 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	if (likely(pg_atomic_read_u64(&mtm_state->current_gen_num) >= gen.num))
 		return;
 
-	/* ok, most probably the switch is going to happen */
+	/*
+	 * Ok, most probably the switch is going to happen.
+	 *
+	 * Exclude all concurrent PREPAREs.
+	 * Barrier between stopping applying/creating prepares from old gen and
+	 * starting writing new gen prepares, embodied by
+	 * ParallelSafe<gen> record, is crucial; once any new gen PREPARE appeared
+	 * in WAL, accepting old one must be forbidden because recovery up to
+	 * ParallelSafe (or any prepare from new gen) is a criterion that we have
+	 * recovered to participate in this gen and thus got all committable xacts
+	 * of older gens: receivers enter normal mode (pulling only origin's
+	 * xacts) at this spot with usual dangers of out-of-order apply.
+	 *
+	 * Backends don't use gen_lock for that though because
+	 *	- Doing PrepareTransactionBlock/CommitTransactionCommand under lwlock
+	 *	  is formidable.
+	 *	- lwlocks are unfair.
+	 * XXX these arguments seem somewhat weak. The first should be
+	 * investigated and the second can be hacked around with sleep request.
+	 *
+	 * LWlock puts us into uninterrutable sleep, so better take PB first.
+	 */
+	AcquirePBByHolder(true);
+
 	LWLockAcquire(mtm_state->gen_lock, LW_EXCLUSIVE);
 
 	/*
@@ -459,30 +504,10 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	/* check once again under lock */
 	if (pg_atomic_read_u64(&mtm_state->current_gen_num) >= gen.num)
 	{
+		ReleasePB();
 		LWLockRelease(mtm_state->gen_lock);
 		return;
 	}
-
-	/*
-	 * Exclude all concurrent PREPAREs.
-	 *
-	 * Barrier between stopping applying/creating prepares from old gen and
-     * starting writing new gen prepares, embodied on donors by
-     * ParallelSafe<gen> record, is crucial; once any new gen PREPARE appeared
-     * in WAL, accepting old one must be forbidden because recovery up to
-     * ParallelSafe (or any prepare from new gen) is a criterion that we have
-     * recovered to participate in this gen and thus got all committable xacts
-     * of older gens: receivers enter normal mode (pulling only origin's
-     * xacts) at this spot with usual dangers of out-of-order apply.
-	 *
-	 * Backends don't use gen_lock for that though because
-	 *  - Doing PrepareTransactionBlock/CommitTransactionCommand under lwlock
-	 *    is formidable.
-	 *  - lwlocks are unfair.
-	 * XXX these arguments seem somewhat weak. The first should be
-	 * investigated and the second can be hacked around with sleep request.
-	 */
-	AcquirePBByHolder(true);
 
 	/* voting for generation n <= m is pointless if gen m was already elected */
 	if (mtm_state->last_vote.num < gen.num)
@@ -530,8 +555,8 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 				maskToString(donors),
 				mtm_state->last_vote.num);
 
-		ReleasePB();
 		LWLockRelease(mtm_state->gen_lock);
+		ReleasePB();
 		CampaignerWake();
 		return;
 	}
@@ -544,7 +569,9 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 		XLogRecPtr msg_xptr;
 
 		/* no need to recover, we already have all xacts of lower gens */
+		mtm_state->ps_logged = false;
 		mtm_state->last_online_in = gen.num;
+		MtmStateSave(); /* fsync state update */
 
 		/*
 		 * Write to WAL ParallelSafe<gen_num> message, which is a mark for
@@ -557,6 +584,7 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 		 * guarantees convergence in the absence of xacts.
 		 */
 		msg_xptr = LogParallelSafe(gen, donors);
+		mtm_state->ps_logged = true;
 		MtmStateSave(); /* fsync state update */
 
 		MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
@@ -586,8 +614,8 @@ MtmConsiderGenSwitch(MtmGeneration gen, nodemask_t donors)
 	}
 
 
-	ReleasePB();
 	LWLockRelease(mtm_state->gen_lock);
+	ReleasePB();
 }
 
 /*
@@ -665,8 +693,11 @@ MtmHandleParallelSafe(MtmGeneration ps_gen, nodemask_t ps_donors,
 	 * WAL. Applying PREPARE and especially COMMIT PREPARED (to prevent
 	 * out-of-order CP apply) rely on this.
 	 */
-	LogParallelSafe(ps_gen, ps_donors);
+	mtm_state->ps_logged = false;
 	mtm_state->last_online_in = ps_gen.num;
+	MtmStateSave();
+	LogParallelSafe(ps_gen, ps_donors);
+	mtm_state->ps_logged = true;
 	MtmStateSave();
 
 	MtmSetReceiveMode(RECEIVE_MODE_NORMAL);
@@ -2666,6 +2697,7 @@ typedef struct MtmStateOnDisk
 	nodemask_t donors;
 	uint64 last_online_in;
 	MtmGeneration last_vote;
+	bool ps_logged; /* have we logged ParallelSafe for last online? */
 } MtmStateOnDisk;
 
 #define MtmStateOnDiskConstantSize \
@@ -2707,6 +2739,7 @@ MtmStateSave(void)
 	ondisk.donors = mtm_state->donors;
 	ondisk.last_online_in = mtm_state->last_online_in;
 	ondisk.last_vote = mtm_state->last_vote;
+	ondisk.ps_logged = mtm_state->ps_logged;
 
 	INIT_CRC32C(ondisk.checksum);
 	COMP_CRC32C(ondisk.checksum,
@@ -2898,6 +2931,7 @@ MtmStateLoad(void)
 	mtm_state->donors = ondisk.donors;
 	mtm_state->last_online_in = ondisk.last_online_in;
 	mtm_state->last_vote = ondisk.last_vote;
+	mtm_state->ps_logged = ondisk.ps_logged;
 
 	mtm_log(MtmStateMessage, "loaded state: current_gen_num=" UINT64_FORMAT ", current_gen_members=%s, current_gen_configured=%s, donors=%s, last_online_in=" UINT64_FORMAT ", last_vote.num=" UINT64_FORMAT ", last_vote.members=%s",
 			pg_atomic_read_u64(&mtm_state->current_gen_num),
