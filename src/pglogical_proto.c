@@ -190,10 +190,10 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 static void
 pglogical_seq_nextval(StringInfo out, LogicalDecodingContext *ctx, MtmSeqPosition *pos)
 {
-	Relation	rel = table_open(pos->seqid, NoLock);
+	Relation	rel = RelationIdGetRelation(pos->seqid);
 
 	pglogical_write_rel(out, ctx->output_plugin_private, rel);
-	table_close(rel, NoLock);
+	RelationClose(rel);
 	pq_sendbyte(out, 'N');
 	pq_sendint64(out, pos->next);
 }
