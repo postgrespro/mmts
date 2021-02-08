@@ -278,6 +278,12 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 
 
 		case 'N':
+			if (DDLInProgress)
+			{
+				mtm_log(ProtoTraceFilter, "not sending nextval due to DDLInProgress");
+				return;
+			}
+
 			pglogical_seq_nextval(out, ctx, (MtmSeqPosition *) message);
 			mtm_log(ProtoTraceMessage, "Sent nextval message to node %d",
 					hooks_data->receiver_node_id);
