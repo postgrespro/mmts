@@ -424,7 +424,7 @@ MtmTwoPhaseCommit(void)
 			 * fragile, as we must put it before each ERROR till prepare is
 			 * done; same for MtmExplicitPrepare. Is there a better way?
 			 */
-			UserAbortTransactionBlock(false);
+			UserAbortTransactionBlockCompat(false);
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("multimaster node is not online: current status \"%s\"",
@@ -737,7 +737,7 @@ MtmExplicitPrepare(char *gid)
 
 	if (!IS_EXPLICIT_2PC_GID(gid))
 	{
-		UserAbortTransactionBlock(false); /* see same call above */
+		UserAbortTransactionBlockCompat(false); /* see same call above */
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("invalid transaction identifier \"%s\": identifiers starting with \"MTM-\" are used by multimaster internally",
@@ -762,7 +762,7 @@ MtmExplicitPrepare(char *gid)
 		 */
 		if (MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
 		{
-			UserAbortTransactionBlock(false); /* see same call above */
+			UserAbortTransactionBlockCompat(false); /* see same call above */
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
 					 errmsg("multimaster node is not online: current status \"%s\"",
@@ -784,7 +784,7 @@ MtmExplicitPrepare(char *gid)
 			 */
 			GlobalTxRelease(mtm_commit_state.gtx);
 			mtm_commit_state.gtx = NULL;
-			UserAbortTransactionBlock(false); /* see same call above */
+			UserAbortTransactionBlockCompat(false); /* see same call above */
 			ereport(ERROR,
 					(errcode(ERRCODE_DUPLICATE_OBJECT),
 					 errmsg("transaction identifier \"%s\" is already in use",

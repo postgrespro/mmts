@@ -86,8 +86,8 @@ static size_t MtmGetTransactionStateSize(void);
 static void MtmSerializeTransactionState(void *ctx);
 static void MtmDeserializeTransactionState(void *ctx);
 #endif
-/* TODO: Remove last E once atx lands */
-#ifdef PGPRO_EEE
+
+#ifdef PGPRO_EE
 static void *MtmSuspendTransaction(void);
 static void MtmResumeTransaction(void *ctx);
 #endif
@@ -286,9 +286,8 @@ MtmDeserializeTransactionState(void *ctx)
 
 /*
  * ATX compatibility support.
- * TODO: remove last E once atx lands
  */
-#ifdef PGPRO_EEE
+#ifdef PGPRO_EE
 static void *
 MtmSuspendTransaction(void)
 {
@@ -646,6 +645,11 @@ NULL);
 	shmem_startup_hook = MtmShmemStartup;
 
 	DetectGlobalDeadLock = MtmDetectGlobalDeadLock;
+
+#ifdef PGPRO_EE
+	SuspendTransactionHook = MtmSuspendTransaction;
+	ResumeTransactionHook = MtmResumeTransaction;
+#endif
 }
 
 /*

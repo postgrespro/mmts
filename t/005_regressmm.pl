@@ -22,8 +22,7 @@ my @tests = ('multimaster');
 # run atx test only on ee
 if (Cluster::is_ee())
 {
-	# TODO: uncomment once atx lands into 13
-	# push @tests, 'atx';
+	push @tests, 'atx';
 }
 
 my $ret = TestLib::system_log($ENV{'PG_REGRESS'},

@@ -974,8 +974,8 @@ process_remote_commit(StringInfo in,
 				 * clean it up: as sata is not replicated for temp tables
 				 * there is nothing to delete anyway.
 				 */
-				list_free_deep(on_commits);
-				on_commits = NIL;
+				list_free_deep(on_commits_compat());
+				on_commits_compat() = NIL;
 
 				MtmEndSession(origin_node, true);
 

@@ -528,6 +528,32 @@ diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_out
  SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename like '%part_document%' ORDER BY policyname;
       schemaname     |   tablename   | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
  --------------------+---------------+------------+-------------+--------------------+-----+--------------------------------------------+------------
+diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/results/atx.out
+--- ../../../src/test/regress/expected/atx.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx.out	CENSORED
+@@ -1147,6 +1147,7 @@
+ RESET client_min_messages;
+ create database regression_atx_test_database;
+ ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
++ERROR:  [multimaster] failed to prepare transaction at peer node
+ \c regression_atx_test_database
+ create table atx_test as select 1 as id;
+ begin;
+diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/results/atx5.out
+--- ../../../src/test/regress/expected/atx5.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx5.out	CENSORED
+@@ -24,10 +24,7 @@
+ NOTICE:  function atx_test_30_one() does not exist, skipping
+ NOTICE:  function atx_test_30_one() does not exist, skipping
+ NOTICE:  function atx_test_30_one() does not exist, skipping
+- x 
+----
+-(0 rows)
+-
++ERROR:  cannot PREPARE a transaction that has exported snapshots
+ SET client_min_messages = 'warning';
+ DROP FUNCTION IF EXISTS atx_test_30_one();
+ DROP FUNCTION IF EXISTS atx_test_30_two();
 diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/results/rules.out
 --- ../../../src/test/regress/expected/rules.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/rules.out	CENSORED
