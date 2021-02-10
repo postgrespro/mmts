@@ -1,0 +1,143 @@
+# Run python tests.
+
+image: pgpgpro/dev:stretch
+
+.only-default: &only-default
+  only:
+    refs:
+      - merge_requests
+      - tags
+      - schedules
+      - branches
+      - pushes
+      - web
+      - triggers
+    changes:
+      - '**/*'
+
+# Tests are docker-based, and so is gitlab executor itself. We are using a bit
+# monstrous (and recommended) approach of running dind 'service' container
+# alongside main executor; it runs docker and exposes its socket:
+# https://docs.gitlab.com/ee/ci/docker/using_docker_build.html#use-the-docker-executor-with-the-docker-image-docker-in-docker
+# These variables tell the executor how to reach the socket.
+#
+# The 'docker' hostname is the alias of the service container as described at
+# https://docs.gitlab.com/ee/ci/docker/using_docker_images.html#accessing-the-services
+.docker_variables: &docker_variables
+  DOCKER_HOST: tcp://docker:2375/
+  # When using dind, it's wise to use the overlayfs driver for
+  # improved performance.
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+
+stages:
+  - build_core_image
+  - make_check
+  # hardcoded stuff in python tests doesn't allow to run them in parallel
+  - recovery random
+  - referee
+  - syncpoint
+
+# builds image with ee core and saves it as an artifact
+build_core_image:
+  <<: *only-default
+  stage: build_core_image
+  retry: 1
+  image: pgpgpro/dev:alpine
+  # run container providing docker alongside
+  services:
+    - docker:dind
+  variables:
+    <<: *docker_variables
+    branch: ee13_mm
+  artifacts:
+    expire_in: 24 hours
+    when: always
+    paths:
+      - docker-image/pgmm.tar.gz
+      - postgrespro.tar.gz
+  script:
+    # Add mm_gitlab_ci_ed25519 env var of type 'file' with the key in gitlab
+    - ssh-agent sh -c 'ssh-add ${mm_gitlab_ci_ed25519}; GIT_SSH_COMMAND="ssh -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no" git clone --depth=1 --branch "${branch}" git@git.postgrespro.ru:pgpro-dev/postgrespro.git'
+    - cd postgrespro
+    - docker build -t pgmm .
+    - cd ..
+    - mkdir docker-image
+    - docker save pgmm > docker-image/pgmm.tar
+    - tar czf docker-image/pgmm.tar.gz docker-image/pgmm.tar
+    - ls -lah docker-image/
+    - rm docker-image/pgmm.tar
+    # also save archived sources of core
+    - tar -czf postgrespro.tar.gz postgrespro
+
+# make check. We build core from sources again which is a bit ugly as we already
+# built the image, but let's not wobble here with yet another docker
+make_check:
+  <<: *only-default
+  stage: make_check
+  # gives us the archive with core sources
+  dependencies:
+    - build_core_image
+  artifacts:
+    expire_in: 24 hours
+    when: always
+    paths:
+      - postgrespro/contrib/mmts/tmp_check/log
+      - postgrespro/contrib/mmts/tmp_check/regress_outdir
+  script:
+    - ls
+    - tar -xzf postgrespro.tar.gz
+    - shopt -s extglob
+    - rm -rf postgrespro/contrib/mmts; mkdir postgrespro/contrib/mmts
+    - mv !(postgrespro) postgrespro/contrib/mmts
+    - cd postgrespro
+    - CFLAGS="-ggdb3 -O0" ./configure --enable-cassert --enable-debug --with-perl --enable-tap-tests
+    - make -j8
+    - cd contrib/mmts && make check
+
+recovery_random:
+  <<: *only-default
+  stage: recovery random
+  image: pgpgpro/dev:alpine
+  services:
+    - docker:dind
+  dependencies:
+    - build_core_image
+  artifacts:
+    when: on_failure
+    paths:
+      - contrib/mmts/tests/logs1
+      - contrib/mmts/tests/logs2
+      - contrib/mmts/tests/logs3
+  variables:
+    <<: *docker_variables
+  before_script:
+    - docker info
+  script:
+    - tar -xzvf docker-image/pgmm.tar.gz
+    - docker load -i docker-image/pgmm.tar
+    - cd tests/
+    - env CI=1 python3 -u test_recovery_random.py --failfast
+
+referee:
+  extends: recovery_random
+  stage: referee
+  artifacts:
+    paths:
+      - contrib/mmts/tests/logs1
+      - contrib/mmts/tests/logs2
+      - contrib/mmts/tests/logs_referee
+  script:
+    - tar -xzvf docker-image/pgmm.tar.gz
+    - docker load -i docker-image/pgmm.tar
+    - cd tests/
+    - env CI=1 python3 -u test_referee.py --failfast
+
+syncpoint:
+  extends: recovery_random
+  stage: syncpoint
+  script:
+    - tar -xzvf docker-image/pgmm.tar.gz
+    - docker load -i docker-image/pgmm.tar
+    - cd tests/
+    - env CI=1 python3 -u test_syncpoint.py --failfast
