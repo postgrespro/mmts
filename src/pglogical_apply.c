@@ -361,8 +361,25 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 		case 'V':
 			{
 				char *activity = psprintf("non-tx ddl %s", messageBody);
+
 				pgstat_report_activity(STATE_RUNNING, activity);
 				pfree(activity);
+
+				/*
+				 * At least one 'V' usager feels better if not only we apply
+				 * it in main receiver, but also wait for all preceeding work
+				 * to finish: temp schema drop must happen after all
+				 * backend's work is done.
+				 */
+				if (action == 'V')
+				{
+					/* main receiver normally doesn't play this game */
+					Assert(rwctx->txlist_pos == -1);
+					rwctx->txlist_pos = txl_store(
+						&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist, 1);
+					txl_wait_txhead(&BGW_POOL_BY_NODE_ID(rwctx->sender_node_id)->txlist,
+									rwctx->txlist_pos);
+				}
 
 				mtm_log(MtmApplyMessage, "Executing non-tx DDL message %s", messageBody);
 				SetCurrentStatementStartTimestamp();

@@ -142,7 +142,8 @@ static char *MtmGucSerialize(void);
 static void MtmMakeRelationLocal(Oid relid, bool locked);
 static List *AdjustCreateSequence(List *options);
 
-static void MtmProcessDDLCommand(char const *queryString, bool transactional);
+static void MtmProcessDDLCommand(char const *queryString, bool transactional,
+								 bool concurrent);
 static void MtmFinishDDLCommand(void);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
@@ -253,8 +254,7 @@ temp_schema_reset_all(int my_node_id)
 					 "	end loop; "
 					 "end $$; ",
 					 my_node_id);
-	mtm_log(DDLStmtOutgoing, "Sending DDL: %s", query);
-	LogLogicalMessage("V", query, strlen(query) + 1, false);
+	MtmProcessDDLCommand(query, false, false);
 }
 
 /* Drop temp schemas on peer nodes */
@@ -267,6 +267,9 @@ temp_schema_reset(void)
 	 * reset session_authorization restores permissions if previous ddl
 	 * dropped them; set_temp_schema allows us to see temporary objects,
 	 * otherwise they can't be dropped
+	 *
+	 * It is important to run it as 'V', otherwise it might interfere with
+	 * later (if drop is due to DISCARD) or earlier command using the schema.
 	 */
 	MtmProcessDDLCommand(
 		psprintf("RESET session_authorization; "
@@ -274,6 +277,7 @@ temp_schema_reset(void)
 				 "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
 				 "DROP SCHEMA IF EXISTS %s CASCADE;",
 				 MtmTempSchema, MtmTempSchema, MtmTempSchema),
+		false,
 		false
 		);
 	MtmFinishDDLCommand();
@@ -297,42 +301,13 @@ temp_schema_init(void)
 	if (!TempDropRegistered)
 	{
 		char	   *temp_schema;
-		unsigned short drandom_seed[3] = {0, 0, 0};
-		double	   rand1;
-		double	   rand2;
-
-		/*
-		 * borrowed from float.c
-		 * TODO: unify with state.c usage
-		 */
-		{
-			TimestampTz now = GetCurrentTimestamp();
-			uint64		iseed;
-
-			/* Mix the PID with the most predictable bits of the timestamp */
-			iseed = (uint64) now ^ ((uint64) MyProcPid << 32);
-			drandom_seed[0] = (unsigned short) iseed;
-			drandom_seed[1] = (unsigned short) (iseed >> 16);
-			drandom_seed[2] = (unsigned short) (iseed >> 32);
-		}
-		rand1 = pg_erand48(drandom_seed);
-		rand2 = pg_erand48(drandom_seed);
 
 		/*
 		 * NB: namespace.c:isMtmTemp() assumes 'mtm_tmp_' prefix for mtm temp
 		 * tables to defuse autovacuum.
-		 *
-		 * rand1 and rand2 are a kludge providing sorta unique name; without
-		 * it, schema name can be reused immediately after backend exit before
-		 * it was dropped at peers. An alternative which existed previously --
-		 * running full-fledged xact with transactional ddl in on_shmem_exit
-		 * hook -- is hard because of commit.c on on_shmem_exit cleanup
-		 * interference and fragile (what if xact aborted?)
 		 */
-		temp_schema = psprintf("mtm_tmp_%d_%d_%llx%llx",
-							   Mtm->my_node_id, MyBackendId,
-							   (unsigned long long) (rand1 * ((unsigned long long) 1 << 48)),
-							   (unsigned long long) (rand2 * ((unsigned long long) 1 << 48)));
+		temp_schema = psprintf("mtm_tmp_%d_%d",
+							   Mtm->my_node_id, MyBackendId);
 		memcpy(&MtmTempSchema, temp_schema, strlen(temp_schema) + 1);
 		before_shmem_exit(temp_schema_at_exit, (Datum) 0);
 		TempDropRegistered = true;
@@ -647,8 +622,14 @@ MtmGucSerialize(void)
  *
  *****************************************************************************/
 
+/*
+ * if non-transactional, concurrent defines whether DDL must be executed in
+ * main receiver or concurrently in workers. Doesn't matter for
+ * transactional (it is executed in the context of xact).
+ */
 static void
-MtmProcessDDLCommand(char const *queryString, bool transactional)
+MtmProcessDDLCommand(char const *queryString, bool transactional,
+					 bool concurrent)
 {
 	if (transactional)
 	{
@@ -659,14 +640,15 @@ MtmProcessDDLCommand(char const *queryString, bool transactional)
 		queryString = psprintf("%s %s", gucCtx, queryString);
 
 		/* Transactional DDL */
-		mtm_log(DDLStmtOutgoing, "Sending DDL: %s", queryString);
+		mtm_log(DDLStmtOutgoing, "sending DDL: %s", queryString);
 		LogLogicalMessage("D", queryString, strlen(queryString) + 1, true);
 	}
 	else
 	{
 		/* Concurrent DDL */
-		mtm_log(DDLStmtOutgoing, "Sending concurrent DDL: %s", queryString);
-		XLogFlush(LogLogicalMessage("C", queryString, strlen(queryString) + 1, false));
+		mtm_log(DDLStmtOutgoing, "sending concurrent DDL: %s", queryString);
+		XLogFlush(LogLogicalMessage(concurrent ? "C" : "V",
+									queryString, strlen(queryString) + 1, false));
 	}
 }
 
@@ -1000,7 +982,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_CreateTableSpaceStmt:
 		case T_DropTableSpaceStmt:
 			SkipCommand(true);
-			MtmProcessDDLCommand(stmt_string, false);
+			MtmProcessDDLCommand(stmt_string, false, true);
 			break;
 
 			/*
@@ -1130,7 +1112,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 				if (stmt->concurrent && context == PROCESS_UTILITY_TOPLEVEL)
 				{
-					MtmProcessDDLCommand(stmt_string, false);
+					MtmProcessDDLCommand(stmt_string, false, true);
 					SkipCommand(true);
 				}
 				break;
@@ -1191,7 +1173,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				"Process DDL statement '%s', MtmTx.isReplicated=%d, MtmIsLogicalReceiver=%d",
 				stmt_string, MtmIsLogicalReceiver,
 				MtmIsLogicalReceiver);
-		MtmProcessDDLCommand(stmt_string, true);
+		MtmProcessDDLCommand(stmt_string, true, false);
 		executed = true;
 		MtmDDLStatement = stmt_string;
 	}
@@ -1300,7 +1282,7 @@ MtmExecutorStart(QueryDesc *queryDesc, int eflags)
 		 */
 		if (search_for_remote_functions(queryDesc->planstate, NULL))
 		{
-			MtmProcessDDLCommand(queryDesc->sourceText, true);
+			MtmProcessDDLCommand(queryDesc->sourceText, true, false);
 			MtmDDLStatement = queryDesc;
 			MtmTx.contains_ddl = true;
 		}
