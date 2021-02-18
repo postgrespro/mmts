@@ -21,6 +21,14 @@ extern bool MtmRemoteFunctionsUpdating;
 extern bool MtmVolksWagenMode;
 extern bool MtmIgnoreTablesWithoutPk;
 
+typedef enum
+{
+	MTM_DDL_IN_PROGRESS_NOTHING,
+	MTM_DDL_IN_PROGRESS_TX,
+	MTM_DDL_IN_PROGRESS_NONTX,
+} MtmDDLInProgress;
+
+extern MtmDDLInProgress DDLApplyInProgress;
 
 extern void MtmDDLReplicationInit(void);
 extern void MtmDDLReplicationShmemStartup(void);

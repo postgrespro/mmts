@@ -1662,7 +1662,9 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 * COMMIT PREPARED apply (and ack its receival), theoretically sender
 		 * might purge WAL with it and later respond with 'dunno, this is an
 		 * old xact and if there was a commit you should had already got it,
-		 * so just abort it'.
+		 * so just abort it'. Exception here is non-tx DDL -- by definition
+		 * it is allowed to fail (especially given it is logged before
+		 * execution).
 		 *
 		 * There is one more scenario where we can't ignore the error and
 		 * continue applying even if we applied xact in normal mode: it is
@@ -1670,9 +1672,10 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 * committed at origin. Currently only syncpoint table records are
 		 * broadcast in this way.
 		 */
-		if (rwctx->mode == REPLMODE_RECOVERY ||
+		if ((rwctx->mode == REPLMODE_RECOVERY ||
 			!TransactionIdIsValid(rwctx->origin_xid) ||
-			rwctx->bdr_like)
+			 rwctx->bdr_like) &&
+			DDLApplyInProgress != MTM_DDL_IN_PROGRESS_NONTX)
 		{
 			if (rwctx->mode == REPLMODE_RECOVERY)
 				mtm_log(WARNING, "got ERROR while applying in recovery, origin_xid=" XID_FMT,

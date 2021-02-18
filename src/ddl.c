@@ -90,13 +90,14 @@ bool		MtmMonotonicSequences;
 char	   *MtmRemoteFunctionsList;
 bool		MtmIgnoreTablesWithoutPk;
 
+MtmDDLInProgress DDLApplyInProgress;
+
 static char MtmTempSchema[NAMEDATALEN];
 static bool TempDropRegistered;
 
 static void const *MtmDDLStatement;
 
 static Node *MtmCapturedDDL;
-static bool DDLApplyInProgress;
 
 static HTAB *MtmGucHash = NULL;
 static dlist_head MtmGucList = DLIST_STATIC_INIT(MtmGucList);
@@ -1411,18 +1412,19 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 	 * MtmCapturedDDL. In case of error both of this variables are reset by
 	 * MtmDDLResetApplyState().
 	 */
-	Assert(DDLApplyInProgress == false);
+	Assert(DDLApplyInProgress == MTM_DDL_IN_PROGRESS_NOTHING);
 	Assert(MtmCapturedDDL == NULL);
 
-	DDLApplyInProgress = true;
+	DDLApplyInProgress = transactional ? MTM_DDL_IN_PROGRESS_TX :
+		MTM_DDL_IN_PROGRESS_NONTX;
 	SPI_connect();
 	rc = SPI_execute(messageBody, false, 0);
 	SPI_finish();
-	DDLApplyInProgress = false;
 
 	if (rc < 0)
 		elog(ERROR, "Failed to execute utility statement %s", messageBody);
 
+	/* c.f. MtmProcessUtilityReceiver */
 	if (MtmCapturedDDL)
 	{
 		MemoryContextSwitchTo(MtmApplyContext);
@@ -1520,6 +1522,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 	if (transactional)
 		MtmFinishDDLCommand();
 
+	DDLApplyInProgress = MTM_DDL_IN_PROGRESS_NOTHING;
 	debug_query_string = NULL;
 }
 
