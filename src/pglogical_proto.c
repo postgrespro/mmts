@@ -539,6 +539,7 @@ pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* skip CSN */
 
 	pq_sendstring(out, txn->gid);
+	pq_sendint64(out, txn->xid);
 
 	mtm_log(ProtoTraceSender, "pglogical_write_abort_prepared %s", txn->gid);
 }

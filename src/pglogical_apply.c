@@ -681,9 +681,9 @@ mtm_send_prepare_reply(TransactionId xid, int dst_node_id,
 
 /*
  * Send response to coordinator after paxos 2a msg.
- * The same stream name as in mtm_send_prepare_reply is used to make
+ * The same xid based stream name as in mtm_send_prepare_reply is used to make
  * coordinators life eaiser.
- * COMMIT PREPARED ack is also sent from here.
+ * COMMIT PREPARED ack is also sent from here, abusing the name.
  */
 static void
 mtm_send_2a_reply(char *gid, TransactionId xid, GlobalTxStatus status,
@@ -1089,7 +1089,10 @@ process_remote_commit(StringInfo in,
 			}
 		case PGLOGICAL_ABORT_PREPARED:
 			{
+				TransactionId xid;
+
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
+				xid = pq_getmsgint64(in);
 
 				/*
 				 * Unlike CP handling, there is no need to persist
@@ -1125,22 +1128,37 @@ process_remote_commit(StringInfo in,
 				if (!rwctx->gtx)
 				{
 					mtm_log(MtmApplyTrace, "skipping ABORT PREPARED of %s as there is no xact", gid);
-					break;
+				}
+				else
+				{
+					MtmBeginSession(origin_node);
+					StartTransactionCommand();
+
+					if (rwctx->mode == REPLMODE_NORMAL &&
+						IS_EXPLICIT_2PC_GID(gid))
+					{
+						rwctx->reply_pending = true;
+					}
+
+					FinishPreparedTransaction(gid, false, false);
+					CommitTransactionCommand();
+					rwctx->gtx->state.status = GTXAborted;
+					GlobalTxRelease(rwctx->gtx);
+					rwctx->gtx = NULL;
+
+					mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+					MtmEndSession(origin_node, true);
+					mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
+					MemoryContextSwitchTo(MtmApplyContext);
 				}
 
-				MtmBeginSession(origin_node);
-				StartTransactionCommand();
+				/* send AP ack if that was explicit 2PC */
+				if (rwctx->mode == REPLMODE_NORMAL && IS_EXPLICIT_2PC_GID(gid))
+					mtm_send_2a_reply(gid, xid, GTXAborted,
+									  InvalidGTxTerm, origin_node);
+				rwctx->reply_pending = false;
 
-				FinishPreparedTransaction(gid, false, false);
-				CommitTransactionCommand();
-				rwctx->gtx->state.status = GTXAborted;
-				GlobalTxRelease(rwctx->gtx);
-				rwctx->gtx = NULL;
 
-				mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
-				MemoryContextSwitchTo(MtmApplyContext);
-				MtmEndSession(origin_node, true);
-				mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
 				break;
 			}
 		default:

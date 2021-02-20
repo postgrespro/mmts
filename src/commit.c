@@ -921,7 +921,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		 * recovery if check in MtmBeginTransaction was ignored with mtm_admin
 		 * or failure happened later). Doing so doesn't seem to be too bad.
 		 */
-		if (isCommit && MtmWaitPeerCommits)
+		if (MtmWaitPeerCommits)
 		{
 			sprintf(stream, "xid" XID_FMT, gtx->xinfo.xid);
 			dmq_stream_subscribe(stream);
@@ -941,7 +941,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 	}
 	PG_END_TRY();
 
-	if (!isCommit || !MtmWaitPeerCommits)
+	if (!MtmWaitPeerCommits)
 		return;
 
 	gen = MtmGetCurrentGen(false);
@@ -957,7 +957,8 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		MtmGeneration new_gen = MtmGetCurrentGen(false);
 		ereport(WARNING,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("[multimaster] failed to collect commit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+				 errmsg("[multimaster] failed to collect %s acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+						isCommit ? "commit" : "abort",
 						gid,
 						gen.num,
 						maskToString(gen.members),
@@ -973,7 +974,8 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		}
 		ereport(WARNING,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("[multimaster] failed to collect commit acks of transaction %s at nodes %s due to network error",
+				 errmsg("[multimaster] failed to collect %s acks of transaction %s at nodes %s due to network error",
+						isCommit ? "commit" : "abort",
 						gid,
 						maskToString(failed_cohort))));
 	}
