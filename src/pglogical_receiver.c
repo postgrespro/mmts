@@ -725,6 +725,21 @@ pglogical_receiver_main(Datum main_arg)
 												"MessageContext",
 												ALLOCSET_DEFAULT_SIZES);
 
+		/*
+		 * Make sure config is up to date as we are going to check out
+		 * backup_node_id; if it has been cleared we must be aware of that.
+		 */
+		AcceptInvalidationMessages();
+		if (!receiver_mtm_cfg_valid)
+		{
+			MtmConfigFree(receiver_mtm_cfg);
+			receiver_mtm_cfg = MtmLoadConfig(FATAL);
+			if (MtmNodeById(receiver_mtm_cfg, rctx->w.sender_node_id) == NULL)
+					proc_exit(0);
+
+			receiver_mtm_cfg_valid = true;
+		}
+
 		if (rctx->w.mode == REPLMODE_RECOVERY)
 		{
 			/*
