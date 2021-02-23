@@ -1,5 +1,6 @@
 use strict;
 use warnings;
+use Carp;
 use PostgresNode;
 use Cluster;
 use TestLib;
@@ -95,9 +96,27 @@ $cluster->pgbench(0, ('-i', '-n', -s => '1') );
 my $pgb1 = $cluster->pgbench_async(0, ('-n', -T => '15', -j=>'5', -c => '5') );
 sleep(5);
 
-my $pid0 = $cluster->safe_psql(0, "SELECT pid FROM pg_stat_activity
-	WHERE	backend_type LIKE 'client backend'
-			AND query LIKE 'UPDATE%' LIMIT 1;");
+my $pid0;
+my $attempts     = 0;
+while (1)
+{
+	$pid0 = $cluster->safe_psql(0, "SELECT pid FROM pg_stat_activity
+								WHERE	backend_type LIKE 'client backend'
+								AND query LIKE 'UPDATE%' LIMIT 1;");
+
+	# bf says we might be really unlucky to find no backend doing update
+	if ($pid0 ne "")
+	{
+		last;
+	}
+	# Wait 0.1 second before retrying.
+	usleep(100_000);
+	$attempts++;
+	if ($attempts >= 180*10)
+	{
+		croak 'failed to fetch backend pid';
+	}
+}
 
 # Simulate hard crash
 note("Simulate hard crash of a backend by SIGKILL to $pid0");
