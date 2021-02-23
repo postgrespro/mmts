@@ -508,14 +508,14 @@ pglogical_receiver_at_exit(int status, Datum arg)
 	/* seems better to log this *before* we start killing workers */
 	/* monitor will restart us immediately if our mode has changed */
 	if (rctx->w.mode != MtmGetReceiverMode(rctx->w.sender_node_id))
-		mtm_log(MtmApplyError, "receiver %s is exiting to reconnect in another mode",
+		mtm_log(MtmReceiverState, "receiver %s is exiting to reconnect in another mode",
 				MyBgworkerEntry->bgw_name);
 	else
 		/*
 		 * TODO: it would be nice to distinguish exit on error here from
 		 * normal one after SIGTERM (instance shutdown, for example).
 		 */
-		mtm_log(MtmApplyError, "receiver %s is exiting",
+		mtm_log(MtmReceiverState, "receiver %s is exiting",
 				MyBgworkerEntry->bgw_name);
 
 	/*
@@ -626,7 +626,7 @@ pglogical_receiver_main(Datum main_arg)
 								  (Datum) 0);
 
 	BgwPoolStart(sender, MyBgworkerEntry->bgw_name, db_id, user_id);
-	mtm_log(MtmReceiverStart, "receiver %s started.", MyBgworkerEntry->bgw_name);
+	mtm_log(MtmReceiverState, "receiver %s started.", MyBgworkerEntry->bgw_name);
 
 	/* TODO there used to be PG_TRY block, reindent it back */
 	{
@@ -685,7 +685,7 @@ pglogical_receiver_main(Datum main_arg)
 			if (rc & WL_LATCH_SET)
 				ResetLatch(MyLatch);
 		}
-		mtm_log(MtmReceiverStart, "registered as running in %s mode",
+		mtm_log(MtmReceiverState, "registered as running in %s mode",
 				MtmReplicationModeMnem[rctx->w.mode]);
 
 		/*
@@ -806,7 +806,7 @@ pglogical_receiver_main(Datum main_arg)
 			appendStringInfo(message, "replication_node = %d", sender);
 			appendStringInfo(message, ", mode = %s",
 							 MtmReplicationModeMnem[rctx->w.mode]);
-			appendStringInfo(message, ", remote_start = %" INT64_MODIFIER "x",
+			appendStringInfo(message, ", remote_start = %" INT64_MODIFIER "X",
 							 remote_start);
 
 			appendStringInfo(message, ", syncpoint_vector (origin/local) = {");
@@ -826,7 +826,7 @@ pglogical_receiver_main(Datum main_arg)
 			}
 			appendStringInfo(message, "}");
 
-			mtm_log(MtmReceiverStart, "%s", message->data);
+			mtm_log(MtmReceiverState, "%s", message->data);
 		}
 
 		Assert(filter_map && spvector);
@@ -853,7 +853,7 @@ pglogical_receiver_main(Datum main_arg)
 		}
 		PQclear(res);
 		resetPQExpBuffer(query);
-		mtm_log(MtmReceiverStart, "START_REPLICATION done");
+		mtm_log(MtmReceiverStateDebug, "START_REPLICATION done");
 
 		for (;;)				/* main loop, jump out only with ERROR */
 		{

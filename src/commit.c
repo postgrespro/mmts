@@ -139,7 +139,7 @@ mtm_commit_cleanup(int status, Datum arg)
 					StartTransactionCommand();
 					FinishPreparedTransaction(mtm_commit_state.gid, false, false);
 					mtm_commit_state.gtx->state.status = GTXAborted;
-					mtm_log(MtmTxFinish, "TXFINISH: %s aborted as own orphaned not precomitted",
+					mtm_log(MtmTxFinish, "%s aborted as own orphaned not precomitted",
 							mtm_commit_state.gid);
 					CommitTransactionCommand();
 
@@ -437,8 +437,8 @@ MtmTwoPhaseCommit(void)
 					   xact_gen.num);
 		sprintf(dmq_stream_name, "xid" XID_FMT, xid);
 		dmq_stream_subscribe(dmq_stream_name);
-		mtm_log(MtmTxTrace, "%s subscribed for %s", mtm_commit_state.gid,
-				dmq_stream_name);
+		mtm_log(MtmCoordinatorTrace, "%s subscribed for %s",
+				mtm_commit_state.gid, dmq_stream_name);
 
 		/* prepare transaction on our node */
 		mtm_commit_state.gtx = GlobalTxAcquire(mtm_commit_state.gid, true,
@@ -472,7 +472,7 @@ MtmTwoPhaseCommit(void)
 		mtm_commit_state.gtx->prepared = true;
 		ReleasePB(); /* don't hold generation switch anymore */
 		/* end_lsn of PREPARE */
-		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
+		mtm_log(MtmTxTrace, "%s prepared at %X/%X",
 				mtm_commit_state.gid,
 				(uint32) (XactLastCommitEnd >> 32),
 				(uint32) (XactLastCommitEnd));
@@ -561,7 +561,7 @@ MtmTwoPhaseCommit(void)
 		 * receive our precommit and resolve xact to commit without us
 		 */
 		mtm_commit_state.gtx->state = gtx_state;
-		mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", mtm_commit_state.gid);
+		mtm_log(MtmTxTrace, "%s precommitted", mtm_commit_state.gid);
 
 		/*
 		 * Just skip precommit tour if I am online in my referee gen,
@@ -636,7 +636,7 @@ precommit_tour_done:
 		StartTransactionCommand();
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);
 		mtm_commit_state.gtx->state.status = GTXCommitted;
-		mtm_log(MtmTxFinish, "TXFINISH: %s committed", mtm_commit_state.gid);
+		mtm_log(MtmTxFinish, "%s committed", mtm_commit_state.gid);
 		GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
 
@@ -680,7 +680,7 @@ precommit_tour_done:
 
 commit_tour_done:
 		dmq_stream_unsubscribe();
-		mtm_log(MtmTxTrace, "%s unsubscribed for %s",
+		mtm_log(MtmCoordinatorTrace, "%s unsubscribed for %s",
 				mtm_commit_state.gid, dmq_stream_name);
 		mtm_commit_state.inside_commit_sequence = false;
 		/*
@@ -804,7 +804,7 @@ MtmExplicitPrepare(char *gid)
 
 		sprintf(stream, "xid" XID_FMT, xid);
 		dmq_stream_subscribe(stream);
-		mtm_log(MtmTxTrace, "%s subscribed for %s", gid, stream);
+		mtm_log(MtmCoordinatorTrace, "%s subscribed for %s", gid, stream);
 
 
 		ret = PrepareTransactionBlockWithState3PC(
@@ -819,7 +819,7 @@ MtmExplicitPrepare(char *gid)
 		CommitTransactionCommand(); /* prepared */
 		mtm_commit_state.gtx->prepared = true;
 		ReleasePB(); /* don't hold generation switch anymore */
-		mtm_log(MtmTxFinish, "TXFINISH: %s prepared at %X/%X",
+		mtm_log(MtmTxTrace, "%s prepared at %X/%X",
 				mtm_commit_state.gid,
 				(uint32) (XactLastCommitEnd >> 32),
 				(uint32) (XactLastCommitEnd));
@@ -877,7 +877,7 @@ MtmExplicitPrepare(char *gid)
 		GlobalTxRelease(mtm_commit_state.gtx);
 		mtm_commit_state.gtx = NULL;
 		dmq_stream_unsubscribe();
-		mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
+		mtm_log(MtmCoordinatorTrace, "%s unsubscribed for %s", gid, stream);
 		mtm_commit_state.inside_commit_sequence = false;
 	}
 	PG_CATCH();
@@ -929,7 +929,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 
 		FinishPreparedTransaction(gid, isCommit, false);
 		gtx->state.status = isCommit ? GTXCommitted : GTXAborted;
-		mtm_log(MtmTxFinish, "TXFINISH: %s %s", gid,
+		mtm_log(MtmTxFinish, "%s %s", gid,
 				isCommit ? "committed" : "aborted");
 		GlobalTxRelease((GlobalTx *) gtx);
 	}
@@ -981,7 +981,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 	}
 
 	dmq_stream_unsubscribe();
-	mtm_log(MtmTxTrace, "%s unsubscribed for %s", gid, stream);
+	mtm_log(MtmCoordinatorTrace, "%s unsubscribed for %s", gid, stream);
 }
 
 /*

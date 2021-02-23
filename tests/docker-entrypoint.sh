@@ -52,6 +52,22 @@ if [ "$1" = 'postgres' ]; then
 			# for syncpoint test.
 			wal_sender_timeout = 60s
 			wal_receiver_status_interval = 10s
+
+			# extensive logging for tests
+			multimaster.TxTrace_log_level = LOG
+			multimaster.TxFinish_log_level = LOG
+
+			multimaster.CoordinatorTrace_log_level = LOG
+
+			multimaster.BgwPoolEventDebug_log_level = LOG
+
+			multimaster.ReceiverStateDebug_log_level = LOG
+			multimaster.ApplyMessage_log_level = LOG
+			multimaster.ApplyTrace_log_level = LOG
+			multimaster.ReceiverFeedback_log_level = LOG
+
+			multimaster.StateDebug_log_level = LOG
+
 		EOF
 
 		if [ -n "$MAJOR" ]; then

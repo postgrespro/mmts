@@ -113,7 +113,7 @@ ResolveForRefereeWinner(void)
 		return;
 	}
 
-	mtm_log(ResolverState, "ResolveForRefereeWinner");
+	mtm_log(ResolverState, "resolving as referee winner");
 	gids = palloc(sizeof(pgid_t) * max_prepared_xacts);
 
 	LWLockAcquire(gtx_shared->lock, LW_SHARED);
@@ -151,7 +151,7 @@ ResolveForRefereeWinner(void)
 		FinishPreparedTransaction(gtx->gid, commit, false);
 		CommitTransactionCommand();
 		gtx->state.status = commit ? GTXCommitted : GTXAborted;
-		mtm_log(MtmTxFinish, "TXFINISH: %s %s as referee winner",
+		mtm_log(MtmTxFinish, "%s %s as referee winner",
 				gtx->gid, commit ? "committed" : "aborted");
 		GlobalTxRelease(gtx);
 	}
@@ -234,7 +234,7 @@ finish_ready(void)
 		FinishPreparedTransaction(gtx->gid, false, false);
 		CommitTransactionCommand();
 		gtx->state.status = GTXAborted;
-		mtm_log(MtmTxFinish, "TXFINISH: %s aborted as own orphaned not precommitted",
+		mtm_log(MtmTxFinish, "%s aborted as own orphaned not precommitted",
 				gtx->gid);
 		GlobalTxRelease(gtx);
 	}
@@ -357,7 +357,7 @@ scatter_status_requests(MtmConfig *mtm_cfg)
 					serialize_xstate(&gtx->xinfo, &new_gtx_state),
 					false);
 				gtx->state.proposal = new_term;
-				mtm_log(ResolverState, "proposal term (%d, %d) stamped to transaction %s",
+				mtm_log(MtmTxTrace, "proposal term (%d, %d) stamped to transaction %s",
 						new_term.ballot, new_term.node_id, gtx->gid);
 			}
 			/*
@@ -473,7 +473,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		{
 			FinishPreparedTransaction(gtx->gid, true, false);
 			gtx->state.status = GTXCommitted;
-			mtm_log(MtmTxFinish, "TXFINISH: %s committed", gtx->gid);
+			mtm_log(MtmTxFinish, "%s committed", gtx->gid);
 			GlobalTxRelease(gtx);
 			return;
 		}
@@ -481,7 +481,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 		{
 			FinishPreparedTransaction(gtx->gid, false, false);
 			gtx->state.status = GTXAborted;
-			mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gtx->gid);
+			mtm_log(MtmTxFinish, "%s aborted", gtx->gid);
 			GlobalTxRelease(gtx);
 			return;
 		}
@@ -606,7 +606,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 			Assert(gtx->state.status == msg->status);
 			FinishPreparedTransaction(msg->gid, msg->status == GTXPreCommitted,
 									  false);
-			mtm_log(MtmTxFinish, "TXFINISH: %s %s via quorum of 2a acks", msg->gid,
+			mtm_log(MtmTxFinish, "%s %s via quorum of 2a acks", msg->gid,
 					msg->status == GTXPreCommitted ? "committed" : "aborted");
 			gtx->state.status = msg->status == GTXPreCommitted ?
 				GTXCommitted : GTXAborted;

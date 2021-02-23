@@ -16,6 +16,8 @@
 struct PGLogicalOutputData;
 struct PGLRelMetaCacheEntry;
 
+extern char *walsender_name;
+
 typedef void (*pglogical_write_rel_fn) (StringInfo out, struct PGLogicalOutputData *data,
 										Relation rel	/* , struct
 														 * PGLRelMetaCacheEntry

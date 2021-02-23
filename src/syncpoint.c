@@ -75,7 +75,7 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
  * that it would be nice to apply everything before this message and confirm
  * the receival to advance the replication slot.
  *
- * The receiver doesn't actually need anyting from the sender to create
+ * The receiver doesn't actually need anything from the sender to create
  * syncpoint. It is logged only because sender knows the best when WAL becomes
  * bloated and it is time to trim it. In particular, is case of assymetric
  * node load, e.g. 1 node writes, 2 and 3 only apply, receiver 2->3 staying
@@ -250,7 +250,7 @@ SyncpointGetLatest(int origin_node_id)
 	else if (rc == SPI_OK_SELECT && SPI_processed == 0)
 	{
 		/* no saved syncpoints found, proceed as is */
-		mtm_log(MtmReceiverStart, "no saved syncpoints found");
+		mtm_log(MtmReceiverState, "no saved syncpoints found");
 	}
 	else
 	{
@@ -498,7 +498,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	filter_map = hash_create("filter", estimate_size, &hash_ctl,
 							 HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
-	mtm_log(MtmReceiverStart,
+	mtm_log(MtmReceiverState,
 			"load_filter_map from " LSN_FMT " node_id=%d current_last_lsn=" LSN_FMT,
 			start_lsn, filter_node_id, current_last_lsn);
 

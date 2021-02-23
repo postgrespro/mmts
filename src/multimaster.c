@@ -123,6 +123,81 @@ char const *const MtmMessageTagMnem[] =
 	"MtmGenVoteResponse"
 };
 
+/* copied from core */
+static const struct config_enum_entry server_message_level_options[] = {
+	{"debug5", DEBUG5, false},
+	{"debug4", DEBUG4, false},
+	{"debug3", DEBUG3, false},
+	{"debug2", DEBUG2, false},
+	{"debug1", DEBUG1, false},
+	{"debug", DEBUG2, true},
+	{"info", INFO, false},
+	{"notice", NOTICE, false},
+	{"warning", WARNING, false},
+	{"error", ERROR, false},
+	{"log", LOG, false},
+	{"fatal", FATAL, false},
+	{"panic", PANIC, false},
+	{NULL, 0, false}
+};
+
+/* keep it in sync with MtmLogTag */
+MtmLogGuc mtm_log_gucs[] = {
+	{"TxTrace", DEBUG3, 0},
+	{"TxFinish", DEBUG2, 0},
+
+	{"CoordinatorTrace", DEBUG3, 0},
+
+	{"DmqStateIntermediate", DEBUG2, 0},
+	{"DmqStateFinal", LOG, 0},
+	{"DmqTraceOutgoing", DEBUG3, 0},
+	{"DmqTraceIncoming", DEBUG3, 0},
+	{"DmqTraceShmMq", DEBUG3, 0},
+	{"DmqPqTiming", DEBUG4, 0},
+
+	{"ResolverState", LOG, 0},
+	{"ResolverTx", LOG, 0},
+	{"ResolverTasks", LOG, 0},
+
+	{"StatusRequest", LOG, 0},
+
+	{"BgwPoolEvent", LOG, 0},
+	{"BgwPoolEventDebug", DEBUG2, 0},
+
+	{"DeadlockCheck", DEBUG2, 0},
+	{"DeadlockUpdate", DEBUG2, 0},
+	{"DeadlockSerialize", DEBUG2, 0},
+
+	{"DDLStmtOutgoing", LOG, 0},
+	{"DDLStmtIncoming", LOG, 0},
+	{"DDLProcessingTrace", DEBUG2, 0},
+
+	{"ProtoTraceFilter", DEBUG3, 0},
+	{"ProtoTraceSender", DEBUG3, 0},
+	{"ProtoTraceMessage", DEBUG2, 0},
+	{"ProtoTraceState", LOG, 0},
+
+	{"ReceiverState", LOG, 0},
+	{"ReceiverStateDebug", DEBUG2, 0},
+	{"ReceiverFilter", DEBUG2, 0},
+	{"ApplyMessage", DEBUG2, 0},
+	{"ApplyTrace", DEBUG2, 0},
+	{"ApplyError", LOG, 0},
+	{"ApplyBgwFinish", LOG, 0},
+	{"ReceiverFeedback", DEBUG2, 0},
+
+	{"StateMessage", LOG, 0},
+	{"StateSwitch", LOG, 0},
+	{"StateDebug", DEBUG2, 0},
+
+	{"SyncpointCreated", LOG, 0},
+	{"SyncpointApply", LOG, 0},
+
+	{"NodeMgmt", LOG, 0},
+
+	{NULL, 0, 0} /* end of list marker */
+};
+
 /*  XXX */
 bool		MtmBackgroundWorker;
 
@@ -389,6 +464,8 @@ MtmShmemStartup(void)
 void
 _PG_init(void)
 {
+	int i;
+
 	/*
 	 * In order to create our shared memory area, we have to be loaded via
 	 * shared_preload_libraries.  If not, fall out without hooking into any of
@@ -612,6 +689,29 @@ NULL);
 		NULL
 		);
 
+	for (i = 0; mtm_log_gucs[i].name; i++)
+	{
+		MtmLogGuc *guc = &mtm_log_gucs[i];
+		char full_name[128];
+		char desc[128];
+
+		snprintf(full_name, sizeof(full_name),
+				 "multimaster.%s_log_level", guc->name);
+		snprintf(desc, sizeof(desc),
+				 "log level for %s multimaster messages", guc->name);
+		DefineCustomEnumVariable(
+			full_name,
+			desc,
+			NULL,
+			&guc->val,
+			guc->default_val,
+			server_message_level_options,
+			PGC_SUSET,
+			0,
+			NULL,
+			NULL,
+			NULL);
+	}
 
 	/* MtmDeadlockDetectorInit(MTM_MAX_NODES); */
 
@@ -1137,7 +1237,7 @@ mtm_after_node_drop(PG_FUNCTION_ARGS)
 										&is_self_isnull));
 	Assert(!is_self_isnull);
 
-	mtm_log(NodeMgmt, "Dropping node%d", node_id);
+	mtm_log(NodeMgmt, "dropping node%d", node_id);
 
 	/*
 	 * This will produce invalidation that others can consume and reload
@@ -1908,7 +2008,7 @@ gather(nodemask_t participants,
 			(*msg_count)++;
 			BIT_CLEAR(participants, sender_mask_pos);
 
-			mtm_log(MtmTxTrace,
+			mtm_log(MtmCoordinatorTrace, /* that's not accurate */
 					"gather: got message from node%d", sender_mask_pos + 1);
 		}
 		else if (sender_mask_pos != -1)

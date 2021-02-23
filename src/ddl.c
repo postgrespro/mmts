@@ -646,7 +646,8 @@ MtmProcessDDLCommand(char const *queryString, bool transactional,
 	else
 	{
 		/* Concurrent DDL */
-		mtm_log(DDLStmtOutgoing, "sending concurrent DDL: %s", queryString);
+		mtm_log(DDLStmtOutgoing, "sending non-tx %s DDL: %s",
+				queryString, concurrent ? "concurrent" : "non-concurrent");
 		XLogFlush(LogLogicalMessage(concurrent ? "C" : "V",
 									queryString, strlen(queryString) + 1, false));
 	}
@@ -1380,8 +1381,7 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 						  messageBody, strlen(messageBody) + 1, transactional);
 	}
 
-	mtm_log(DDLStmtIncoming, "%d: Executing utility statement %s",
-			MyProcPid, messageBody);
+	mtm_log(DDLStmtIncoming, "executing utility statement %s", messageBody);
 
 	debug_query_string = messageBody;
 	ActivePortal->sourceText = messageBody;

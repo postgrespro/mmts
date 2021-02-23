@@ -63,6 +63,7 @@
 #include "ddl.h"
 #include "logger.h"
 
+char *walsender_name;
 
 static int	MtmTransactionRecords;
 static TransactionId MtmCurrentXid;
@@ -325,7 +326,7 @@ pglogical_write_insert(StringInfo out, PGLogicalOutputData *data,
 					   Relation rel, HeapTuple newtuple)
 {
 
-	elog(ProtoTraceSender, "pglogical_write_insert %d", DDLInProgress);
+	mtm_log(ProtoTraceSender, "pglogical_write_insert %d", DDLInProgress);
 
 	if (DDLInProgress)
 	{
@@ -475,7 +476,7 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	pq_sendstring(out, txn->gid);
 	pq_sendstring(out, txn->state_3pc);
 
-	mtm_log(ProtoTraceSender, "XXX: pglogical_write_prepare gid=%s, state_3pc=%s, state_3pc_change=%d",
+	mtm_log(ProtoTraceSender, "pglogical_write_prepare gid=%s, state_3pc=%s, state_3pc_change=%d",
 			txn->gid, txn->state_3pc, txn->state_3pc_change);
 }
 
@@ -762,7 +763,7 @@ MtmWalsenderOnExit(int status, Datum arg)
 	}
 	LWLockRelease(Mtm->lock);
 
-	mtm_log(ProtoTraceMode, "walsender to node %d exited", receiver_node_id);
+	mtm_log(ProtoTraceState, "walsender to node %d exited", receiver_node_id);
 }
 
 static void
@@ -770,6 +771,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 {
 	ListCell   *param;
 	MtmDecoderPrivate *hooks_data;
+	MemoryContext oldcontext;
 
 	hooks_data = (MtmDecoderPrivate *) palloc0(sizeof(MtmDecoderPrivate));
 	args->private_data = hooks_data;
@@ -791,6 +793,11 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 	Mtm->peers[hooks_data->receiver_node_id - 1].walsender_pid = MyProcPid;
 	BIT_SET(Mtm->walsenders_mask, hooks_data->receiver_node_id - 1);
 	LWLockRelease(Mtm->lock);
+
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	walsender_name = psprintf("mtm-logrep-sender-%d-%d",
+							  Mtm->my_node_id, hooks_data->receiver_node_id);
+	MemoryContextSwitchTo(oldcontext);
 
 	foreach(param, args->in_params)
 	{
@@ -820,7 +827,7 @@ MtmReplicationStartupHook(struct PGLogicalStartupHookArgs *args)
 		}
 	}
 
-	mtm_log(ProtoTraceMode,
+	mtm_log(ProtoTraceState,
 			"walsender to node %d starts in %s mode",
 			hooks_data->receiver_node_id,
 			hooks_data->is_recovery ? "recovery" : "normal");

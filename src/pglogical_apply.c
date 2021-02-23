@@ -381,7 +381,7 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 									rwctx->txlist_pos);
 				}
 
-				mtm_log(MtmApplyMessage, "Executing non-tx DDL message %s", messageBody);
+				mtm_log(MtmApplyMessage, "executing non-tx DDL message %s", messageBody);
 				SetCurrentStatementStartTimestamp();
 				StartTransactionCommand();
 				MtmApplyDDLMessage(messageBody, false);
@@ -396,7 +396,7 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 				char *activity = psprintf("tx ddl %s", messageBody);
 				pgstat_report_activity(STATE_RUNNING, activity);
 				pfree(activity);
-				mtm_log(MtmApplyMessage, "Executing tx DDL message %s", messageBody);
+				mtm_log(MtmApplyMessage, "executing tx DDL message %s", messageBody);
 				MtmApplyDDLMessage(messageBody, true);
 				pgstat_report_activity(STATE_RUNNING, NULL);
 				break;
@@ -818,7 +818,7 @@ process_remote_commit(StringInfo in,
 					reply_status = msg_gtx_state.status;
 					reply_acc = msg_gtx_state.proposal;
 
-					mtm_log(MtmTxFinish, "TXFINISH: %s precommitted", gid);
+					mtm_log(MtmTxTrace, "%s precommitted", gid);
 
 					MtmEndSession(origin_node, true);
 				}
@@ -848,13 +848,12 @@ process_remote_commit(StringInfo in,
 
 				MtmBeginSession(origin_node);
 				CommitTransactionCommand();
-				mtm_log(MtmTxFinish, "finished plain commit %d-" XID_FMT " at %X/%X, replorigin_session_lsn=%X/%X, origin_node=%d",
+				mtm_log(MtmTxFinish, "finished plain commit %d-" XID_FMT " at %X/%X, replorigin_session_lsn=%X/%X",
 						origin_node, rwctx->origin_xid,
 						(uint32) (XactLastCommitEnd >> 32),
 						(uint32) (XactLastCommitEnd),
 						(uint32) (replorigin_session_origin_lsn >> 32),
-						(uint32) replorigin_session_origin_lsn,
-						origin_node
+						(uint32) replorigin_session_origin_lsn
 					);
 
 				MtmEndSession(origin_node, true);
@@ -955,7 +954,7 @@ process_remote_commit(StringInfo in,
 				MemoryContextSwitchTo(MtmApplyContext);
 				ReleasePB();
 				rwctx->gtx->prepared = true; /* now we have WAL record */
-				mtm_log(MtmTxFinish, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
+				mtm_log(MtmTxTrace, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
 
 				GlobalTxRelease(rwctx->gtx);
 				rwctx->gtx = NULL;
@@ -1027,7 +1026,7 @@ process_remote_commit(StringInfo in,
 					GlobalTxRelease(rwctx->gtx);
 					rwctx->gtx = NULL;
 					MtmEndSession(origin_node, true);
-					mtm_log(MtmTxFinish, "TXFINISH: %s committed", gid);
+					mtm_log(MtmTxFinish, "%s committed", gid);
 				}
 				/*
 				 * A subtle moment. We want to prevent getting CP before P,
@@ -1146,7 +1145,7 @@ process_remote_commit(StringInfo in,
 					GlobalTxRelease(rwctx->gtx);
 					rwctx->gtx = NULL;
 
-					mtm_log(MtmTxFinish, "TXFINISH: %s aborted", gid);
+					mtm_log(MtmTxFinish, "%s aborted", gid);
 					MtmEndSession(origin_node, true);
 					mtm_log(MtmApplyTrace, "PGLOGICAL_ABORT_PREPARED %s", gid);
 					MemoryContextSwitchTo(MtmApplyContext);
@@ -1675,7 +1674,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		edata = CopyErrorData();
 		EmitErrorReport();
 		FlushErrorState();
-		/* TODO: better add it as context */
 		if (TransactionIdIsValid(rwctx->origin_xid))
 			mtm_log(MtmApplyError, "abort transaction origin_xid=" XID_FMT,
 					rwctx->origin_xid);

@@ -938,7 +938,7 @@ MtmReportReceiverCaughtup(int node_id)
 	mtm_state->catchup_node_id = node_id;
 	mtm_state->catchup_ts = cur_time;
 	SpinLockRelease(&mtm_state->catchup_lock);
-	mtm_log(MtmStateDebug, "caughtup from node %d", node_id);
+	mtm_log(MtmStateMessage, "caughtup from node %d", node_id);
 }
 
 
@@ -1044,7 +1044,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 */
 	if (mtm_cfg->backup_node_id != MtmInvalidNodeId)
 	{
-		mtm_log(MtmStateDebug, "setting to recover from donor %d after basebackup",
+		mtm_log(MtmStateMessage, "setting to recover from donor %d after basebackup",
 				mtm_cfg->backup_node_id);
 		MtmSetReceiveMode(mtm_cfg->backup_node_id);
 		return false;
@@ -1088,7 +1088,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	LWLockRelease(Mtm->lock);
 	if (!replier_loaded)
 	{
-		mtm_log(MtmStateDebug, "not campaigning replier is not running");
+		mtm_log(MtmStateDebug, "not campaigning replier as is not running");
 		goto no_interesting_candidates;
 	}
 
@@ -1633,7 +1633,7 @@ RefereeClearGrant(void)
 		return;
 	}
 	if (atoi(PQcmdTuples(res)) > 0)
-		mtm_log(MtmStateDebug, "referee grant cleared");
+		mtm_log(MtmStateMessage, "referee grant cleared");
 	/* done */
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	/*
@@ -1960,7 +1960,7 @@ MtmSetReceiveMode(uint32 mode)
 	/* waking up receivers while disabled is not dangerous but pointless */
 	if (mode != RECEIVE_MODE_DISABLED)
 		MtmWakeupReceivers();
-	mtm_log(MtmStateDebug, "receive mode set to %s", MtmReceiveModeMnem(mode));
+	mtm_log(MtmStateMessage, "receive mode set to %s", MtmReceiveModeMnem(mode));
 }
 
 /* In what mode we should currently receive from the given node? */
@@ -3355,7 +3355,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 				FinishPreparedTransaction(gtx->gid,
 										  msg->type == MTReq_Commit,
 										  false);
-				mtm_log(MtmTxFinish, "TXFINISH: %s %s via MTReq", msg->gid,
+				mtm_log(MtmTxFinish, "%s %s via MTReq", msg->gid,
 					msg->type == MTReq_Commit ? "committed" : "aborted");
 				CommitTransactionCommand();
 				MemoryContextSwitchTo(oldcontext);

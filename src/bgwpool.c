@@ -224,7 +224,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	MtmBackgroundWorker = true;
 	MtmIsLogicalReceiver = true;
 
-	mtm_log(BgwPoolEvent, "[%d] Start background worker.", MyProcPid);
+	mtm_log(BgwPoolEvent, "bgwpool worker started");
 
 	pqsignal(SIGINT, die);
 	pqsignal(SIGQUIT, die);
@@ -319,7 +319,6 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 	}
 
 	dsm_detach(seg);
-	mtm_log(BgwPoolEvent, "Shutdown background worker %d", MyProcPid);
 }
 
 void
@@ -565,8 +564,7 @@ BgwPoolCancel(BgwPool *poolDesc)
 	poolDesc->bgwhandles = NULL;
 	txl_clear(&poolDesc->txlist);
 
-	elog(LOG, "Cancel of the receiver workers pool. Pool name = %s",
-		 poolDesc->poolName);
+	mtm_log(BgwPoolEventDebug, "all pool workers terminated");
 }
 
 int

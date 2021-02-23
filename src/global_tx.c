@@ -329,7 +329,7 @@ GlobalTxRelease(GlobalTx *gtx)
 	}
 	else if (gtx->orphaned)
 	{
-		mtm_log(ResolverTasks, "Transaction %s is orphaned", gtx->gid);
+		mtm_log(ResolverTasks, "transaction %s is orphaned", gtx->gid);
 	}
 
 	LWLockRelease(gtx_shared->lock);
@@ -432,7 +432,7 @@ GlobalTxMarkOrphaned(int node_id)
 		if (gtx->xinfo.coordinator == node_id)
 		{
 			gtx->orphaned = true;
-			mtm_log(MtmTxTrace, "%s is orphaned", gtx->gid);
+			mtm_log(ResolverTasks, "%s is orphaned", gtx->gid);
 		}
 	}
 	LWLockRelease(gtx_shared->lock);
