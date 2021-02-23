@@ -50,6 +50,7 @@ like($err_out, qr{$invalid_expr_pattern}, "node3: check error output correctness
 
 # Substep: check no problems without one node
 $nodes->[2]->stop();
+$cluster->await_nodes_after_stop( [0,1] );
 $nodes->[0]->psql($dbname,
 					"SELECT mtm.check_query('SELECT * FROM t1')",
 					stdout => \$output, stderr => \$err_out);
