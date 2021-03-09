@@ -573,7 +573,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
  iexit| SELECT ih.name,
      ih.thepath,
      interpt_pp(ih.thepath, r.thepath) AS exit
-@@ -1430,19 +1439,30 @@
+@@ -1434,19 +1443,30 @@
      p.parameter_types,
      p.from_sql
     FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql);
@@ -614,7 +614,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
      LATERAL pg_get_publication_tables((p.pubname)::text) gpt(relid),
      (pg_class c
       JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
-@@ -1631,7 +1651,7 @@
+@@ -1635,7 +1655,7 @@
      l.provider,
      l.label
     FROM (pg_seclabel l
@@ -623,7 +623,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
    WHERE (l.objsubid = 0)
  UNION ALL
   SELECT l.objoid,
-@@ -1643,7 +1663,7 @@
+@@ -1647,7 +1667,7 @@
      l.provider,
      l.label
     FROM (pg_shseclabel l
@@ -632,7 +632,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
  UNION ALL
   SELECT l.objoid,
      l.classoid,
-@@ -2037,7 +2057,7 @@
+@@ -2041,7 +2061,7 @@
      st.last_msg_receipt_time,
      st.latest_end_lsn,
      st.latest_end_time
@@ -641,7 +641,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
       LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
  pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
      pg_stat_all_indexes.indexrelid,
-@@ -2379,6 +2399,17 @@
+@@ -2383,6 +2403,17 @@
             FROM (unnest(s.stxkeys) k(k)
               JOIN pg_attribute a ON (((a.attrelid = s.stxrelid) AND (a.attnum = k.k))))
            WHERE (NOT has_column_privilege(c.oid, a.attnum, 'select'::text))))) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
