@@ -2172,6 +2172,10 @@ MtmMessagePack(MtmMessage *anymsg)
 			pq_sendbyte(s, msg->vote_ok);
 			pq_sendint64(s, msg->last_online_in);
 			pq_sendint64(s, msg->last_vote_num);
+			pq_sendint64(s, msg->curr_gen.num);
+			pq_sendint64(s, msg->curr_gen.members);
+			pq_sendint64(s, msg->curr_gen.configured);
+			pq_sendint64(s, msg->curr_gen_donors);
 			break;
 		}
 
@@ -2294,6 +2298,10 @@ MtmMessageUnpack(StringInfo s)
 			msg->vote_ok = pq_getmsgbyte(s);
 			msg->last_online_in = pq_getmsgint64(s);
 			msg->last_vote_num = pq_getmsgint64(s);
+			msg->curr_gen.num = pq_getmsgint64(s);
+			msg->curr_gen.members = pq_getmsgint64(s);
+			msg->curr_gen.configured = pq_getmsgint64(s);
+			msg->curr_gen_donors = pq_getmsgint64(s);
 
 			anymsg = (MtmMessage *) msg;
 			break;

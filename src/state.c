@@ -1423,6 +1423,13 @@ CampaignTour(MtmConfig *mtm_cfg,
 		if (!msg->vote_ok && msg->last_vote_num > max_last_vote_num)
 			max_last_vote_num = msg->last_vote_num;
 		BIT_CLEAR(not_polled_candidates, senders[i] - 1);
+
+		/*
+		 * Switch into responder's generation if it is higher -- this prevents
+		 * rare unwanted excessive recoveries, c.f. HandleGenVoteRequest.
+		 */
+		if (msg->curr_gen.num != MtmInvalidGenNum)
+			MtmConsiderGenSwitch(msg->curr_gen, msg->curr_gen_donors);
 	}
 
 	/*
@@ -1825,17 +1832,23 @@ HandleGenVoteRequest(MtmConfig *mtm_cfg, MtmGenVoteRequest *req,
 	 * however ignoring this might needlessly put healthy node into recovery:
 	 * if C died, both A and B vote for excluding it and A already switched
 	 * into AB gen while B is not aware about the election yet, A's 'ok' reply
-	 * will force B into recovery as its last_online_in of A is higher than B
+	 * will force B into recovery as last_online_in of A is higher than B's
 	 * one.
-	 *
-	 * Requester must soon learn about our current gen and change his mind
-	 * anyway.
 	 */
 	if (MtmGetCurrentGenNum() >= req->gen.num)
 	{
 		mtm_log(MtmStateDebug, "refusing the vote for num " UINT64_FORMAT " as my current gen num " UINT64_FORMAT,
 				req->gen.num, MtmGetCurrentGenNum());
 		resp.vote_ok = false;
+		/* ask to increment gen num on the next campaign... */
+		resp.last_vote_num = mtm_state->last_vote.num;
+		/*
+		 * ... but also ensure campaigner is aware of our current gen before
+		 * he makes the next attempt -- in the situation described above he
+		 * won't need it
+		 */
+		resp.curr_gen = MtmGetCurrentGen(true);
+		resp.curr_gen_donors = mtm_state->donors;
 		goto voted;
 	}
 	/* already voted for exactly this gen, can safely confirm it again */

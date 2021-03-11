@@ -152,6 +152,12 @@ typedef struct
 	 * replier couldn't vote because its last_vote is higher.
 	 */
 	uint64				last_vote_num;
+	/*
+	 * curr gen donors of the responder and its donors. Sometimes we wish to
+	 * send it along with refusal to vote, see HandleGenVoteRequest.
+	 */
+	MtmGeneration		curr_gen;
+	uint64_t			curr_gen_donors;
 } MtmGenVoteResponse;
 
 
