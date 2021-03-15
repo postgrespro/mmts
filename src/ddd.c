@@ -77,6 +77,15 @@ MtmDetectGlobalDeadLock(PGPROC *proc)
 	Assert(proc == MyProc);
 
 	/*
+	 * These locks never participate in deadlocks, ignore them. Without it,
+	 * spurious deadlocks might be reported due to concurrency on rel
+	 * extension.
+	 */
+	if (LOCK_LOCKTAG(*lock) == LOCKTAG_RELATION_EXTEND ||
+		(LOCK_LOCKTAG(*lock) == LOCKTAG_PAGE))
+		return false;
+
+	/*
 	 * There is no need to check for deadlocks in recovery: all
 	 * conflicting transactions must be eventually committed/aborted
 	 * by the resolver. It would not be fatal, but restarting due to
