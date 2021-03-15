@@ -23,13 +23,4 @@
 #define on_commits_compat() (on_commits)
 #endif
 
-#ifdef XID_IS_64BIT
-#define pq_sendxid(s, xid) (pq_sendint64((s), (xid))
-#define pq_getmsgxid(s) (pq_getmsgint64(s))
-#else
-#define pq_sendxid(s, xid) (pq_sendint32((s), (xid))
-#define pq_getmsgxid(s) (pq_getmsgint32(s))
-#endif
-
-
 #endif							/* MTMCOMPAT_H */
