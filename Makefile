@@ -96,7 +96,7 @@ start: temp-install
 	$(MKDIR_P) '$(CURDIR)'/tmp_check
 	cd $(srcdir) && TESTDIR='$(CURDIR)' \
 		$(with_temp_install) \
-		PG_REGRESS='$(top_builddir)/src/test/regress/pg_regress' \
+		PG_REGRESS='$(CURDIR)/$(top_builddir)/src/test/regress/pg_regress' \
 		perl $(PG_PROVE_FLAGS) run.pl --action=start $(RUN_OPTS)
 
 stop:
