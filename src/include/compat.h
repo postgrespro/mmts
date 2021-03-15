@@ -2,12 +2,11 @@
 #define MTMCOMPAT_H
 
 /* EE pooler gets rid of static variable */
-/* TODO: uncomment once pooler lands into 13 */
-/* #ifdef PGPRO_EE */
-/* #define FeBeWaitSetCompat() (MyProcPort->pqcomm_waitset) */
-/* #else */
+#ifdef PGPRO_EE
+#define FeBeWaitSetCompat() (MyProcPort->pqcomm_waitset)
+#else
 #define FeBeWaitSetCompat() (FeBeWaitSet)
-/* #endif */
+#endif
 
 #ifdef PGPRO_EE /* atx */
 #define BeginTransactionBlockCompat() (BeginTransactionBlock(false))
