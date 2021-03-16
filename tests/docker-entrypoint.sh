@@ -70,14 +70,6 @@ if [ "$1" = 'postgres' ]; then
 
 		EOF
 
-		if [ -n "$MAJOR" ]; then
-			echo 'multimaster.major_node = on' >> $PGDATA/postgresql.conf
-		fi
-
-		if [ -n "$REFEREE" ]; then
-			echo 'multimaster.referee = on' >> $PGDATA/postgresql.conf
-		fi
-
 		if [ -n "$REFEREE_CONNSTR" ]; then
 			echo "multimaster.referee_connstring = '$REFEREE_CONNSTR'" >> $PGDATA/postgresql.conf
 		fi

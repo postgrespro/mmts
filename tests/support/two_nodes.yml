@@ -55,7 +55,6 @@ services:
       POSTGRES_USER: 'pg'
       POSTGRES_DB: 'regression'
       NODE_ID: 1
-      REFEREE: 'on'
     ports:
       - "15435:5432"
     networks:
