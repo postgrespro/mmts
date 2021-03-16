@@ -3696,13 +3696,14 @@ is_basebackuped(MtmConfig *mtm_cfg)
 	}
 	CommitTransactionCommand();
 
-	if (n_missing_slots == 0)
-		return false;
-	else if (n_missing_slots == mtm_cfg->n_nodes - 1) /* n_nodes includes me */
-		return true;
-	else
-		mtm_log(ERROR, "Missing %d replication slots out of %d",
-				n_missing_slots, mtm_cfg->n_nodes);
+	/*
+	 * XXX: we will be confused here if user accidently drops mm slot, it
+	 * would be nicer to have more accurate detector. Note that we can't check
+	 * 'n_missing_slots == n_nodes - 1' because 1) new node still doesn't know
+	 * its id; 2) it itself might or might not be initialized at donor on the
+	 * moment of backup.
+	 */
+	return n_missing_slots != 0;
 }
 
 static void

@@ -101,8 +101,9 @@ if ($concurrent_load)
 {
 	$cluster->pgbench(0, ('-N', '-n', -t => '100') );
 }
-# ensure monitor creates slot for new node on donor which will be used by
-# basebackup before proceeding
+# Ensure monitor creates slot for new node on donor. We don't use it for
+# basebackup anymore, but this is still a good idea (it would be even better to
+# wait for logical slot creation too).
 $cluster->poll_query_until(0, "select exists(select * from pg_replication_slots where slot_name = 'mtm_filter_slot_${new_node_id}');")
     or croak "timed out waiting for slot creation";
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
