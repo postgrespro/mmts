@@ -211,10 +211,6 @@ process_remote_begin(StringInfo s, MtmReceiverWorkerContext *rwctx)
 
 	StartTransactionCommand();
 
-	/* ddd */
-	rwctx->my_xid = GetCurrentTransactionId();
-	// MtmDeadlockDetectorAddXact(rwctx->my_xid, gtid);
-
 	suppress_internal_consistency_checks = true;
 }
 
@@ -859,7 +855,6 @@ process_remote_commit(StringInfo in,
 				MtmEndSession(origin_node, true);
 
 				rwctx->origin_xid = InvalidTransactionId;
-				rwctx->my_xid = InvalidTransactionId;
 
 				/* xxx why we need this */
 				InterruptPending = false;
@@ -877,7 +872,6 @@ process_remote_commit(StringInfo in,
 				GTxState gtx_state;
 
 				Assert(IsTransactionState() && TransactionIdIsValid(xid));
-				Assert(xid == rwctx->my_xid);
 
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 				xstate = pq_getmsgstring(in);
@@ -978,8 +972,6 @@ process_remote_commit(StringInfo in,
 				 * node.
 				 */
 				rwctx->origin_xid = InvalidTransactionId;
-				rwctx->my_xid = InvalidTransactionId;
-				// MtmDeadlockDetectorRemoveXact(xid);
 
 				/*
 				 * Reset on_commit_actions.
@@ -1485,7 +1477,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 	MemoryContext old_context = CurrentMemoryContext;
 
 	rwctx->origin_xid = InvalidTransactionId;
-	rwctx->my_xid = InvalidTransactionId;
 	rwctx->bdr_like = false;
 
 	s.data = work;
@@ -1751,7 +1742,6 @@ MtmExecutor(void *work, size_t size, MtmReceiverWorkerContext *rwctx)
 		 */
 		if (TransactionIdIsValid(rwctx->origin_xid))
 		{
-			// MtmDeadlockDetectorRemoveXact(current_gtid.my_xid);
 			if (rwctx->mode == REPLMODE_NORMAL)
 				mtm_send_prepare_reply(rwctx->origin_xid,
 									   rwctx->sender_node_id,

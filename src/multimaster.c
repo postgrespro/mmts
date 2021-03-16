@@ -454,7 +454,6 @@ MtmShmemStartup(void)
 	if (PreviousShmemStartupHook)
 		PreviousShmemStartupHook();
 
-	// MtmDeadlockDetectorShmemStartup(MTM_MAX_NODES);
 	MtmDDLReplicationShmemStartup();
 	MtmStateShmemStartup();
 	MtmSharedShmemStartup();
@@ -712,8 +711,6 @@ NULL);
 			NULL,
 			NULL);
 	}
-
-	/* MtmDeadlockDetectorInit(MTM_MAX_NODES); */
 
 	/*
 	 * Request additional shared resources.	 (These are no-ops if we're not in

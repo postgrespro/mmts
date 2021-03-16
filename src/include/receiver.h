@@ -41,7 +41,6 @@ typedef struct
 	 * Info about xact currently being executed
 	 */
 	TransactionId		origin_xid;
-	TransactionId		my_xid;
 	bool				reply_pending;
 	/*
 	 * true means this is xact with plain commit, so we cannot ignore
