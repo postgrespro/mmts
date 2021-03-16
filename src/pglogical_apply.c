@@ -871,8 +871,6 @@ process_remote_commit(StringInfo in,
 				XactInfo xinfo;
 				GTxState gtx_state;
 
-				Assert(IsTransactionState() && TransactionIdIsValid(xid));
-
 				strncpy(gid, pq_getmsgstring(in), sizeof gid);
 				xstate = pq_getmsgstring(in);
 				deserialize_xstate(xstate, &xinfo, &gtx_state, ERROR);
