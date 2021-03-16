@@ -1542,17 +1542,22 @@ mtm_make_table_local(PG_FUNCTION_ARGS)
 	rel = table_openrv(rv, RowExclusiveLock);
 	if (rel != NULL)
 	{
-		char	   *tableName = get_rel_name(reloid);
+		char	   *table = get_rel_name(reloid);
+		Name		tableName = (Name) palloc0(NAMEDATALEN);
 		Oid			schemaid = get_rel_namespace(reloid);
-		char	   *schemaName = get_namespace_name(schemaid);
+		char	   *schema = get_namespace_name(schemaid);
+		Name		schemaName = (Name) palloc0(NAMEDATALEN);
+
+		strncpy(NameStr(*schemaName), schema, NAMEDATALEN);
+		strncpy(NameStr(*tableName), table, NAMEDATALEN);
 
 		tupDesc = RelationGetDescr(rel);
 
 		/* Form a tuple. */
 		memset(nulls, false, sizeof(nulls));
 
-		values[Anum_mtm_local_tables_rel_schema - 1] = CStringGetDatum(schemaName);
-		values[Anum_mtm_local_tables_rel_name - 1] = CStringGetDatum(tableName);
+		values[Anum_mtm_local_tables_rel_schema - 1] = NameGetDatum(schemaName);
+		values[Anum_mtm_local_tables_rel_name - 1] = NameGetDatum(tableName);
 
 		tup = heap_form_tuple(tupDesc, values, nulls);
 
