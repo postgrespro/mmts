@@ -810,7 +810,7 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 					break;
 				}
 
-				/* disable functiob body check at replica */
+				/* disable function body check at replica */
 			case T_CreateFunctionStmt:
 				check_function_bodies = false;
 				break;

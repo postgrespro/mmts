@@ -438,7 +438,7 @@ sub is_data_identic()
 		}
 		elsif ($checksum ne $current_hash)
 		{
-			note("got different hashes: $checksum ang $current_hash");
+			note("got different hashes: $checksum and $current_hash");
 			return 0;
 		}
 	}

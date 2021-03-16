@@ -357,7 +357,7 @@ More or less same algorithm is implemented in [commit.tla] and can be checked in
 
 Notes:
 
-[1] Now we do not abort in this case but just wait on lock. However if that local transaction will be successfully prepared then it will definetly catch a global deadlock with tx waiting for it. So it may be a good idea to abort one of them earlier -- probably a later one, since it didn't yet used resources of walsender/walreceivers and that will be cheaper for whole system.
+[1] Now we do not abort in this case but just wait on lock. However if that local transaction will be successfully prepared then it will definitely catch a global deadlock with tx waiting for it. So it may be a good idea to abort one of them earlier -- probably a later one, since it didn't yet used resources of walsender/walreceivers and that will be cheaper for whole system.
 
 Bibliography:
 

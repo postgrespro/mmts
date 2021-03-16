@@ -691,7 +691,7 @@ generation whenever it is present in the clique and either
    present in current_gen. i.e. we should exclude someone to proceed.
 
 How to recover initially, to decrease the lag without forcing nodes to wait for
-us? The idea is to collect with heartbeats also last_online_in of neightbours.
+us? The idea is to collect with heartbeats also last_online_in of neighbours.
 And node always before initiaing voting for adding itself would either make sure
 it most probably (unless many events pass during voting period) won't need
 recovery at all (its last_online_in is the same as clique's max) or it first

@@ -23,7 +23,7 @@ VARIABLES
          \* local clog of node n
   acks, \* tx -> number of PREPARE acks
   clog,  \* tx -> TRUE (commit) | FALSE (abort): global clog (paxos emulation)
-  gens   \* Sequence of all ever elected generations. Models possiblity of
+  gens   \* Sequence of all ever elected generations. Models possibility of
          \* learning newer gen existence at any moment.
 
 

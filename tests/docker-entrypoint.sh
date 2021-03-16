@@ -42,7 +42,7 @@ if [ "$1" = 'postgres' ]; then
 			# exclusions on weak machines during normal work.
                         # It was also noticed that if extensive logging is enabled
 			# (older, at least pre #6392) journald might not be able
-			# to swallow logs in time which also provoked exlusions
+			# to swallow logs in time which also provoked exclusions
 			# with 2s timeout
 			multimaster.heartbeat_recv_timeout = 2000
 			multimaster.heartbeat_send_timeout = 200

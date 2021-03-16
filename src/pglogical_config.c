@@ -261,14 +261,14 @@ process_parameters_v1(List *options, PGLogicalOutputData *data)
 
 			case PARAM_UNRECOGNISED:
 				ereport(DEBUG1,
-						(MTM_ERRMSG("Unrecognised pglogical parameter %s ignored", elem->defname)));
+						(MTM_ERRMSG("Unrecognized pglogical parameter %s ignored", elem->defname)));
 				break;
 		}
 	}
 }
 
 /*
- * Read parameters sent by client at startup and store recognised
+ * Read parameters sent by client at startup and store recognized
  * ones in the parameters PGLogicalOutputData.
  *
  * The PGLogicalOutputData must have all client-surprised parameter fields

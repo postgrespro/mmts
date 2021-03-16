@@ -127,7 +127,7 @@ MtmHandleApplyError(void)
 		case ERRCODE_INDEX_CORRUPTED:
 
 			/*
-			 * Should we really treate this errors as fatal? case
+			 * Should we really treat this errors as fatal? case
 			 * ERRCODE_SYSTEM_ERROR: case ERRCODE_INTERNAL_ERROR: case
 			 * ERRCODE_OUT_OF_MEMORY:
 			 */
@@ -240,7 +240,7 @@ process_syncpoint(MtmReceiverWorkerContext *rwctx, const char *msg, XLogRecPtr r
 	/*
 	 * Postgres decoding API doesn't disclose origin info about logical
 	 * messages, so we have to work around it. Any receiver of original
-	 * message writes it in slighly different format (prefixed with 'F' and
+	 * message writes it in slightly different format (prefixed with 'F' and
 	 * origin info) so the readers of forwarded messages can distinguish them
 	 * from original messages and set proper node_id and origin_lsn.
 	 *
@@ -1036,7 +1036,7 @@ process_remote_commit(StringInfo in,
 				 *    (AB is generation, i.e. their votes are enough for commit)
 				 * 2) B initiates resolving and with A resolves to CP,
 				 *    making its own CP record.
-				 * 3) C gets and acks CP from B, but it still handn't got P
+				 * 3) C gets and acks CP from B, but it still hadn't got P
 				 *    (it might not yet realized it should recover from A or B).
 				 * 4) A also acks CP from B.
 				 * 5) C gets and acks P from A or B, so B purges WAL with P

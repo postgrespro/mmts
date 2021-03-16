@@ -539,7 +539,7 @@ _PG_init(void)
 
 	DefineCustomBoolVariable(
 							 "multimaster.monotonic_sequences",
-							 "Enforce monotinic behaviour of sequence values obtained from different nodes",
+							 "Enforce monotonic behaviour of sequence values obtained from different nodes",
 							 NULL,
 							 &MtmMonotonicSequences,
 							 false,
@@ -1169,7 +1169,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 * databases where multimaster is configured (pg_subscription is
 		 * shared catalog relation, so launcher can find it from postgres
 		 * database). Also our workers and backends are subscribed to cache
-		 * invalidations of pg_publication, so that can know aboun node
+		 * invalidations of pg_publication, so that can know about node
 		 * creating/deletion.
 		 */
 		cs_stmt->subname = psprintf(MTM_SUBNAME_FMT, node_id);
@@ -1183,7 +1183,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 			);
 
 		/*
-		 * supress unecessary and scary warning ('tables were not subscribed
+		 * suppress unnecessary and scary warning ('tables were not subscribed
 		 * ..')
 		 */
 		client_min_messages = ERROR;
@@ -1737,7 +1737,7 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	{
 		/*
 		 * After a basebackup we should first run receiver from backup source
-		 * node to start commiting prepared transaction to be able to finish
+		 * node to start committing prepared transaction to be able to finish
 		 * logical slot creation (which wait for all currently running
 		 * transactions to finish).
 		 */
@@ -1963,7 +1963,7 @@ mtm_get_bgwpool_stat(PG_FUNCTION_ARGS)
  * needed to filter out old msgs: failure detector on previous receival
  * session obviously could have given false positives, i.e. connection was
  * lost and restored before msg sent, so we'd abandoned waiting and might
- * unexpectingly receive it now.
+ * unexpectedly receive it now.
  *
  * If sendconn_cnt is not NULL, it must contain sender conn counters from
  * dmq_get_sendconn_cnt. In this case, we stop waiting for counterparty when

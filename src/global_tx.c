@@ -1,7 +1,7 @@
 /*-----------------------------------------------------------------------------
  *
  * global_tx.c
- *	  Persistent and in-memory state necessary for our E3PC-like atommic commit
+ *	  Persistent and in-memory state necessary for our E3PC-like atomic commit
  #	  protocol.
  *
  *    Actually serves as a wrapper around vanilla 2PC (GlobalTransaction)
@@ -294,7 +294,7 @@ GlobalTxAcquire(const char *gid, bool create, bool nowait_own_live, bool *busy,
 
 	LWLockRelease(gtx_shared->lock);
 	my_locked_gtx = gtx;
-	/* not prepared and finalized gtxses are purged immediately on release */
+	/* not prepared and finalized gtxes are purged immediately on release */
 	if (found)
 	{
 		Assert(gtx->prepared);
@@ -397,7 +397,7 @@ GlobalTxLoadAll()
 
 
 /*
- * Get maximux proposal among all transactions.
+ * Get maximum proposal among all transactions.
  */
 GlobalTxTerm
 GlobalTxGetMaxProposal()

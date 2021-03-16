@@ -248,7 +248,7 @@ MtmBeginTransaction()
 	{
 		/*
 		 * Reject all user's transactions at offline cluster. Allow execution
-		 * of transaction by bg-workers to makeit possible to perform
+		 * of transaction by bg-workers to make it possible to perform
 		 * recovery.
 		 */
 		if (!MtmBreakConnection)

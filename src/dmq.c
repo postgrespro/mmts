@@ -82,7 +82,7 @@ first_set_bit(uint64 mask)
 
 typedef enum
 {
-	Idle,						/* upon init or falure */
+	Idle,						/* upon init or failure */
 	Connecting,					/* upon PQconnectStart */
 	Negotiating,				/* upon PQconnectPoll == OK */
 	Active,						/* upon dmq_receiver_loop() response */
@@ -157,14 +157,14 @@ struct DmqSharedState
 	 *
 	 * Ultimate non-deadlockable solution without such hacks would be to
 	 * divide the job between different channels: A sends its requests to B
-	 * and recevies responses from it via one TCP channel, and B sends its
+	 * and receives responses from it via one TCP channel, and B sends its
 	 * requests to A and receives responses via another one. Probably this is
 	 * not worthwhile though as it would make dmq more complicated and
 	 * increase number of shm_mqs.
 	 *
 	 * Besides, the counters are ugly because they require the external code
 	 * to remember sender counters before request and check them while
-	 * waiting for reply; moreover, this checking must be based on timouts
+	 * waiting for reply; moreover, this checking must be based on timeouts
 	 * as nobody would wake the clients on send conn failures.
 	 *
 	 * No locks are used because we don't care much about correct/up-to-date
@@ -691,7 +691,7 @@ dmq_sender_main(Datum main_arg)
 
 		/*
 		 * Handle timer event: reconnect previously broken connection or send
-		 * hearbeats.
+		 * heartbeats.
 		 */
 		if (timer_event)
 		{
@@ -945,7 +945,7 @@ dmq_sender_main(Datum main_arg)
  * Get shm_mq ring buffer available space.
  *
  * We use this in dmq receiver in case when we need to bu sure that next
- * message will definetely fit into buffer and won't block sender.
+ * message will definitely fit into buffer and won't block sender.
  */
 static Size
 shm_mq_available(shm_mq_handle *mqh)
@@ -1114,7 +1114,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	 * queue is full, created for xact resolving requests which may took very
 	 * long due to WAL scan. I've (mostly) ported it but disabled because
 	 * replier now answers to both generation election and xact resolution
-	 * requests, and silently dropping the former might lead to inifinite
+	 * requests, and silently dropping the former might lead to infinite
 	 * waiting of the remote campaigner. We could deal with that by moving
 	 * xact resolution requests to yet another bgw.
 	 */
@@ -1672,7 +1672,7 @@ dmq_reattach_shm_mq(int handle_id)
 	 * 1) connection lost, dmq_pop_nb calls dmq_reattach_shm_mq but fruitlessly
 	 * 2) connection is on, and we do dmq_stream_subscribe
 	 * this saves us from an excessive receive failure as NULL mqh forces
-	 * a rettachment attempt in dmq_stream_subscribe.
+	 * a reattachment attempt in dmq_stream_subscribe.
 	 */
 	if (dmq_local.inhandles[handle_id].dsm_seg != NULL)
 	{

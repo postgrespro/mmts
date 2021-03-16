@@ -456,7 +456,7 @@ DECLARE
     altered boolean := false;
     saved_remotes text;
 BEGIN
-    -- with sparce node_id's max(node_id) can be bigger then n_nodes
+    -- with sparse node_id's max(node_id) can be bigger then n_nodes
     select max(id) into max_nodes from mtm.nodes();
     select current_setting('multimaster.remote_functions') into saved_remotes;
     set multimaster.remote_functions to 'mtm.alter_sequences';
@@ -485,7 +485,7 @@ BEGIN
     END LOOP;
     EXECUTE 'set multimaster.remote_functions to ''' || saved_remotes || '''';
     IF altered = false THEN
-        RAISE NOTICE 'All found sequnces have proper params.';
+        RAISE NOTICE 'All found sequences have proper params.';
     END IF;
     RETURN true;
 END

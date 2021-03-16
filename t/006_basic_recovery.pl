@@ -58,7 +58,7 @@ is($psql_out, '40', "Check replication after node failure.");
 note("starting node 2");
 $cluster->{nodes}->[2]->start;
 
-# intentionaly start from 2
+# intentionally start from 2
 $cluster->await_nodes( [2,0,1] );
 
 $cluster->safe_psql(0, "insert into t values(6, 60);");

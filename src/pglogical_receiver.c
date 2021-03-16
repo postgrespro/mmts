@@ -979,7 +979,7 @@ pglogical_receiver_main(Datum main_arg)
 					{
 						/*
 						 * Filter out already applied messages. Decoding API
-						 * doesn't diclosure logical messages origin, so
+						 * doesn't disclosure logical messages origin, so
 						 * currently we have directly hacked it only into
 						 * syncpoint messages (it is important to trim advance
 						 * slots during recovery). It would be good to fix

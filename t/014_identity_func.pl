@@ -134,7 +134,7 @@ $nodes->[0]->psql($dbname,
 				"SELECT mtm.check_query('SELECT mtm.status();');",
 				stdout => \$output);
 note("Check result: $output");
-is( (($output eq 'f')) , 1, "Unsucessful check");
+is( (($output eq 'f')) , 1, "Unsuccessful check");
 
 $nodes->[2]->stop();
 $cluster->await_nodes_after_stop( [0,1] );

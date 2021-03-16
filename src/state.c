@@ -165,7 +165,7 @@ struct MtmState
 	LWLock		*connectivity_lock;
 
 	/*
-	 * Direction to receviers how they should work:
+	 * Direction to receivers how they should work:
 	 * RECEIVE_MODE_NORMAL or RECEIVE_MODE_DISABLED or donor node id.
 	 * Modifications are protected by excl gen_lock or shared vote_lock + excl
 	 * vote_lock.
@@ -1004,7 +1004,7 @@ SetCatchupDonor(nodemask_t connected)
 }
 
 /*
- * Examine current gen, last_online_in (of me and neightbours), connectivity
+ * Examine current gen, last_online_in (of me and neighbours), connectivity
  * and start balloting for new generation if it makes sense: vote myself and
  * return 'true' with filled candidate_gen, cohort, my_last_online_in.
  * To make sane decision we rely on heartbeats supplying us with fairly fresh
@@ -1053,7 +1053,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	/*
 	 * Exclude voter and gen switchers. Get locks before peeking connectivity
 	 * to forbid checking out campaigner_on_tour until we decide whether we're
-	 * going to campaign basing on this connectivity.
+	 * going to campaign based on this connectivity.
 	 */
 	LWLockAcquire(mtm_state->gen_lock, LW_SHARED);
 	LWLockAcquire(mtm_state->vote_lock, LW_EXCLUSIVE);
@@ -1105,7 +1105,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 *   12 and 23 as 1<->3 connection is not yet established/gossiped.
 	 *   Clique must be chosen deterministically to avoid flip-flopping in
 	 *   sausage-like topologies, 2 picks 12 and ballots 12 & 23,
-	 *   exluding 3 from the cluster.
+	 *   excluding 3 from the cluster.
 	 * The only reason for 2 balloting at all here, while 1 is not
 	 * recovered yet is xact resolution liveness, c.f. handle_1a.
 	 *
@@ -1141,7 +1141,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 *
 	 * However, proceed balloting if referee mode is enabled and we are online
 	 * (i.e. election of referee granted gen is not blocked by our need to
-	 * recover) regardless of connectivity -- the possiblity of being online
+	 * recover) regardless of connectivity -- the possibility of being online
 	 * without majority (second node) is the whole point of referee.
 	 * TODO: it would be nice to have heartbeats with referee to avoid winding
 	 * generation numbers in vain if we know here that referee is unavailable.
@@ -1214,7 +1214,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 
 			INSTR_TIME_SET_CURRENT(cur_time);
 			INSTR_TIME_SUBTRACT(cur_time, catchup_ts);
-			/* cutoff is choosen somewhat arbitrary */
+			/* cutoff is chosen somewhat arbitrary */
 			if (INSTR_TIME_GET_MILLISEC(cur_time) >= MtmHeartbeatRecvTimeout * 5)
 			{
 				mtm_log(MtmStateDebug, "not proposing new gen with me because last catchup was %f ms ago",
@@ -1243,7 +1243,7 @@ CampaignMyself(MtmConfig *mtm_cfg, MtmGeneration *candidate_gen,
 	 * candidates. We still ballot in this case, even if I am member of
 	 * current gen and thus don't need new gen to declare "I'm caught up". The
 	 * is needed to ensure transaction resolution liveness: it assumes any
-	 * stable live connecitivity clique forming majority eventually elects
+	 * stable live connectivity clique forming majority eventually elects
 	 * generation with its members (unless previous was already the same)
 	 * regardless of recovery progress; c.f. handle_1a for details.
 	 * (note that we need this weirdness only for >4 nodes, as with less
@@ -1344,7 +1344,7 @@ CampaignerGatherHook(MtmMessage *anymsg, Datum arg)
 	uint64 gen_num = DatumGetUInt64(arg);
 	MtmGenVoteResponse *msg = (MtmGenVoteResponse *) anymsg;
 
-	/* campaigner never gets other messsages */
+	/* campaigner never gets other messages */
 	Assert(anymsg->tag == T_MtmGenVoteResponse);
 	return gen_num == msg->gen_num;
 }
@@ -1441,7 +1441,7 @@ CampaignTour(MtmConfig *mtm_cfg,
 	 * broken existing shm_mq.
 	 *
 	 * TODO: it would be nice to re-attempt failed balloting immediately if
-	 * dmq_pop_nb inside gather successfully rettached some queue(s).
+	 * dmq_pop_nb inside gather successfully reattached some queue(s).
 	 */
 	if (MtmQuorum(mtm_cfg, nvotes) && not_polled_candidates == 0) /* victory */
 	{
@@ -2134,7 +2134,7 @@ MtmOnDmqReceiverHeartbeat(char *node_name, StringInfo msg, void *extra)
 	/* switch into gossiped generation if it is newer */
 	MtmConsiderGenSwitch(parsed_msg->current_gen, parsed_msg->donors);
 
-	/* remember neightbour's last_online_in to guide the campaigner */
+	/* remember neighbour's last_online_in to guide the campaigner */
 	pg_atomic_write_u64(&mtm_state->others_last_online_in[node_id - 1],
 						parsed_msg->last_online_in);
 
@@ -2270,7 +2270,7 @@ MtmOnDmqSenderDisconnect(char *node_name)
 }
 
 /*
- * Do all nodes from the mask see each other? The clique is not neccesarily
+ * Do all nodes from the mask see each other? The clique is not necessarily
  * maximal.
  */
 static bool
@@ -2428,7 +2428,7 @@ MtmGetDisabledNodeMask()
 }
 
 /*  XXX: During evaluation of (mtm.node_info(id)).* this function called */
-/*  once each columnt for every row. So may be just rewrite to SRF. */
+/*  once each column for every row. So may be just rewrite to SRF. */
 /*  probably worth adding loi, is_member, is_donor generation-related fields */
 Datum
 mtm_node_info(PG_FUNCTION_ARGS)
@@ -3085,7 +3085,7 @@ static void handle_1a(txset_entry *txse, HTAB *txset, bool *wal_scanned,
 		 * - Everyone fails, and only 2, 3, 5 go up. They can't recover
 		 *   without resolving at least one of xacts first because T1 and T2
 		 *   conflict; and 'my orphaned xact which never got PRECOMMITted can
-		 *   be aborted directly' doesn't help here as no T1 neigher T2
+		 *   be aborted directly' doesn't help here as no T1 neither T2
 		 *   authored by live nodes.
 		 *
 		 * To mitigate this, previously infrastructure was developed to vote
@@ -3286,7 +3286,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 	 * scan WAL to learn status of already finished xact. This might be very
 	 * slow e.g. if some node was offline for a long time and others
 	 * accumulated a lot of WAL for it. To alleviate (we'd better have
-	 * specificially tailored gid->outcome map, but ENOINFRASTRUCTURE) this,
+	 * specifically tailored gid->outcome map, but ENOINFRASTRUCTURE) this,
 	 * read batch of 1a requests and process (search WAL for needed entries)
 	 * them at once. Other messages are processed immediately.
 	 *
@@ -3721,7 +3721,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 
 	/*
 	 * Transaction is needed for logical slot and replication origin creation.
-	 * Also it clean ups psprintfs.
+	 * Also it cleanups psprintfs.
 	 */
 	StartTransactionCommand();
 
@@ -3768,7 +3768,7 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	 * Finally start receiver. bgw handle must be allocated in TopMcxt.
 	 *
 	 * Start receiver before logical slot creation, as during start after a
-	 * basebackup logical stot creation will wait for all in-progress
+	 * basebackup logical slot creation will wait for all in-progress
 	 * transactions to finish (including prepared ones). And to finish them we
 	 * need to start receiver.
 	 */
@@ -4103,7 +4103,7 @@ MtmMonitor(Datum arg)
 			ProcessConfigFile(PGC_SIGHUP);
 		}
 
-		/* check wheter we need to update config */
+		/* check whether we need to update config */
 		AcceptInvalidationMessages();
 		if (!mtm_config_valid)
 		{
@@ -4377,8 +4377,8 @@ GetLoggedPreparedXactState(HTAB *txset)
 			 *
 			 * I tried to make it safer by ignoring the result in case of
 			 * error (peers resolvers retry their requests), but that once led
-			 * to 2 minutes of continious errors (during which xacts to be
-			 * resolved hanged of course), after which they suddently
+			 * to 2 minutes of continuous errors (during which xacts to be
+			 * resolved hanged of course), after which they suddenly
 			 * disappeared -- and I'm pretty sure slots weren't advanced
 			 * during that period.
 			 */

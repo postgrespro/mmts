@@ -172,7 +172,7 @@ class RefereeTest(MMTestCase, TestHelper):
         aggs_failure, aggs = self.performFailure(RestartNode('node2'),
                                                  nodes_wait_for_commit=[1])
 
-        # without saved decision node2 will be endlessy disabled here
+        # without saved decision node2 will be endlessly disabled here
 
         self.assertNoCommits(aggs_failure)
         self.assertIsolation(aggs_failure)

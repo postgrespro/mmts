@@ -527,7 +527,7 @@ BgwPoolShutdown(BgwPool *poolDesc)
 /*
  * Hard termination of workers on some WAL receiver error.
  *
- * On error WAL receiver woll begin new iteration. But workers need to be killed
+ * On error WAL receiver will begin new iteration. But workers need to be killed
  * without finish of processing.
  * The queue will kept in memory, but its state will reset.
  */

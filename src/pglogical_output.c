@@ -155,7 +155,7 @@ check_binary_compatibility(PGLogicalOutputData *data)
 	if (data->client_binary_bigendian_set
 		&& data->client_binary_bigendian != server_bigendian())
 	{
-		elog(DEBUG1, "Binary mode rejected: Server and client endian mis-match");
+		elog(DEBUG1, "Binary mode rejected: Server and client endian mismatch");
 		return false;
 	}
 
@@ -318,7 +318,7 @@ pg_decode_startup(LogicalDecodingContext *ctx, OutputPluginOptions *opt,
 			if (wanted_encoding == -1)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-						 MTM_ERRMSG("unrecognised encoding name %s passed to expected_encoding",
+						 MTM_ERRMSG("unrecognized encoding name %s passed to expected_encoding",
 									data->client_expected_encoding)));
 
 			if (opt->output_type == OUTPUT_PLUGIN_TEXTUAL_OUTPUT)

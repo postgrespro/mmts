@@ -58,7 +58,7 @@ While `multimaster` replicates data on the logical level, DDL is replicated on t
 The current implementation of logical replication sends data to subscriber nodes only after the local commit. In case of a heavy-write transaction, you have to wait for transaction processing twice: on the local node and on all the other nodes (simultaneously). 
 
 * Isolation level.
-The `multimaster` extenstion currently supports only the _repeatable_ _read_ isolation level. This is stricter than the default _read_ _commited_ level, but also increases probability of serialization failure during commit. _Serializable_ level is not supported yet.
+The `multimaster` extension currently supports only the _repeatable_ _read_ isolation level. This is stricter than the default _read_ _commited_ level, but also increases probability of serialization failure during commit. _Serializable_ level is not supported yet.
 
 
 ## Compatibility 

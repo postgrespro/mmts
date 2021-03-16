@@ -58,7 +58,7 @@ typedef uint64 nodemask_t;
  */
 #define MTM_NODES					"mtm.cluster_nodes"
 #define Natts_mtm_nodes				4
-#define Anum_mtm_nodes_id			1	/* node_id, same accross cluster */
+#define Anum_mtm_nodes_id			1	/* node_id, same across cluster */
 #define Anum_mtm_nodes_connifo		2	/* connection string */
 #define Anum_mtm_nodes_is_self		3	/* is that tuple for our node? */
 
@@ -158,7 +158,7 @@ typedef struct
 	LWLock	   *syncpoint_lock;
 
 	/*
-	 * We do not need to go into the database everytime that we resolve
+	 * We do not need to go into the database every time that we resolve
 	 * deadlocks.
 	 */
 	bool		IsEnabled;

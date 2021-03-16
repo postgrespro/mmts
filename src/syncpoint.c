@@ -77,7 +77,7 @@ origin_id_to_node_id(RepOriginId origin_id, MtmConfig *mtm_cfg)
  *
  * The receiver doesn't actually need anything from the sender to create
  * syncpoint. It is logged only because sender knows the best when WAL becomes
- * bloated and it is time to trim it. In particular, is case of assymetric
+ * bloated and it is time to trim it. In particular, is case of asymmetric
  * node load, e.g. 1 node writes, 2 and 3 only apply, receiver 2->3 staying
  * idle won't know WAL is being generated on 2 without additional actions.
  *
