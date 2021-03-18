@@ -110,6 +110,4 @@ class RecoveryTest(MMTestCase, TestHelper):
 # python -u -m unittest test_recovery.RecoveryTest.test_single_failure
 if __name__ == '__main__':
     # run all tests
-    runner = unittest.TextTestRunner(verbosity=1, failfast=True)
-    suite = unittest.defaultTestLoader.loadTestsFromTestCase(RecoveryTest)
-    runner.run(suite)
+    unittest.main()

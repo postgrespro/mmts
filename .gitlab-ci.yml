@@ -79,7 +79,6 @@ make_check:
   dependencies:
     - build_core_image
   artifacts:
-    expire_in: 24 hours
     when: always
     paths:
       - postgrespro/contrib/mmts/tmp_check/log
