@@ -105,9 +105,9 @@ recovery_random:
   artifacts:
     when: on_failure
     paths:
-      - contrib/mmts/tests/logs1
-      - contrib/mmts/tests/logs2
-      - contrib/mmts/tests/logs3
+      - tests/logs1
+      - tests/logs2
+      - tests/logs3
   variables:
     <<: *docker_variables
   before_script:
@@ -123,9 +123,9 @@ referee:
   stage: referee
   artifacts:
     paths:
-      - contrib/mmts/tests/logs1
-      - contrib/mmts/tests/logs2
-      - contrib/mmts/tests/logs_referee
+      - tests/logs1
+      - tests/logs2
+      - tests/logs_referee
   script:
     - tar -xzvf docker-image/pgmm.tar.gz
     - docker load -i docker-image/pgmm.tar

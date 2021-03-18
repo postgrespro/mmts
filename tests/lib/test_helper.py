@@ -176,7 +176,6 @@ class TestHelper(object):
 
         raise AssertionError('awaitCommit on node {} exceeded timeout {}'.format(node_id, TEST_MAX_RECOVERY_TIME))
 
-    # if write is true, make writing xact
     @staticmethod
     def awaitOnline(dsn, mm_ping=False):
         total_sleep = 0
