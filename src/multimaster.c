@@ -691,13 +691,14 @@ NULL);
 	for (i = 0; mtm_log_gucs[i].name; i++)
 	{
 		MtmLogGuc *guc = &mtm_log_gucs[i];
-		char full_name[128];
-		char desc[128];
+		char *full_name;
+		char *desc;
+		MemoryContext oldcontext;
 
-		snprintf(full_name, sizeof(full_name),
-				 "multimaster.%s_log_level", guc->name);
-		snprintf(desc, sizeof(desc),
-				 "log level for %s multimaster messages", guc->name);
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		full_name = psprintf("multimaster.%s_log_level", guc->name);
+		desc = psprintf("log level for %s multimaster messages", guc->name);
+		MemoryContextSwitchTo(oldcontext);
 		DefineCustomEnumVariable(
 			full_name,
 			desc,
