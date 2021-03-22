@@ -52,12 +52,12 @@ class MMTestCase(unittest.TestCase):
     def setUpClass(cls):
         # resolve hostname once during start as aoipg or docker have problems
         # with resolving hostname under a load
-        host_ip = socket.gethostbyname(NODE_HOST)
+        cls.host_ip = socket.gethostbyname(NODE_HOST)
 
         cls.dsns = [
-            f"dbname=regression user=postgres host={host_ip} port=15432",
-            f"dbname=regression user=postgres host={host_ip} port=15433",
-            f"dbname=regression user=postgres host={host_ip} port=15434"
+            f"dbname=regression user=postgres host={cls.host_ip} port=15432",
+            f"dbname=regression user=postgres host={cls.host_ip} port=15433",
+            f"dbname=regression user=postgres host={cls.host_ip} port=15434"
         ]
         cls.test_ok = True
 

@@ -53,7 +53,7 @@ class RecoveryTest(MMTestCase, TestHelper):
             aggs_failure, aggs = self.performRandomFailure(
                 f'node{node_number}',
                 nodes_wait_for_commit=[n for n in range(3)],
-                node_wait_for_online=f"dbname=regression user=postgres host={NODE_HOST} port={port}",
+                node_wait_for_online=f"dbname=regression user=postgres host={self.host_ip} port={port}",
                 stop_load=True,
                 nodes_assert_commit_during_failure=
                 nodes_assert_commit_during_failure)
@@ -77,7 +77,7 @@ class RecoveryTest(MMTestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             EdgePartition('node1', 'node3'), node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15434",
+            "dbname=regression user=postgres host={self.host_ip} port=15434",
             stop_load=True)
 
         self.assertTrue(('commit' in aggs_failure[0]['transfer']['finish']) or
