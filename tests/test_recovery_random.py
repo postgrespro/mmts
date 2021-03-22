@@ -77,7 +77,7 @@ class RecoveryTest(MMTestCase, TestHelper):
 
         aggs_failure, aggs = self.performFailure(
             EdgePartition('node1', 'node3'), node_wait_for_online=
-            "dbname=regression user=postgres host={self.host_ip} port=15434",
+            f"dbname=regression user=postgres host={self.host_ip} port=15434",
             stop_load=True)
 
         self.assertTrue(('commit' in aggs_failure[0]['transfer']['finish']) or
