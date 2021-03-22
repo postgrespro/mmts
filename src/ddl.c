@@ -1028,7 +1028,9 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				 */
 				if (!IsTransactionBlock() && stmt->target == DISCARD_ALL)
 				{
-					temp_schema_reset();
+					/* nothing to do if temp schema wasn't created at all */
+					if (TempDropRegistered)
+						temp_schema_reset();
 					SkipCommand(true);
 					MtmGucDiscard();
 				}
