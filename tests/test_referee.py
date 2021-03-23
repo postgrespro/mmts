@@ -76,7 +76,7 @@ class RefereeTest(MMTestCase, TestHelper):
         log.info('### test_neighbor_restart ###')
 
         aggs_failure, aggs = self.performFailure(
-            RestartNode('node2'), node_wait_for_online=self.dsns[1],
+            RestartNode('node2'), nodes_wait_for_online=[self.dsns[1]],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -90,8 +90,8 @@ class RefereeTest(MMTestCase, TestHelper):
         log.info('### test_node_crash ###')
 
         aggs_failure, aggs = self.performFailure(
-            CrashRecoverNode('node2'), node_wait_for_online=
-            self.dsns[1],
+            CrashRecoverNode('node2'), nodes_wait_for_online=
+            [self.dsns[1]],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -105,8 +105,8 @@ class RefereeTest(MMTestCase, TestHelper):
         log.info('### test_partition_referee ###')
 
         aggs_failure, aggs = self.performFailure(
-            SingleNodePartition('node2'), node_wait_for_online=
-            self.dsns[1],
+            SingleNodePartition('node2'), nodes_wait_for_online=
+            [self.dsns[1]],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
@@ -123,8 +123,8 @@ class RefereeTest(MMTestCase, TestHelper):
         log.info('### test_double_failure_referee ###')
 
         aggs_failure, aggs = self.performFailure(
-            SingleNodePartition('node2'), node_wait_for_online=
-            self.dsns[1], stop_load=True)
+            SingleNodePartition('node2'), nodes_wait_for_online=
+            [self.dsns[1]], stop_load=True)
 
         self.assertCommits(aggs_failure[:1])
         self.assertNoCommits(aggs_failure[1:])
@@ -134,8 +134,8 @@ class RefereeTest(MMTestCase, TestHelper):
         self.assertIsolation(aggs)
 
         aggs_failure, aggs = self.performFailure(
-            SingleNodePartition('node1'), node_wait_for_online=
-            self.dsns[0], stop_load=True)
+            SingleNodePartition('node1'), nodes_wait_for_online=
+            [self.dsns[0]], stop_load=True)
 
         self.assertNoCommits(aggs_failure[:1])
         self.assertCommits(aggs_failure[1:])

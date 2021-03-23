@@ -53,7 +53,7 @@ class RecoveryTest(MMTestCase, TestHelper):
             aggs_failure, aggs = self.performRandomFailure(
                 f'node{node_number}',
                 nodes_wait_for_commit=[n for n in range(3)],
-                node_wait_for_online=f"dbname=regression user=postgres host={self.host_ip} port={port}",
+                nodes_wait_for_online=[f"dbname=regression user=postgres host={self.host_ip} port={port}"],
                 stop_load=True,
                 nodes_assert_commit_during_failure=
                 nodes_assert_commit_during_failure)
@@ -76,8 +76,17 @@ class RecoveryTest(MMTestCase, TestHelper):
         log.info('### test_edge_partition ###')
 
         aggs_failure, aggs = self.performFailure(
-            EdgePartition('node1', 'node3'), node_wait_for_online=
-            f"dbname=regression user=postgres host={self.host_ip} port=15434",
+            EdgePartition('node1', 'node3'),
+            # clique selection picks up the min mask, so in 1-2-3 sausage 12
+            # will be eventually the live nodes. However, there is a small risk
+            # of 3 successfully voting for 23 before 1 understands what's going
+            # on, in which case 1 is put into recovery which doesn't finish in
+            # 10s of the test given that the load is not stopped. This actually
+            # happened in CI. To avoid test failure, wait for both 1 and 3 to be
+            # online.
+            nodes_wait_for_online=[
+                f"dbname=regression user=postgres host={self.host_ip} port=15434",
+                f"dbname=regression user=postgres host={self.host_ip} port=15432"],
             stop_load=True)
 
         self.assertTrue(('commit' in aggs_failure[0]['transfer']['finish']) or
@@ -94,8 +103,8 @@ class RecoveryTest(MMTestCase, TestHelper):
 
         failure = CrashRecoverNode('node3')
         aggs_failure, aggs = self.performFailure(
-            failure, node_wait_for_online=
-            "dbname=regression user=postgres host=127.0.0.1 port=15434",
+            failure,
+            nodes_wait_for_online=["dbname=regression user=postgres host=127.0.0.1 port=15434"],
             stop_load=True)
 
         self.assertCommits(aggs_failure[:2])

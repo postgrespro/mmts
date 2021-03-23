@@ -252,14 +252,14 @@ class TestHelper(object):
 
         self.client.bgrun()
 
-    def performRandomFailure(self, node, wait=0, nodes_wait_for_commit=[], node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
+    def performRandomFailure(self, node, wait=0, nodes_wait_for_commit=[], nodes_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
         FailureClass = random.choice(ONE_NODE_FAILURES)
         failure = FailureClass(node)
 
         log.info('simulating failure {} on node "{}"'.format(FailureClass.__name__, node))
-        return self.performFailure(failure, wait, nodes_wait_for_commit, node_wait_for_online, stop_load, nodes_assert_commit_during_failure)
+        return self.performFailure(failure, wait, nodes_wait_for_commit, nodes_wait_for_online, stop_load, nodes_assert_commit_during_failure)
 
-    def performFailure(self, failure, wait=0, nodes_wait_for_commit=[], node_wait_for_online=None, stop_load=False, nodes_assert_commit_during_failure=[]):
+    def performFailure(self, failure, wait=0, nodes_wait_for_commit=[], nodes_wait_for_online=[], stop_load=False, nodes_assert_commit_during_failure=[]):
 
         time.sleep(TEST_WARMING_TIME)
 
@@ -291,9 +291,9 @@ class TestHelper(object):
             self.client.get_aggregates(clean=False)
             self.client.stop()
 
-        if node_wait_for_online is not None:
+        for node_wait_for_online in nodes_wait_for_online:
             self.awaitOnline(node_wait_for_online)
-        else:
+        if (len(nodes_wait_for_online) == 0):
             time.sleep(TEST_RECOVERY_TIME)
 
         if stop_load:
