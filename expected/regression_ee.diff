@@ -5,10 +5,10 @@ diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_ou
  DROP TABLE as_select1;
  PREPARE select1 AS SELECT 1 as a;
  CREATE TABLE as_select1 AS EXECUTE select1;
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  CREATE TABLE as_select1 AS EXECUTE select1;
 -ERROR:  relation "as_select1" already exists
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  SELECT * FROM as_select1;
 - a 
 ----
@@ -20,7 +20,7 @@ diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_ou
 +                      ^
  CREATE TABLE IF NOT EXISTS as_select1 AS EXECUTE select1;
 -NOTICE:  relation "as_select1" already exists, skipping
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  DROP TABLE as_select1;
 +ERROR:  table "as_select1" does not exist
  DEALLOCATE select1;
@@ -535,7 +535,7 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  \c regression_atx_test_database
  create table atx_test as select 1 as id;
  begin;
@@ -698,7 +698,7 @@ diff ../../../src/test/regress/expected/prepare.out ../tmp_check/regress_outdir/
  	SELECT * FROM tenk1 WHERE unique1 = $1 OR stringu1 = $2
  	ORDER BY unique1;
  CREATE TEMPORARY TABLE q5_prep_results AS EXECUTE q5(200, 'DTAAAA');
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  SELECT * FROM q5_prep_results;
 - unique1 | unique2 | two | four | ten | twenty | hundred | thousand | twothousand | fivethous | tenthous | odd | even | stringu1 | stringu2 | string4 
 ----------+---------+-----+------+-----+--------+---------+----------+-------------+-----------+----------+-----+------+----------+----------+---------
@@ -725,7 +725,7 @@ diff ../../../src/test/regress/expected/prepare.out ../tmp_check/regress_outdir/
 +                      ^
  CREATE TEMPORARY TABLE q5_prep_nodata AS EXECUTE q5(200, 'DTAAAA')
      WITH NO DATA;
-+ERROR:  [multimaster] failed to prepare transaction at peer node
++ERROR:  [MTM] failed to prepare transaction at peer node
  SELECT * FROM q5_prep_nodata;
 - unique1 | unique2 | two | four | ten | twenty | hundred | thousand | twothousand | fivethous | tenthous | odd | even | stringu1 | stringu2 | string4 
 ----------+---------+-----+------+-----+--------+---------+----------+-------------+-----------+----------+-----+------+----------+----------+---------

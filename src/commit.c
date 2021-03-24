@@ -427,7 +427,7 @@ MtmTwoPhaseCommit(void)
 			UserAbortTransactionBlockCompat(false);
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("multimaster node is not online: current status \"%s\"",
+					 errmsg("[MTM] multimaster node is not online: current status \"%s\"",
 							MtmNodeStatusMnem[MtmGetCurrentStatus(true, false)])));
 		}
 
@@ -511,7 +511,7 @@ MtmTwoPhaseCommit(void)
 			MtmGeneration new_gen = MtmGetCurrentGen(false);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+					 errmsg("[MTM] failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 							xact_gen.num,
 							maskToString(xact_gen.members),
 							new_gen.num,
@@ -525,7 +525,7 @@ MtmTwoPhaseCommit(void)
 
 			ereport(ERROR,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("failed to collect prepare acks from nodemask %s due to network error",
+					 errmsg("[MTM] failed to collect prepare acks from nodemask %s due to network error",
 							maskToString(failed_cohort))));
 		}
 		for (i = 0; i < n_messages; i++)
@@ -536,11 +536,11 @@ MtmTwoPhaseCommit(void)
 				if (MtmVolksWagenMode)
 					ereport(ERROR,
 							(errcode(p_messages[i]->errcode),
-							 errmsg("failed to prepare transaction at peer node")));
+							 errmsg("[MTM] failed to prepare transaction at peer node")));
 				else
 					ereport(ERROR,
 							(errcode(p_messages[i]->errcode),
-							 errmsg("failed to prepare transaction %s at node %d",
+							 errmsg("[MTM] failed to prepare transaction %s at node %d",
 									mtm_commit_state.gid, p_messages[i]->node_id),
 							 errdetail("sqlstate %s (%s)",
 									   unpack_sql_state(p_messages[i]->errcode),
@@ -594,7 +594,7 @@ MtmTwoPhaseCommit(void)
 			}
 			ereport(WARNING,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to precommit transaction %s at node %d",
+					 errmsg("[MTM] failed to precommit transaction %s at node %d",
 							mtm_commit_state.gid, twoa_messages[i]->node_id),
 					 errdetail("status=%d, accepted term=<%d, %d>",
 							   twoa_messages[i]->status,
@@ -610,7 +610,7 @@ MtmTwoPhaseCommit(void)
 				MtmGeneration new_gen = MtmGetCurrentGen(false);
 				ereport(ERROR,
 						(errcode(ERRCODE_INTERNAL_ERROR),
-						 errmsg("failed to collect precommit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+						 errmsg("[MTM] failed to collect precommit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 								mtm_commit_state.gid,
 								xact_gen.num,
 								maskToString(xact_gen.members),
@@ -626,7 +626,7 @@ MtmTwoPhaseCommit(void)
 			}
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to collect precommit acks or precommit transaction %s at nodes %s due to network error or non-first term",
+					 errmsg("[MTM] failed to collect precommit acks or precommit transaction %s at nodes %s due to network error or non-first term",
 							mtm_commit_state.gid,
 							maskToString(failed_cohort))));
 		}
@@ -657,7 +657,7 @@ precommit_tour_done:
 			MtmGeneration new_gen = MtmGetCurrentGen(false);
 			ereport(WARNING,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to collect commit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+					 errmsg("[MTM] failed to collect commit acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 							mtm_commit_state.gid,
 							xact_gen.num,
 							maskToString(xact_gen.members),
@@ -673,7 +673,7 @@ precommit_tour_done:
 			}
 			ereport(WARNING,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to collect commit acks of transaction %s at nodes %s due to network error",
+					 errmsg("[MTM] failed to collect commit acks of transaction %s at nodes %s due to network error",
 							mtm_commit_state.gid,
 							maskToString(failed_cohort))));
 		}
@@ -740,7 +740,7 @@ MtmExplicitPrepare(char *gid)
 		UserAbortTransactionBlockCompat(false); /* see same call above */
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("invalid transaction identifier \"%s\": identifiers starting with \"MTM-\" are used by multimaster internally",
+				 errmsg("[MTM] invalid transaction identifier \"%s\": identifiers starting with \"MTM-\" are used by multimaster internally",
 						gid)));
 	}
 
@@ -765,7 +765,7 @@ MtmExplicitPrepare(char *gid)
 			UserAbortTransactionBlockCompat(false); /* see same call above */
 			ereport(MtmBreakConnection ? FATAL : ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("multimaster node is not online: current status \"%s\"",
+					 errmsg("[MTM] multimaster node is not online: current status \"%s\"",
 							MtmNodeStatusMnem[MtmGetCurrentStatus(true, false)])));
 		}
 
@@ -843,7 +843,7 @@ MtmExplicitPrepare(char *gid)
 			MtmGeneration new_gen = MtmGetCurrentGen(false);
 			ereport(ERROR,
 					(errcode(ERRCODE_INTERNAL_ERROR),
-					 errmsg("failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+					 errmsg("[MTM] failed to collect prepare acks due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 							xact_gen.num,
 							maskToString(xact_gen.members),
 							new_gen.num,
@@ -857,7 +857,7 @@ MtmExplicitPrepare(char *gid)
 
 			ereport(ERROR,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("failed to collect prepare acks from nodemask %s due to network error",
+					 errmsg("[MTM] failed to collect prepare acks from nodemask %s due to network error",
 							maskToString(failed_cohort))));
 		}
 		for (i = 0; i < n_messages; i++)
@@ -866,7 +866,7 @@ MtmExplicitPrepare(char *gid)
 			{
 				ereport(ERROR,
 						(errcode(p_messages[i]->errcode),
-						 errmsg("failed to prepare transaction %s at node %d",
+						 errmsg("[MTM] failed to prepare transaction %s at node %d",
 								mtm_commit_state.gid, p_messages[i]->node_id),
 						 errdetail("sqlstate %s (%s)",
 								   unpack_sql_state(p_messages[i]->errcode),
@@ -910,7 +910,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 	if (gtx == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
-				 errmsg("prepared transaction with identifier \"%s\" does not exist",
+				 errmsg("[MTM] prepared transaction with identifier \"%s\" does not exist",
 						gid)));
 	PG_TRY();
 	{
@@ -957,7 +957,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		MtmGeneration new_gen = MtmGetCurrentGen(false);
 		ereport(WARNING,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("failed to collect %s acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
+				 errmsg("[MTM] failed to collect %s acks of transaction %s due to generation switch: was num=" UINT64_FORMAT ", members=%s, now num=" UINT64_FORMAT ", members=%s",
 						isCommit ? "commit" : "abort",
 						gid,
 						gen.num,
@@ -974,7 +974,7 @@ MtmExplicitFinishPrepared(bool isTopLevel, char *gid, bool isCommit)
 		}
 		ereport(WARNING,
 				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("failed to collect %s acks of transaction %s at nodes %s due to network error",
+				 errmsg("[MTM] failed to collect %s acks of transaction %s at nodes %s due to network error",
 						isCommit ? "commit" : "abort",
 						gid,
 						maskToString(failed_cohort))));
