@@ -1,5 +1,6 @@
 # test that after create_mm awaited nodes we won't get non-online state
 # immediately later. Catches races in MtmGetCurrentStatus logic.
+# It is expensive, so not run in the regular suite.
 
 use Cluster;
 use Test::More tests => 1;
