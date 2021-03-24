@@ -124,20 +124,21 @@ sub init
 
 			multimaster.binary_basetypes = ${binary_basetypes}
 
-			# extensive logging for tests
-			multimaster.TxTrace_log_level = LOG
-			multimaster.TxFinish_log_level = LOG
+			# uncomment to get extensive logging for debugging
 
-			multimaster.CoordinatorTrace_log_level = LOG
+			# multimaster.TxTrace_log_level = LOG
+			# multimaster.TxFinish_log_level = LOG
 
-			multimaster.BgwPoolEventDebug_log_level = LOG
+			# multimaster.CoordinatorTrace_log_level = LOG
 
-			multimaster.ReceiverStateDebug_log_level = LOG
-			multimaster.ApplyMessage_log_level = LOG
-			multimaster.ApplyTrace_log_level = LOG
-			multimaster.ReceiverFeedback_log_level = LOG
+			# multimaster.BgwPoolEventDebug_log_level = LOG
 
-			multimaster.StateDebug_log_level = LOG
+			# multimaster.ReceiverStateDebug_log_level = LOG
+			# multimaster.ApplyMessage_log_level = LOG
+			# multimaster.ApplyTrace_log_level = LOG
+			# multimaster.ReceiverFeedback_log_level = LOG
+
+			# multimaster.StateDebug_log_level = LOG
 		});
 		$node->append_conf('pg_hba.conf', $hba);
 
