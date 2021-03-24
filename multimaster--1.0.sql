@@ -248,10 +248,10 @@ CREATE FUNCTION update_recovery_horizons() returns void
 CREATE FUNCTION mtm.syncpoints_trigger_f() RETURNS trigger AS $$
 BEGIN
   IF (TG_OP = 'DELETE') THEN
-    RAISE LOG 'deleting syncpoint row: %', OLD;
+    -- RAISE LOG 'deleting syncpoint row: %', OLD;
     RETURN OLD;
   ELSE
-    RAISE LOG 'inserting syncpoint row: %', NEW;
+    -- RAISE LOG 'inserting syncpoint row: %', NEW;
     -- others info about syncpoints apply allow to advance our horizons, so
     -- it makes sense to update them here, not only sp apply
     PERFORM mtm.update_recovery_horizons();

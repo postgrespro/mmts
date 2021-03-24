@@ -946,7 +946,7 @@ process_remote_commit(StringInfo in,
 				MemoryContextSwitchTo(MtmApplyContext);
 				ReleasePB();
 				rwctx->gtx->prepared = true; /* now we have WAL record */
-				mtm_log(MtmTxTrace, "TXFINISH: %s prepared (local_xid=" XID_FMT ")", gid, xid);
+				mtm_log(MtmTxTrace, "%s prepared (local_xid=" XID_FMT ")", gid, xid);
 
 				GlobalTxRelease(rwctx->gtx);
 				rwctx->gtx = NULL;

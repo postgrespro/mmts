@@ -893,7 +893,7 @@ dmq_sender_main(Datum main_arg)
 						dmq_state->sconn_cnt[mask_pos] = sconn_cnt[mask_pos];
 
 						mtm_log(DmqStateFinal,
-								"[DMQ] Connected to %s",
+								"[DMQ] connected to %s",
 								conns[conn_id].receiver_name);
 
 						dmq_sender_connect_hook(conns[conn_id].receiver_name);
@@ -1510,7 +1510,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		{
 			ereport(FATAL,
 					(errcode(ERRCODE_ADMIN_SHUTDOWN),
-					 errmsg("[DMQ] exit receiver due to unexpected postmaster exit")));
+					 errmsg("[DMQ] receiver exits due to unexpected postmaster exit")));
 		}
 
 		/* XXX: is it enough? */
@@ -1529,7 +1529,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 
 		if (dmq_now() - last_message_at > recv_timeout)
 		{
-			mtm_log(FATAL, "[DMQ] exit receiver due to heatbeat timeout");
+			mtm_log(FATAL, "[DMQ] receiver exits due to heartbeat timeout");
 		}
 
 	}
