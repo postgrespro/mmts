@@ -188,7 +188,13 @@ MtmBeginTransaction()
 	/* XXX: clean MtmTx on commit and check on begin that it is clean. */
 	/* That should unveil probable issues with subxacts. */
 
-	if (!MtmIsEnabled())
+	/*
+	 * XXX: proc_exit_inprogress added after weird failure in JIT guts
+	 * (through MtmLoadConfig) on RemoveTempRelationsCallback xact start. The
+	 * reasons are not exactly clear, but we hardly need distributed xacts
+	 * during shutdown.
+	 */
+	if (proc_exit_inprogress || !MtmIsEnabled())
 	{
 		MtmTx.distributed = false;
 		return;

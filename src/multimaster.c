@@ -1444,7 +1444,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 }
 
 /*
- * Check that all current gen members have the same gen and doesn't want to
+ * Check that all current gen members have the same gen and don't want to
  * change it. This is useful for learning when cluster has finally started up
  * and no generation switch perturbations will happen anymore unless some
  * failure happens. Note that it asserts that all gen members are online -- we

@@ -197,6 +197,7 @@ process_remote_begin(StringInfo s, MtmReceiverWorkerContext *rwctx)
 	int sender_node_id = pq_getmsgint(s, 4);
 	Assert(rwctx->sender_node_id == sender_node_id);
 	rwctx->origin_xid = pq_getmsgint64(s);
+	mtm_log(MtmApplyTrace, "processing begin of xid " XID_FMT, rwctx->origin_xid);
 
 	InterruptPending = false;
 	QueryCancelPending = false;
