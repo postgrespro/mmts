@@ -8,10 +8,7 @@ use Test::More tests => 29;
 my $cluster = new Cluster(3);
 $cluster->init();
 $cluster->start();
-# connect_timeout prevents hanging while connecting to turned off node with
-# hold_socket done. Hopefully it is high enough to avoid slow bf machines random
-# failures
-$cluster->create_mm(undef, 3);
+$cluster->create_mm(undef);
 
 my $dbname = $cluster->{nodes}->[0]->{dbname};
 my $nodes = $cluster->{nodes};

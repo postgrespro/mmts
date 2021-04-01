@@ -45,8 +45,6 @@ $cluster->init(q{
 $cluster->start();
 $cluster->create_mm('regression');
 
-my $port = $cluster->{nodes}->[0]->port;
-
 ###############################################################################
 # postgres regression tests
 ###############################################################################
@@ -101,7 +99,7 @@ mkdir($regress_outdir);
 mkdir("${regress_outdir}/sql");
 mkdir("${regress_outdir}/expected");
 TestLib::system_log($ENV{'PG_REGRESS'},
-	'--host=' . $Cluster::mm_listen_address, "--port=$port",
+	'--host=' . $cluster->{nodes}->[0]->host, '--port=' . $cluster->{nodes}->[0]->port,
 	'--use-existing', '--bindir=',
 	'--schedule=parallel_schedule',
 	"--dlpath=${regress_libdir}",

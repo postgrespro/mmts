@@ -107,8 +107,7 @@ if ($concurrent_load)
 $cluster->poll_query_until(0, "select exists(select * from pg_replication_slots where slot_name = 'mtm_filter_slot_${new_node_id}');")
     or croak "timed out waiting for slot creation";
 my $end_lsn = $cluster->backup_and_init(0, $new_node_off, $new_node_id);
-$cluster->{nodes}->[$new_node_off]->append_conf('postgresql.conf', q{unix_socket_directories = ''
-												});
+
 # Prevent recovery of new node further than the end point returned by
 # basebackup as streaming will be requested since it, so not doing this might
 # result in attempting to receive already existing data. This realistically

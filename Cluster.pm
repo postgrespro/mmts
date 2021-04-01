@@ -10,30 +10,11 @@ use Cwd;
 use IPC::Run;
 use Socket;
 
-# 127.0.0.1 is not ok because we pick up random ephemeral port which might be
-# occupied by client connection while node is down -- and then it would refuse
-# to start later. At least on my linux the kernel binds clients to 127.0.0.1,
-# so this works. Alternatively we could
-#   1) bind to the socket manually immediately after shutdown and release before
-#     the start, but this obviously only (greatly) reduces the danger;
-#   2) forget we are a distributed thing and use unix sockets like vanilla tests
-#
-# UPD: well, bf member msvs-6-3 decided to take 127.0.0.2 for local connections,
-# so 1) was also implemented for such cases.
-# I don't like falling back to 2) because a) it is slightly easier to connect to
-# ports b) Windows uses TCP anyway.
-our $mm_listen_address = '127.0.0.2';
-
 sub new
 {
 	my ($class, $n_nodes, $referee) = @_;
 
-	# ask PostgresNode to use tcp and listen on mm_listen_address
-	$PostgresNode::use_tcp = 1;
-	$PostgresNode::test_pghost = $mm_listen_address;
-
 	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
-	$_->hold_port() foreach @nodes;
 
 	my $self = {
 		nodes => \@nodes,
@@ -42,7 +23,6 @@ sub new
 	if (defined $referee && $referee)
 	{
 		$self->{referee} = get_new_node("referee");
-		$self->{referee}->hold_port();
 	}
 
 	bless $self, $class;
@@ -63,8 +43,7 @@ sub init
 	}
 
 	my $hba = qq{
-        host all all ${mm_listen_address}/32 trust
-        host replication all ${mm_listen_address}/32 trust
+        local all all trust
 	};
 
 	# binary protocol doesn't tolerate strict alignment currently, so use it
@@ -169,7 +148,7 @@ sub init
 
 sub create_mm
 {
-	my ($self, $dbname, $connect_timeout) = @_;
+	my ($self, $dbname) = @_;
 	my $nodes = $self->{nodes};
 
 	$self->await_nodes([0..$#{$self->{nodes}}], 0);
@@ -227,11 +206,8 @@ sub create_mm
 		}
 	}
 
-	# identity_func uses connect_timeout as it tries connecting to shutdown
-	# node which hangs infinitely otherwise due to our hold_socket hack.
 	(my $my_connstr, my @peers) = map {
-		$_->connstr($_->{dbname}) . ((defined $connect_timeout) ?
-		  " connect_timeout=${connect_timeout}" : "");
+		$_->connstr($_->{dbname});
 	} @{$self->{nodes}};
 
 	my $node1 = $self->{nodes}->[0];
@@ -247,16 +223,17 @@ sub create_mm
 sub start
 {
 	my ($self) = @_;
+	my $hosts = join ', ', map { $_->{_host}} @{$self->{nodes}};
 	my $ports = join ', ', map { $_->{_port}} @{$self->{nodes}};
-	note( "starting cluster on ports: $ports");
+	note( "starting cluster on hosts: $hosts, ports: $ports");
 	$_->start() foreach @{$self->{nodes}};
 	if (defined $self->{referee})
 	{
+		my $rhost = $self->{referee}->host;
 		my $rport = $self->{referee}->port;
-		note("starting referee on port $rport");
+		note("starting referee on host $rhost port $rport");
 		$self->{referee}->start();
 	}
-
 }
 
 sub stop
@@ -292,7 +269,6 @@ sub add_node()
 	my ($self) = @_;
 
 	my $new_node = get_new_node("node@{[$#{$self->{nodes}} + 2]}");
-	$new_node->hold_port();
 	push(@{$self->{nodes}}, $new_node);
 
 	return $#{$self->{nodes}};
@@ -316,12 +292,13 @@ sub backup_and_init()
 	my $node = $self->{nodes}->[$from];
 	my $backup_name = "backup_for_$to";
 	my $backup_path = $node->backup_dir . '/' . $backup_name;
+	my $host        = $node->host;
 	my $port        = $node->port;
 	my $name        = $node->name;
 
 	print "# Taking pg_basebackup $backup_name from node \"$name\"\n";
 	my $dumpres = command_output(['pg_basebackup', '-D', $backup_path, '-p', $port,
-		'-h', $mm_listen_address, '--no-sync', '-v']);
+		'-h', $host, '--no-sync', '-v']);
 
 	print "# Backup finished\n";
 
@@ -462,65 +439,5 @@ sub is_ee
 	return ($stdout =~ m/enterprise/);
 }
 
-# Override PostgresNode::start|stop to reserve the port while node is down
-{
-	# otherwise perl whines, thinking our override is redefine
-	no warnings 'redefine';
-	# that's how perl people call super from monkey-patch-overridden method
-	# https://stackoverflow.com/a/575873/4014587
-	my $postgres_node_start_super = \&PostgresNode::start;
-	*PostgresNode::start = sub {
-		my $self = shift;
-		$self->release_port();
-		$postgres_node_start_super->( $self, @_ );
-	};
-
-	my $postgres_node_stop_super = \&PostgresNode::stop;
-	*PostgresNode::stop = sub {
-		my $self = shift;
-		$postgres_node_stop_super->( $self, @_ );
-		$self->hold_port();
-	};
-}
-
-# Bind to socket with our port so no one could use it while node is down.
-sub PostgresNode::hold_port {
-	my $self = shift;
-
-	# do nothing if this is not mm node, it most probably uses unix socket
-	return unless $self->host eq $mm_listen_address;
-
-	# stop() might be called several times without start(), don't bind if
-	# already did so
-	return if defined $self->{held_socket};
-
-	my $iaddr = inet_aton($self->host);
-	my $paddr = sockaddr_in($self->port, $iaddr);
-	my $proto = getprotobyname("tcp");
-
-	socket(my $sock, PF_INET, SOCK_STREAM, $proto)
-		or die "socket failed: $!";
-
-	# As in postmaster, don't use SO_REUSEADDR on Windows
-	setsockopt($sock, SOL_SOCKET, SO_REUSEADDR, pack("l", 1))
-	  unless $TestLib::windows_os;
-	bind($sock, $paddr) or die
-	  "socket bind failed: $!";
-	listen($sock, SOMAXCONN)
-	  or die "socket listen failed: $!";
-
-	$self->{held_socket} = $sock;
-	note("bind to port @{[$self->port]}");
-}
-
-sub PostgresNode::release_port {
-	my $self = shift;
-	if (defined $self->{held_socket})
-	{
-		close($self->{held_socket});
-		$self->{held_socket} = undef;
-	}
-	note("port released");
-}
 
 1;

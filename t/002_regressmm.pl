@@ -12,8 +12,6 @@ $cluster->init(q{
 $cluster->start();
 $cluster->create_mm('regression');
 
-my $port = $cluster->{nodes}->[0]->port;
-
 ###############################################################################
 # multimaster regression tests
 ###############################################################################
@@ -26,7 +24,7 @@ if (Cluster::is_ee())
 }
 
 my $ret = TestLib::system_log($ENV{'PG_REGRESS'},
-    '--host=' . $Cluster::mm_listen_address, "--port=$port",
+	'--host=' . $cluster->{nodes}->[0]->host, '--port=' . $cluster->{nodes}->[0]->port,
     '--use-existing', '--bindir=', @tests);
 if ($ret != 0)
 {
