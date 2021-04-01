@@ -469,6 +469,19 @@ MtmTwoPhaseCommit(void)
 
 		AllowTempIn2PC = true;
 		CommitTransactionCommand(); /* here we actually PrepareTransaction */
+		/*
+		 * It is nice to be in a transaction for
+		 * SetPreparedTransactionState/FinishPreparedTransaction, so start it
+		 * or, in case of atx, suspend the parent and start a new one.
+		 * XXX: check the same xact block stuff in case of cleanup
+		 */
+#ifdef PGPRO_EE
+		if (IsTransactionState())
+			SuspendTransaction();
+		else
+#endif
+			StartTransactionCommand();
+
 		mtm_commit_state.gtx->prepared = true;
 		ReleasePB(); /* don't hold generation switch anymore */
 		/* end_lsn of PREPARE */
@@ -633,7 +646,6 @@ MtmTwoPhaseCommit(void)
 
 precommit_tour_done:
 		/* we have majority precommits, commit */
-		StartTransactionCommand();
 		FinishPreparedTransaction(mtm_commit_state.gid, true, false);
 		mtm_commit_state.gtx->state.status = GTXCommitted;
 		mtm_log(MtmTxFinish, "%s committed", mtm_commit_state.gid);
