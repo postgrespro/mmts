@@ -3648,9 +3648,6 @@ MtmBgwStart(MtmBgw *bgw)
 						bgw->name),
 				 errhint("You may need to increase max_worker_processes.")));
 
-	status = WaitForBackgroundWorkerStartup(bgw->handle, &pid);
-	if (status != BGWH_STARTED)
-		mtm_log(ERROR,	"failed to start background process %s", bgw->name);
 	bgw->last_start_time = GetCurrentTimestamp();
 }
 
@@ -3749,12 +3746,19 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		 * Create filter slot to filter out already applied changes since the
 		 * last syncpoint during replication start
 		 */
-		ReplicationSlotCreate(filter_slot, false, RS_PERSISTENT);
-		ReplicationSlotReserveWal();
-		/* Write this slot to disk */
-		ReplicationSlotMarkDirty();
-		ReplicationSlotSave();
-		ReplicationSlotRelease();
+		/* slot might be already created if we failed before setting init_done */
+		int acq = ReplicationSlotAcquire(filter_slot, SAB_Inquire);
+		if (acq == 0)
+			ReplicationSlotRelease();
+		else if (acq == -1)
+		{
+			ReplicationSlotCreate(filter_slot, false, RS_PERSISTENT);
+			ReplicationSlotReserveWal();
+			/* Write this slot to disk */
+			ReplicationSlotMarkDirty();
+			ReplicationSlotSave();
+			ReplicationSlotRelease();
+		}
 	}
 
 	/* Add dmq destination */
@@ -3789,18 +3793,25 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 		int			rc;
 
 		/* Create logical slot for our publication to this neighbour */
-		ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
-		ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
-										false,	/* do not build snapshot */
-										InvalidXLogRecPtr,
-										XL_ROUTINE(.page_read = read_local_xlog_page,
-												   .segment_open = wal_segment_open,
-												   .segment_close = wal_segment_close),
-										NULL, NULL, NULL);
-		DecodingContextFindStartpoint(ctx);
-		FreeDecodingContext(ctx);
-		ReplicationSlotPersist();
-		ReplicationSlotRelease();
+		/* slot might be already created if we failed before setting init_done */
+		int acq = ReplicationSlotAcquire(slot, SAB_Inquire);
+		if (acq == 0)
+			ReplicationSlotRelease();
+		else if (acq == -1)
+		{
+			ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
+			ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
+											false,	/* do not build snapshot */
+											InvalidXLogRecPtr,
+											XL_ROUTINE(.page_read = read_local_xlog_page,
+													   .segment_open = wal_segment_open,
+													   .segment_close = wal_segment_close),
+											NULL, NULL, NULL);
+			DecodingContextFindStartpoint(ctx);
+			FreeDecodingContext(ctx);
+			ReplicationSlotPersist();
+			ReplicationSlotRelease();
+		}
 
 		/*
 		 * Mark this node as init_done, so at next boot we won't try to create
