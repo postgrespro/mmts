@@ -366,7 +366,7 @@ class RefereeTest(MMTestCase, TestHelper):
         log.info('#### up up || up(2 -> 0)')
         log.info('########################')
         docker_api.containers.get('referee').start()
-        time.sleep(5)
+        time.sleep(10)
 
         log.info('#### check that decision is cleaned')
         log.info('###################################')

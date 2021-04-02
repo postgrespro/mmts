@@ -1588,7 +1588,7 @@ RefereeClearGrant(void)
 	if (popcount(mtm_state->current_gen_members) != 2 ||
 		MtmGetCurrentStatusInGen() != MTM_GEN_ONLINE)
 	{
-		mtm_log(MtmStateDebug, "not clearing referee flag as I am not online in full gen: current_gen_members=%s, StatusInGen=%s",
+		mtm_log(MtmStateDebug, "not clearing referee grant as I am not online in full gen: current_gen_members=%s, StatusInGen=%s",
 				maskToString(mtm_state->current_gen_members),
 				MtmStatusInGenMnem[MtmGetCurrentStatusInGen()]);
 		mtm_state->referee_grant_turn_in_pending = MtmInvalidGenNum;
