@@ -3622,8 +3622,6 @@ MtmBgwStart(MtmBgw *bgw)
 	Oid db_id = MyDatabaseId;
 	Oid user_id = GetUserId();
 	BackgroundWorker worker;
-	BgwHandleStatus status;
-	pid_t		pid;
 
 	MemSet(&worker, 0, sizeof(BackgroundWorker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
