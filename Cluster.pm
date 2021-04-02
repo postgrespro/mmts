@@ -117,7 +117,7 @@ sub init
 			# multimaster.ApplyTrace_log_level = LOG
 			# multimaster.ReceiverFeedback_log_level = LOG
 
-			# multimaster.StateDebug_log_level = LOG
+			multimaster.StateDebug_log_level = LOG
 		});
 		$node->append_conf('pg_hba.conf', $hba);
 
