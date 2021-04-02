@@ -103,6 +103,13 @@ sub init
 
 			multimaster.binary_basetypes = ${binary_basetypes}
 
+            # There seems to be a weird issue with nonblocking connection to Unix
+            # sockets: rarely (during consenquent restart in the beginning of
+            # 001_regress) connection attempt hangs, as if we got EAGAIN but
+            # were never notified that the socket is ready. Let's see if this
+			# covers it up.
+			multimaster.connect_timeout = 10
+
 			# uncomment to get extensive logging for debugging
 
 			# multimaster.TxTrace_log_level = LOG
