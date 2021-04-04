@@ -287,15 +287,15 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  num_data|f
  num_exp_add|t
  num_exp_div|t
-@@ -139,7 +145,6 @@
- pg_partitioned_table|t
+@@ -140,7 +146,6 @@
  pg_policy|t
  pg_proc|t
+ pg_profile|t
 -pg_publication|t
  pg_publication_rel|t
  pg_range|t
  pg_replication_origin|t
-@@ -152,7 +157,6 @@
+@@ -154,7 +159,6 @@
  pg_statistic|t
  pg_statistic_ext|t
  pg_statistic_ext_data|t
@@ -303,7 +303,7 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  pg_subscription_rel|t
  pg_tablespace|t
  pg_transform|t
-@@ -183,6 +187,7 @@
+@@ -185,6 +189,7 @@
  sql_sizing|f
  stud_emp|f
  student|f
@@ -614,7 +614,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
      LATERAL pg_get_publication_tables((p.pubname)::text) gpt(relid),
      (pg_class c
       JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
-@@ -1653,7 +1673,7 @@
+@@ -1659,7 +1679,7 @@
      l.provider,
      l.label
     FROM (pg_seclabel l
@@ -623,7 +623,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
    WHERE (l.objsubid = 0)
  UNION ALL
   SELECT l.objoid,
-@@ -1665,7 +1685,7 @@
+@@ -1671,7 +1691,7 @@
      l.provider,
      l.label
     FROM (pg_shseclabel l
@@ -632,7 +632,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
  UNION ALL
   SELECT l.objoid,
      l.classoid,
-@@ -2059,7 +2079,7 @@
+@@ -2065,7 +2085,7 @@
      st.last_msg_receipt_time,
      st.latest_end_lsn,
      st.latest_end_time
@@ -641,7 +641,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
       LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
  pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
      pg_stat_all_indexes.indexrelid,
-@@ -2401,6 +2421,17 @@
+@@ -2407,6 +2427,17 @@
             FROM (unnest(s.stxkeys) k(k)
               JOIN pg_attribute a ON (((a.attrelid = s.stxrelid) AND (a.attnum = k.k))))
            WHERE (NOT has_column_privilege(c.oid, a.attnum, 'select'::text))))) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
