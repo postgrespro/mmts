@@ -10,11 +10,82 @@ use Cwd;
 use IPC::Run;
 use Socket;
 
+our $last_port_assigned;
+our $mm_listen_address = '127.0.0.1';
+
+INIT
+{
+	# Tracking of last port value assigned to accelerate free port lookup.
+	$last_port_assigned = int(rand() * 1000) + 25999;
+}
+
+# Copy of PostgresNode::get_free_port with corrected selection range: we
+# intentionally get the port from non-ephemeral range to prevent some guy
+# (often pg client connection) picking up the port while node is down.
+# (it actually rarely but steadily happens)
+sub mm_get_free_port
+{
+	my $found = 0;
+	my $port  = $last_port_assigned;
+
+	while ($found == 0)
+	{
+
+		# advance $port, wrapping correctly around range end
+		$port = 26000 if ++$port >= 27000;
+		print "# Checking port $port\n";
+
+		# Check first that candidate port number is not included in
+		# the list of already-registered nodes.
+		$found = 1;
+		foreach my $node (@PostgresNode::all_nodes)
+		{
+			$found = 0 if ($node->port == $port);
+		}
+
+		# Check to see if anything else is listening on this TCP port.
+		# Seek a port available for all possible listen_addresses values,
+		# so callers can harness this port for the widest range of purposes.
+		# The 0.0.0.0 test achieves that for post-2006 Cygwin, which
+		# automatically sets SO_EXCLUSIVEADDRUSE.  The same holds for MSYS (a
+		# Cygwin fork).  Testing 0.0.0.0 is insufficient for Windows native
+		# Perl (https://stackoverflow.com/a/14388707), so we also test
+		# individual addresses.
+		#
+		# On non-Linux, non-Windows kernels, binding to 127.0.0/24 addresses
+		# other than 127.0.0.1 might fail with EADDRNOTAVAIL.  Binding to
+		# 0.0.0.0 is unnecessary on non-Windows systems.
+		if ($found == 1)
+		{
+			foreach my $addr (qw(127.0.0.1),
+				$PostgresNode::use_tcp ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+			{
+				if (!PostgresNode::can_bind($addr, $port))
+				{
+					$found = 0;
+					last;
+				}
+			}
+		}
+	}
+
+	print "# Found port $port\n";
+
+	# Update port for next time
+	$last_port_assigned = $port;
+
+	return $port;
+}
+
 sub new
 {
 	my ($class, $n_nodes, $referee) = @_;
 
-	my @nodes = map { get_new_node("node$_") } (1..$n_nodes);
+	# ask PostgresNode to use tcp and listen on mm_listen_address
+	$PostgresNode::use_tcp = 1;
+	$PostgresNode::test_pghost = $mm_listen_address;
+
+	my @nodes = map { get_new_node("node$_", ('port' => mm_get_free_port())) } (1..$n_nodes);
 
 	my $self = {
 		nodes => \@nodes,
@@ -22,7 +93,7 @@ sub new
 	};
 	if (defined $referee && $referee)
 	{
-		$self->{referee} = get_new_node("referee");
+		$self->{referee} = get_new_node("referee",  ( 'port' => mm_get_free_port() ));
 	}
 
 	bless $self, $class;
@@ -43,7 +114,8 @@ sub init
 	}
 
 	my $hba = qq{
-        local all all trust
+        host all all ${mm_listen_address}/32 trust
+        host replication all ${mm_listen_address}/32 trust
 	};
 
 	# binary protocol doesn't tolerate strict alignment currently, so use it
@@ -102,13 +174,6 @@ sub init
 			multimaster.trans_spill_threshold = 50MB
 
 			multimaster.binary_basetypes = ${binary_basetypes}
-
-            # There seems to be a weird issue with nonblocking connection to Unix
-            # sockets: rarely (during consenquent restart in the beginning of
-            # 001_regress) connection attempt hangs, as if we got EAGAIN but
-            # were never notified that the socket is ready. Let's see if this
-			# covers it up.
-			multimaster.connect_timeout = 10
 
 			# uncomment to get extensive logging for debugging
 
