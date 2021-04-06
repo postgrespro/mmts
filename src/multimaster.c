@@ -1428,6 +1428,19 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	}
 	PQclear(res);
 
+	/*
+	 * FIXME: await for new node joining or there is a small probablity of
+	 * this (alter_sequences) xact commit failure due to gen switch including
+	 * new node.
+	 */
+	while (true)
+	{
+		MtmGeneration curr_gen = MtmGetCurrentGen(false);
+
+		if (BIT_CHECK(curr_gen.members, new_node_id - 1))
+			break;
+		MtmSleep(USECS_PER_SEC / 10);
+	}
 	/* call mtm.alter_sequences since n_nodes is changed */
 	query = psprintf("select mtm.alter_sequences()");
 	rc = SPI_execute(query, false, 0);
