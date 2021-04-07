@@ -21,11 +21,11 @@ USE_PGXS := 1 # so use it anyway, most probably that's what the user wants
 endif
 endif
 # $(info) is introduced in 3.81, and PG doesn't support makes older than 3.80
-ifeq ($(MAKE_VERSION),3.80)
-$(warning $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
-else
-$(info $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
-endif
+# ifeq ($(MAKE_VERSION),3.80)
+# $(warning $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
+# else
+# $(info $$USE_PGXS is [${USE_PGXS}] (we use it automatically if not in contrib dir))
+# endif
 
 ifdef USE_PGXS # use pgxs
 # You can specify path to pg_config in PG_CONFIG var
