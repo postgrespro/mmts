@@ -1,0 +1,12 @@
+<!DOCTYPE book PUBLIC "-//OASIS//DTD DocBook XML V4.2//EN"
+          "http://www.oasis-open.org/docbook/xml/4.2/docbookx.dtd"
+[
+<!ENTITY multimaster     SYSTEM "multimaster.xml">
+]>
+
+<book id="multimaster_book">
+  <chapter>
+   <title>multimaster Documentation</title>
+&multimaster;
+  </chapter>
+</book>
