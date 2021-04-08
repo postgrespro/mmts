@@ -14,9 +14,10 @@ It offers the following benefits, some of which are not available in traditional
 
 ## Documentation
 
+[current documentation](https://postgrespro.github.io/mmts/)
+
 Documentation for versions released with PostgresPro Enterprise can be found
-[here](https://postgrespro.ru/docs/enterprise/12/multimaster?lang=en). We plan
-to add a page with current documentation soon.
+[here](https://postgrespro.ru/docs/enterprise/current/multimaster?lang=en).
 
 ## Building from source
 
