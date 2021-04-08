@@ -494,7 +494,7 @@ _PG_init(void)
 	DefineCustomIntVariable(
 							"multimaster.heartbeat_send_timeout",
 							"Timeout in milliseconds of sending heartbeat messages",
-							"Period of broadcasting heartbeat messages by arbiter to all nodes",
+							"Period of broadcasting heartbeat messages",
 							&MtmHeartbeatSendTimeout,
 							200,
 							1,
