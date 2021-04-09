@@ -223,7 +223,7 @@
           the transaction, and no write conflicts occur. For details on
           <literal>PREPARE</literal> transactions support in <productname>PostgreSQL</productname>,
           see the
-	  <ulink url="https://postgrespro.ru/docs/postgresql/current/sql-prepare-transaction">
+	  <ulink url="https://postgrespro.com/docs/postgresql/current/sql-prepare-transaction">
           PREPARE TRANSACTION</ulink> topic.
         </para>
       </listitem>
@@ -390,7 +390,7 @@
         <para>
           When the rest of transactions till the switch to the new generation is
           applied, the reconnected node is
-          promoted to the <filename>online</filename> state and included into
+          promoted to the <literal>online</literal> state and included into
           the replication scheme.
         </para>
       </listitem>
@@ -545,8 +545,8 @@ shared_preload_libraries = 'multimaster'
               <tip>
 		<para>If the <varname>shared_preload_libraries</varname> variable is already
 		defined in <filename>postgresql.auto.conf</filename>, you will need to modify
-		its value using the <ulink url="https://postgrespro.com/docs/postgresql/current/sql-altersystem"> ALTER SYSTEM </ulink>command.
-		For details, see <ulink url="https://postgrespro.com/docs/postgresql/current/config-setting"> Setting Parameters </ulink>.
+		its value using the <ulink url="https://postgrespro.com/docs/postgresql/current/sql-altersystem">ALTER SYSTEM</ulink> command.
+		For details, see <ulink url="https://postgrespro.com/docs/postgresql/current/config-setting">Setting Parameters</ulink>.
 		Note that in a multi-master cluster, the <literal>ALTER SYSTEM</literal> command only affects the configuration of the node from which it was run.
               </para>
               </tip>
@@ -623,7 +623,7 @@ CREATE USER mtmuser WITH SUPERUSER PASSWORD 'mtmuserpassword';
 CREATE DATABASE mydb OWNER mtmuser;
 </programlisting>
           If you are using password-based authentication, you may want to
-          create a <ulink url="https://postgrespro.ru/docs/postgresql/current/libpq-pgpass">password file</ulink>.
+          create a <ulink url="https://postgrespro.com/docs/postgresql/current/libpq-pgpass">password file</ulink>.
         </para>
         <para>
           You can omit this step if you already have a database you are going
@@ -891,7 +891,7 @@ SELECT * FROM mtm.nodes();
       If a cluster node is disabled, any attempt to read or write data on
       this node raises an error by default. If you need to access the data
       on a disabled node, you can override this behavior at connection time by setting the
-      <ulink url="https://postgrespro.ru/docs/postgresql/13/runtime-config-logging#GUC-APPLICATION-NAME">application_name</ulink>
+      <ulink url="https://postgrespro.com/docs/postgresql/current/runtime-config-logging#GUC-APPLICATION-NAME">application_name</ulink>
       parameter to
       <literal>mtm_admin</literal>. In this case, you can run read and
       write queries on this node without <application>multimaster</application>
@@ -953,18 +953,18 @@ pg_basebackup -D <replaceable>datadir</replaceable> -h node1 -U mtmuser -c fast 
         </para>
       </listitem>
       <listitem>
-	<para>
-	  Configure the new node to boot with <literal>recovery_target=immediate</literal> to prevent redo
-	  past the point where replication will begin. Add to <literal>postgresql.conf</literal>
-	</para>
-	  <programlisting>
+        <para>
+          Configure the new node to boot with <literal>recovery_target=immediate</literal> to prevent redo
+          past the point where replication will begin. Add to <literal>postgresql.conf</literal>
+        </para>
+          <programlisting>
 restore_command = 'false'
 recovery_target = 'immediate'
 recovery_target_action = 'promote'
-	  </programlisting>
-	  <para>
-	    And create <literal>recovery.signal</literal> file in the data directory.
-	  </para>
+          </programlisting>
+          <para>
+            And create <literal>recovery.signal</literal> file in the data directory.
+          </para>
       </listitem>
       <listitem>
         <para>
@@ -1039,7 +1039,7 @@ SELECT mtm.drop_node(3);
    <step>
     <para>
       Remove <literal>multimaster</literal> from
-      <ulink url="https://postgrespro.ru/docs/postgresql/current/runtime-config-client#GUC-SHARED-PRELOAD-LIBRARIES">shared_preload_libraries</ulink>
+      <ulink url="https://postgrespro.com/docs/postgresql/current/runtime-config-client#GUC-SHARED-PRELOAD-LIBRARIES">shared_preload_libraries</ulink>
       and restart
      <productname>PostgreSQL</productname>.
     </para>
