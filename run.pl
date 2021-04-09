@@ -19,7 +19,7 @@ if ($referee)
 
 if ($action eq "start")
 {
-	$PostgresNode::last_port_assigned = 65431;
+	$Cluster::last_port_assigned = 65431;
 
 	my $cluster = new Cluster($n_nodes, $referee);
 	$cluster->init();
