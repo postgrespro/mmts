@@ -719,12 +719,6 @@ pglogical_receiver_main(Datum main_arg)
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
 
-		/* TODO: remove this once we rebase onto fresh version of EE which
-		 * doesn't use MessageContext inside planner guts (PGPRO-3253)*/
-		MessageContext = AllocSetContextCreate(TopMemoryContext,
-												"MessageContext",
-												ALLOCSET_DEFAULT_SIZES);
-
 		/*
 		 * Make sure config is up to date as we are going to check out
 		 * backup_node_id; if it has been cleared we must be aware of that.
