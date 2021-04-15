@@ -1,10 +1,15 @@
-use strict;
-use warnings;
 use Carp;
+use POSIX;
+use strict;
+use Test::More;
+use TestLib;
+use Time::HiRes qw(usleep);
+use warnings;
+
 use PostgresNode;
 use Cluster;
-use TestLib;
-use Test::More;
+
+use Test::More tests => Cluster::is_ee() ? 6 : 5;
 
 my $cluster = new Cluster(3);
 $cluster->init();
@@ -42,7 +47,7 @@ if (Cluster::is_ee())
 	$hash2 = $cluster->safe_psql(2, $hash_query);
 	note("$hash0, $hash1, $hash2");
 	is( (($hash0 eq $hash1) and ($hash1 eq $hash2)) , 1,
-    "Check that hash is the same after query");
+		"Check that hash is the same after query");
 }
 
 $cluster->safe_psql(0, q{
@@ -72,7 +77,7 @@ $hash1 = $cluster->safe_psql(1, $hash_query);
 $hash2 = $cluster->safe_psql(2, $hash_query);
 note("$hash0, $hash1, $hash2");
 is( (($hash0 eq $hash1) and ($hash1 eq $hash2)) , 1,
-    "Check that hash is the same after query");
+	"Check that hash is the same after query");
 
 # ##############################################################################
 #
@@ -93,11 +98,13 @@ $cluster->await_nodes( [0,1,2] );
 
 # Simulate payload
 $cluster->pgbench(0, ('-i', '-n', -s => '1') );
-my $pgb1 = $cluster->pgbench_async(0, ('-n', -T => '15', -j=>'5', -c => '5') );
-sleep(5);
+note( strftime('%Y-%m-%d %H:%M:%S', localtime) . ": starting async pgbench" );
+my $pgb1 = $cluster->pgbench_async(0, ('-n', -T => '25', -j => '1', -c => '5') );
 
 my $pid0;
 my $attempts     = 0;
+
+note( strftime('%Y-%m-%d %H:%M:%S', localtime) . ": starting polling of backend pid" );
 while (1)
 {
 	$pid0 = $cluster->safe_psql(0, "SELECT pid FROM pg_stat_activity
@@ -105,18 +112,21 @@ while (1)
 								AND query LIKE 'UPDATE%' LIMIT 1;");
 
 	# bf says we might be really unlucky to find no backend doing update
-	if ($pid0 ne "")
+	# It does not make much sense to try longer than pgbench run lasts,
+	# since we need an active backend to kill.  So let it be 25 seconds
+	# both for pgbench_async() and this pg_stat_activity polling.
+	if ( ($pid0 ne "") || $attempts >= 25*10 )
 	{
 		last;
 	}
+
 	# Wait 0.1 second before retrying.
 	usleep(100_000);
 	$attempts++;
-	if ($attempts >= 180*10)
-	{
-		croak 'failed to fetch backend pid';
-	}
 }
+note( strftime('%Y-%m-%d %H:%M:%S', localtime) . ": finished polling of backend pid" );
+is( ($pid0 ne ""), 1,
+	"found an active backend doing UPDATE" );
 
 # Simulate hard crash
 note("Simulate hard crash of a backend by SIGKILL to $pid0");

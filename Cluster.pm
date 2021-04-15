@@ -32,7 +32,7 @@ sub mm_get_free_port
 	{
 
 		# advance $port, wrapping correctly around range end
-		$port = 26000 if ++$port == 27000;
+		$port = 26000 if ++$port >= 27000;
 		print "# Checking port $port\n";
 
 		# Check first that candidate port number is not included in
@@ -58,7 +58,7 @@ sub mm_get_free_port
 		if ($found == 1)
 		{
 			foreach my $addr (qw(127.0.0.1),
-				$PostgresNode::use_tcp ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+				$PostgresNode::use_tcp && ($^O eq "linux" || $windows_os) ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
 			{
 				if (!PostgresNode::can_bind($addr, $port))
 				{
