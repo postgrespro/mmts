@@ -32,7 +32,7 @@ sub mm_get_free_port
 	{
 
 		# advance $port, wrapping correctly around range end
-		$port = 26000 if ++$port >= 27000;
+		$port = 26000 if ++$port == 27000;
 		print "# Checking port $port\n";
 
 		# Check first that candidate port number is not included in
