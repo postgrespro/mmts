@@ -1401,9 +1401,18 @@ MtmApplyDDLMessage(const char *messageBody, bool transactional)
 
 	DDLApplyInProgress = transactional ? MTM_DDL_IN_PROGRESS_TX :
 		MTM_DDL_IN_PROGRESS_NONTX;
+
+	/*
+	 * Due to ef94805096 'Restore the portal-level snapshot after procedure COMMIT/ROLLBACK.'
+	 * there should be ActiveSnapshot set. Otherwise EnsurePortalSnapshotExists
+	 * will assert on ActivePortal->portalSnapshot == NULL since current
+	 * portal has snapshot in outer transaction.
+	 */
+	PushActiveSnapshot(GetTransactionSnapshot());
 	SPI_connect();
 	rc = SPI_execute(messageBody, false, 0);
 	SPI_finish();
+	PopActiveSnapshot();
 
 	if (rc < 0)
 		elog(ERROR, "Failed to execute utility statement %s", messageBody);
