@@ -58,7 +58,7 @@
       typically need more than five cluster nodes. Three cluster nodes are
       enough to ensure high availability in most cases.
       There is also a special 2+1 (referee) mode in which 2 nodes hold data and
-      an additional one called <filename>referee</filename> only participates in voting. Compared to traditional three
+      an additional one called <firstterm>referee</firstterm> only participates in voting. Compared to traditional three
       nodes setup, this is cheaper (referee resources demands are low) but availability
       is decreased. For details, see <xref linkend="setting-up-a-referee"/>.
     </para>
@@ -200,7 +200,7 @@
       <filename>multimaster</filename> uses
       <ulink url="https://postgrespro.com/docs/postgresql/current/logicaldecoding-synchronous">logical replication</ulink>
       and the two phase commit protocol with transaction outcome determined by
-      <link linkend="multimaster-credits">Paxos consensus algorithm.</link>
+      <link linkend="multimaster-credits">Paxos consensus algorithm</link>.
     </para>
     <para>
       When <productname>PostgreSQL</productname> loads the <filename>multimaster</filename> shared
@@ -318,9 +318,9 @@
       integrity, the decision to exclude or add back node(s) must be taken
       coherently. Generations which represent a subset of
       currently supposedly live nodes serve this
-      purpose. Technically, generation is a pair <filename>&lt;n, members&gt;</filename>
-      where <filename>n</filename> is unique number and
-      <filename>members</filename> is subset of configured nodes. A node always
+      purpose. Technically, generation is a pair <literal>&lt;n, members&gt;</literal>
+      where <replaceable>n</replaceable> is unique number and
+      <replaceable>members</replaceable> is subset of configured nodes. A node always
       lives in some generation and switches to the one with higher number as soon
       as it learns about its existence; generation numbers act as logical
       clocks/terms/epochs here. Each transaction is stamped during commit with
@@ -331,15 +331,15 @@
       resides in generation in one of three states (can be shown with <literal>mtm.status()</literal>):
       <orderedlist>
 	<listitem>
-	  <para><filename>ONLINE</filename>: node is member of the generation and
-	  making transactions normally; </para>
+	  <para><literal>ONLINE</literal>: node is member of the generation and
+	  making transactions normally;</para>
 	</listitem>
 	<listitem>
-	  <para><filename>RECOVERY</filename>: node is member of the generation, but it
-	  must apply in recovery mode transactions from previous generations to become <filename>ONLINE;</filename> </para>
+	  <para><literal>RECOVERY</literal>: node is member of the generation, but it
+	  must apply in recovery mode transactions from previous generations to become <literal>ONLINE</literal>;</para>
 	</listitem>
 	<listitem>
-	  <para><filename>DEAD</filename>: node will never be <filename>ONLINE</filename> in this generation;</para>
+	  <para><literal>DEAD</literal>: node will never be <filename>ONLINE</filename> in this generation;</para>
 	</listitem>
       </orderedlist>
 
@@ -374,7 +374,7 @@
       <listitem>
         <para>
           The reconnected node selects a cluster node which is
-          <filename>ONLINE</filename> in the highest generation and starts
+          <literal>ONLINE</literal> in the highest generation and starts
           catching up with the current state of the cluster based on the
           Write-Ahead Log (WAL).
         </para>
@@ -480,7 +480,7 @@
           <para>
 	    Performs Paxos to resolve unfinished transactions.
             This worker is only active during recovery or when connection with other nodes was lost.
-	    There is a single worker per PostgreSQL instance.
+	    There is a single worker per <productname>PostgreSQL</productname> instance.
         </para>
         </listitem>
       </varlistentry>
@@ -489,7 +489,7 @@
         <listitem>
           <para>
 	    Ballots for new generations to exclude some node(s) or add myself.
-	    There is a single worker per PostgreSQL instance.
+	    There is a single worker per <productname>PostgreSQL</productname> instance.
         </para>
         </listitem>
       </varlistentry>
@@ -745,9 +745,9 @@ SELECT * FROM mtm.nodes();
       algorithm to determine whether the cluster nodes have a quorum: a cluster
       can only continue working if the majority of its nodes are alive and can
       access each other. Majority-based approach is pointless for two nodes
-      cluster: if one of them fails, another one becomes unaccessible. There is
-      a special 2+1 or referee mode which trades less harware resources by
-      decreasing availabilty: two nodes hold full copy of data, and separate
+      cluster: if one of them fails, another one becomes inaccessible. There is
+      a special 2+1 or referee mode which trades less hardware resources by
+      decreasing availability: two nodes hold full copy of data, and separate
       referee node participates only in voting, acting as a tie-breaker.
     </para>
     <para>
@@ -758,7 +758,7 @@ SELECT * FROM mtm.nodes();
       grant - this allows the node to get it in its turn later. While the grant is
       issued, it can't be given to another node until full generation is elected
       and excluded node recovers. This ensures data loss doesn't happen by the
-      price of availabilty: in this setup two nodes (one normal and one referee)
+      price of availability: in this setup two nodes (one normal and one referee)
       can be alive but cluster might be still unavailable if the referee winner
       is down, which is impossible with classic three nodes configuration.
     </para>
@@ -902,8 +902,7 @@ SELECT * FROM mtm.nodes();
     <title>Adding New Nodes to the Cluster</title>
     <para>With the <filename>multimaster</filename> extension, you can add or
     drop cluster nodes. Before adding node, stop the load and ensure (with
-    <literal>mtm.status()</literal> that all nodes (except the ones to be
-    dropped) are <literal>online</literal>.
+    <literal>mtm.status()</literal>) that all nodes are <literal>online</literal>.
       When adding a new node, you need to load all the data to this node using
       <application>pg_basebackup</application> from any cluster node, and then start this node.
     </para>
@@ -955,7 +954,7 @@ pg_basebackup -D <replaceable>datadir</replaceable> -h node1 -U mtmuser -c fast 
       <listitem>
         <para>
           Configure the new node to boot with <literal>recovery_target=immediate</literal> to prevent redo
-          past the point where replication will begin. Add to <literal>postgresql.conf</literal>
+          past the point where replication will begin. Add to <filename>postgresql.conf</filename>:
         </para>
           <programlisting>
 restore_command = 'false'
@@ -990,7 +989,7 @@ SELECT mtm.join_node(4, '0/12D357F0');
     <title>Removing Nodes from the Cluster</title>
     <para>
       Before removing node, stop the load and ensure (with
-    <literal>mtm.status()</literal> that all nodes (except the ones to be
+    <literal>mtm.status()</literal>) that all nodes (except the ones to be
     dropped) are <literal>online</literal>. Shut down the nodes you are going to remove.
       To remove the node from the cluster:
     </para>
