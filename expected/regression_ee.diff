@@ -68,9 +68,19 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
 -ERROR:  CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 +ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
  COMMIT;
+ -- test where predicate is able to do a transactional update during
+ -- a concurrent build before switching pg_index state flags.
+@@ -1403,7 +1405,9 @@
+ END; $$;
+ CREATE INDEX CONCURRENTLY concur_index8 ON concur_heap (f1)
+   WHERE predicate_stable();
++ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+ DROP INDEX concur_index8;
++ERROR:  index "concur_index8" does not exist
+ DROP FUNCTION predicate_stable();
  -- But you can do a regular index build in a transaction
  BEGIN;
-@@ -1400,8 +1402,6 @@
+@@ -1412,8 +1416,6 @@
  -- Failed builds are left invalid by VACUUM FULL, fixed by REINDEX
  VACUUM FULL concur_heap;
  REINDEX TABLE concur_heap;
@@ -79,7 +89,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DELETE FROM concur_heap WHERE f1 = 'b';
  VACUUM FULL concur_heap;
  \d concur_heap
-@@ -1411,12 +1411,6 @@
+@@ -1423,12 +1425,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -92,7 +102,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  REINDEX TABLE concur_heap;
-@@ -1427,12 +1421,6 @@
+@@ -1439,12 +1435,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -105,7 +115,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  -- Temporary tables with concurrent builds and on-commit actions
-@@ -1442,7 +1430,9 @@
+@@ -1454,7 +1444,9 @@
    ON COMMIT PRESERVE ROWS;
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -115,7 +125,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DROP TABLE concur_temp;
  -- ON COMMIT DROP
  BEGIN;
-@@ -1451,34 +1441,42 @@
+@@ -1463,34 +1455,42 @@
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  -- Fails when running in a transaction.
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -162,7 +172,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  \d concur_heap
             Table "public.concur_heap"
   Column | Type | Collation | Nullable | Default 
-@@ -2416,46 +2414,38 @@
+@@ -2428,46 +2428,38 @@
  INSERT INTO concur_reindex_tab4 VALUES (1), (1), (2);
  -- This trick creates an invalid index.
  CREATE UNIQUE INDEX CONCURRENTLY concur_reindex_ind5 ON concur_reindex_tab4 (c1);
@@ -374,7 +384,36 @@ diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_ou
  COMMIT;
  START TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ WRITE, DEFERRABLE;
  SHOW transaction_isolation;
-@@ -841,17 +829,14 @@
+@@ -796,24 +784,13 @@
+ 
+ SAVEPOINT x;
+ COMMIT AND CHAIN;  -- TBLOCK_SUBCOMMIT
++ERROR:  [MTM] COMMIT AND CHAIN is not supported
+ SHOW transaction_isolation;
+- transaction_isolation 
+------------------------
+- repeatable read
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_read_only;
+- transaction_read_only 
+------------------------
+- off
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_deferrable;
+- transaction_deferrable 
+-------------------------
+- on
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ COMMIT;
+ -- different mix of options just for fun
+ START TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ WRITE, NOT DEFERRABLE;
+@@ -881,17 +858,14 @@
  ROLLBACK;
  -- not allowed outside a transaction block
  COMMIT AND CHAIN;  -- error
@@ -394,7 +433,7 @@ diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_ou
  
  RESET default_transaction_read_only;
  DROP TABLE abc;
-@@ -941,7 +926,7 @@
+@@ -981,7 +955,7 @@
  SELECT 1\; BEGIN\; SAVEPOINT sp\; ROLLBACK TO SAVEPOINT sp\; COMMIT;
  -- Tests for AND CHAIN in implicit transaction blocks
  SET TRANSACTION READ ONLY\; COMMIT AND CHAIN;  -- error
@@ -403,7 +442,7 @@ diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_ou
  SHOW transaction_read_only;
   transaction_read_only 
  -----------------------
-@@ -960,23 +945,20 @@
+@@ -1000,23 +974,20 @@
  -- COMMIT/ROLLBACK + COMMIT/ROLLBACK AND CHAIN
  INSERT INTO abc VALUES (7)\; COMMIT\; INSERT INTO abc VALUES (8)\; COMMIT AND CHAIN;  -- 7 commit, 8 error
  WARNING:  there is no transaction in progress
@@ -431,7 +470,7 @@ diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_ou
  COMMIT;
  START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (16)\; ROLLBACK AND CHAIN;  -- 16 ok
  SHOW transaction_isolation;  -- transaction is active at this point
-@@ -988,7 +970,7 @@
+@@ -1028,7 +999,7 @@
  ROLLBACK;
  -- START TRANSACTION + COMMIT/ROLLBACK + COMMIT/ROLLBACK AND CHAIN
  START TRANSACTION ISOLATION LEVEL REPEATABLE READ\; INSERT INTO abc VALUES (17)\; COMMIT\; INSERT INTO abc VALUES (18)\; COMMIT AND CHAIN;  -- 17 commit, 18 error
@@ -440,7 +479,7 @@ diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_ou
  SHOW transaction_isolation;  -- out of transaction block
   transaction_isolation 
  -----------------------
-@@ -1007,9 +989,8 @@
+@@ -1047,9 +1018,8 @@
   a  
  ----
    7
@@ -554,6 +593,118 @@ diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/res
  SET client_min_messages = 'warning';
  DROP FUNCTION IF EXISTS atx_test_30_one();
  DROP FUNCTION IF EXISTS atx_test_30_two();
+diff ../../../src/test/regress/expected/atx9.out ../tmp_check/regress_outdir/results/atx9.out
+--- ../../../src/test/regress/expected/atx9.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx9.out	CENSORED
+@@ -29,50 +29,38 @@
+ INSERT INTO abc VALUES (1);
+ INSERT INTO abc VALUES (2);
+ COMMIT AND CHAIN;  -- TBLOCK_END
++ERROR:  [MTM] COMMIT AND CHAIN is not supported
+ SHOW transaction_isolation;
+- transaction_isolation 
+------------------------
+- repeatable read
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_read_only;
+- transaction_read_only 
+------------------------
+- off
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_deferrable;
+- transaction_deferrable 
+-------------------------
+- on
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ INSERT INTO abc VALUES ('error');
+-ERROR:  invalid input syntax for type integer: "error"
+-LINE 1: INSERT INTO abc VALUES ('error');
+-                                ^
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ INSERT INTO abc VALUES (3);  -- check it's really aborted
+ ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ COMMIT AND CHAIN;  -- TBLOCK_ABORT_END
+ SHOW transaction_isolation;
+  transaction_isolation 
+ -----------------------
+- repeatable read
++ read committed
+ (1 row)
+ 
+ SHOW transaction_read_only;
+  transaction_read_only 
+ -----------------------
+- off
++ on
+ (1 row)
+ 
+ SHOW transaction_deferrable;
+  transaction_deferrable 
+ ------------------------
+- on
++ off
+ (1 row)
+ 
+ INSERT INTO abc VALUES (4);
++ERROR:  cannot execute INSERT in a read-only transaction
+ COMMIT;
+ ROLLBACK;
+ BEGIN;
+@@ -144,24 +132,13 @@
+ 
+ SAVEPOINT x;
+ COMMIT AND CHAIN;  -- TBLOCK_SUBCOMMIT
++ERROR:  [MTM] COMMIT AND CHAIN is not supported
+ SHOW transaction_isolation;
+- transaction_isolation 
+------------------------
+- repeatable read
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_read_only;
+- transaction_read_only 
+------------------------
+- off
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ SHOW transaction_deferrable;
+- transaction_deferrable 
+-------------------------
+- on
+-(1 row)
+-
++ERROR:  current transaction is aborted, commands ignored until end of transaction block
+ COMMIT;
+ ROLLBACK;
+ -- different mix of options just for fun
+@@ -232,17 +209,14 @@
+ COMMIT;
+ -- not allowed outside a transaction block
+ COMMIT AUTONOMOUS AND CHAIN;  -- error
+-ERROR:  COMMIT AND CHAIN can only be used in transaction blocks
++ERROR:  [MTM] COMMIT AND CHAIN is not supported
+ ROLLBACK AUTONOMOUS AND CHAIN;  -- error
+ ERROR:  ROLLBACK AND CHAIN can only be used in transaction blocks
+ SELECT * FROM abc ORDER BY 1;
+  a 
+ ---
+- 1
+- 2
+- 4
+  5
+-(4 rows)
++(1 row)
+ 
+ RESET default_transaction_read_only;
+ DROP TABLE abc;
 diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/results/rules.out
 --- ../../../src/test/regress/expected/rules.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/rules.out	CENSORED
@@ -632,7 +783,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
  UNION ALL
   SELECT l.objoid,
      l.classoid,
-@@ -2065,7 +2085,7 @@
+@@ -2066,7 +2086,7 @@
      st.last_msg_receipt_time,
      st.latest_end_lsn,
      st.latest_end_time
@@ -641,7 +792,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
       LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
  pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
      pg_stat_all_indexes.indexrelid,
-@@ -2407,6 +2427,17 @@
+@@ -2408,6 +2428,17 @@
             FROM (unnest(s.stxkeys) k(k)
               JOIN pg_attribute a ON (((a.attrelid = s.stxrelid) AND (a.attnum = k.k))))
            WHERE (NOT has_column_privilege(c.oid, a.attnum, 'select'::text))))) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
