@@ -54,6 +54,9 @@ endif
 include $(top_srcdir)/contrib/contrib-global.mk
 endif # USE_PGXS
 
+REGRESS_SHLIB=$(abs_top_builddir)/src/test/regress/regress$(DLSUFFIX)
+export REGRESS_SHLIB
+
 .PHONY: all
 
 # recurse down to referee/ on install.
