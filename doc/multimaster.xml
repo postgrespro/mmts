@@ -28,7 +28,7 @@
       </listitem>
       <listitem>
         <para>
-        <productname>PostgreSQL</productname> online upgrades
+         Upgrading minor releases of <productname>PostgreSQL</productname> seamlessly for <application>multimaster</application> cluster clients.
         </para>
       </listitem>
     </itemizedlist>
