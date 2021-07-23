@@ -570,7 +570,7 @@ diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_out
 diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/results/atx.out
 --- ../../../src/test/regress/expected/atx.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx.out	CENSORED
-@@ -1147,6 +1147,7 @@
+@@ -1143,6 +1143,7 @@
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
