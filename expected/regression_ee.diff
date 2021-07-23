@@ -570,7 +570,7 @@ diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_out
 diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/results/atx.out
 --- ../../../src/test/regress/expected/atx.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx.out	CENSORED
-@@ -1143,6 +1143,7 @@
+@@ -1139,6 +1139,7 @@
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
@@ -578,6 +578,35 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  \c regression_atx_test_database
  create table atx_test as select 1 as id;
  begin;
+diff ../../../src/test/regress/expected/atx4.out ../tmp_check/regress_outdir/results/atx4.out
+--- ../../../src/test/regress/expected/atx4.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx4.out	CENSORED
+@@ -142,8 +142,10 @@
+ (1 row)
+ 
+   commit autonomous;
++ERROR:  [MTM] failed to prepare transaction at peer node
+ -- Multimaster: t2 table will not be created due to pg_temp_N not found on replicas
+ commit;
++WARNING:  there is no transaction in progress
+ begin;
+   -- create temp table in top level temptable but abort
+   begin autonomous;
+@@ -213,11 +215,9 @@
+ commit;
+ -- Multimaster: t2 were not created
+ select * from t2;
+- a  
+-----
+- hi
+-(1 row)
+-
++ERROR:  relation "t2" does not exist
++LINE 1: select * from t2;
++                      ^
+ select * from t3;
+ ERROR:  relation "t3" does not exist
+ LINE 1: select * from t3;
 diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/results/atx5.out
 --- ../../../src/test/regress/expected/atx5.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx5.out	CENSORED

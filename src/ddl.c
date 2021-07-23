@@ -94,6 +94,7 @@ MtmDDLInProgress DDLApplyInProgress;
 
 static char MtmTempSchema[NAMEDATALEN];
 static bool TempDropRegistered;
+static int  TempDropAtxLevel;
 
 static void const *MtmDDLStatement;
 
@@ -247,9 +248,11 @@ temp_schema_reset_all(int my_node_id)
 					 "	nsp record; "
 					 "begin "
 					 "	reset session_authorization; "
-					 "	for nsp in select nspname from pg_namespace where nspname ~ '^mtm_tmp_%d_.*' loop "
+					 "	for nsp in select nspname from pg_namespace where "
+					 "      nspname ~ '^mtm_tmp_%d_.*' and"
+					 "      nspname !~ '_toast$' loop "
 					 "	  perform mtm.set_temp_schema(nsp.nspname); "
-					 "	  execute format('drop schema if exists %%I cascade', format('%%s_toast', nsp.nspname)); "
+					 "	  execute format('drop schema if exists %%I cascade', nsp.nspname||'_toast'); "
 					 "	  execute format('drop schema if exists %%I cascade', nsp.nspname); "
 					 "	end loop; "
 					 "end $$; ",
@@ -258,26 +261,27 @@ temp_schema_reset_all(int my_node_id)
 }
 
 /* Drop temp schemas on peer nodes */
-static void
-temp_schema_reset(void)
+void
+temp_schema_reset(bool transactional)
 {
 	Assert(TempDropRegistered);
+	Assert(TempDropAtxLevel == MtmTxAtxLevel);
 
 	/*
 	 * reset session_authorization restores permissions if previous ddl
 	 * dropped them; set_temp_schema allows us to see temporary objects,
 	 * otherwise they can't be dropped
 	 *
-	 * It is important to run it as 'V', otherwise it might interfere with
-	 * later (if drop is due to DISCARD) or earlier command using the schema.
+	 * If drop is due to DISCARD, it is important to run it as 'V', otherwise
+	 * it might interfere with later or earlier command using the schema.
 	 */
 	MtmProcessDDLCommand(
 		psprintf("RESET session_authorization; "
-				 "select mtm.set_temp_schema('%s'); "
+				 "select mtm.set_temp_schema('%s', false); "
 				 "DROP SCHEMA IF EXISTS %s_toast CASCADE; "
 				 "DROP SCHEMA IF EXISTS %s CASCADE;",
 				 MtmTempSchema, MtmTempSchema, MtmTempSchema),
-		false,
+		transactional,
 		false
 		);
 	MtmFinishDDLCommand();
@@ -290,52 +294,127 @@ temp_schema_at_exit(int status, Datum arg)
 	Assert(TempDropRegistered);
 	AbortOutOfAnyTransaction();
 	StartTransactionCommand();
-	temp_schema_reset();
+	for (; MtmTxAtxLevel >= 0; MtmTxAtxLevel--)
+	{
+		temp_schema_init();
+		temp_schema_reset(false);
+	}
 	CommitTransactionCommand();
 }
 
 /* Register cleanup callback and generate temp schema name */
-static void
+void
 temp_schema_init(void)
 {
 	if (!TempDropRegistered)
 	{
-		char	   *temp_schema;
-
-		/*
-		 * NB: namespace.c:isMtmTemp() assumes 'mtm_tmp_' prefix for mtm temp
-		 * tables to defuse autovacuum.
-		 */
-		temp_schema = psprintf("mtm_tmp_%d_%d",
-							   Mtm->my_node_id, MyBackendId);
-		memcpy(&MtmTempSchema, temp_schema, strlen(temp_schema) + 1);
-		before_shmem_exit(temp_schema_at_exit, (Datum) 0);
 		TempDropRegistered = true;
-		pfree(temp_schema);
+		before_shmem_exit(temp_schema_at_exit, (Datum) 0);
 	}
+	if (MtmTxAtxLevel == 0)
+		snprintf(MtmTempSchema, sizeof(MtmTempSchema),
+				 "mtm_tmp_%d_%d", Mtm->my_node_id, MyBackendId);
+	else
+		snprintf(MtmTempSchema, sizeof(MtmTempSchema),
+				 "mtm_tmp_%d_%d_%d", Mtm->my_node_id, MyBackendId, MtmTxAtxLevel);
+	TempDropAtxLevel = MtmTxAtxLevel;
+}
+
+/*
+ * temp_schema_valid check format of temp schema name.
+ * Namespace name should be either mtm_tmp_\d+_\d+ or
+ * mtm_tmp_\d+_\d+_\d+ for non-zero atx level.
+ */
+static bool
+temp_schema_valid(const char *temp_namespace, const char **atx_level)
+{
+	const char *c;
+	const int   mtm_tmp_len = strlen("mtm_tmp_");
+	int 		underscores = 0;
+	bool        need_digit = true;
+	bool		valid = true;
+
+	*atx_level = NULL;
+	if (strlen(temp_namespace) + strlen("_toast") + 1 > NAMEDATALEN)
+		valid = false;
+	else if(strncmp(temp_namespace, "mtm_tmp_", mtm_tmp_len) != 0)
+		valid = false;
+	for (c = temp_namespace+mtm_tmp_len; *c != 0 && valid; c++)
+	{
+		if (!need_digit && *c == '_')
+		{
+			underscores++;
+			if (underscores == 2)
+				*atx_level = c;
+			need_digit = true;
+		}
+		else if ((unsigned)*c - '0' <= '9' - '0')
+			need_digit = false;
+		else
+			valid = false;
+	}
+	if (need_digit || underscores < 1 || underscores > 2)
+		valid = false;
+#ifndef PGPRO_EE
+	if (underscores == 2)
+		valid = false;
+#endif
+
+	return valid;
 }
 
 Datum
 mtm_set_temp_schema(PG_FUNCTION_ARGS)
 {
 	char	   *temp_namespace = text_to_cstring(PG_GETARG_TEXT_P(0));
-	char	   *temp_toast_namespace = psprintf("%s_toast", temp_namespace);
-	Oid			nsp_oid;
-	Oid			toast_nsp_oid;
+	bool		force = PG_NARGS() > 1 ? PG_GETARG_BOOL(1) : true;
+	char		temp_toast_namespace[NAMEDATALEN] = {0};
+	Oid			nsp_oid = InvalidOid;
+	Oid			toast_nsp_oid = InvalidOid;
+	const char *atx_level_start = NULL;
+#ifdef PGPRO_EE
+	char		top_temp_namespace[NAMEDATALEN] = {0};
+	Oid			top_nsp_oid = InvalidOid;
+	Oid			top_toast_nsp_oid = InvalidOid;
+#endif
 
-	if (!SearchSysCacheExists1(NAMESPACENAME, PointerGetDatum(temp_namespace)))
+	if (!temp_schema_valid(temp_namespace, &atx_level_start))
+		mtm_log(ERROR, "mtm_set_temp_schema: wrong namespace name '%s'",
+				temp_namespace);
+
+	snprintf(temp_toast_namespace, NAMEDATALEN, "%s_toast", temp_namespace);
+	if (SearchSysCacheExists1(NAMESPACENAME, PointerGetDatum(temp_namespace)))
+	{
+		nsp_oid = get_namespace_oid(temp_namespace, false);
+		toast_nsp_oid = get_namespace_oid(temp_toast_namespace, false);
+	}
+	else if (force)
 	{
 		nsp_oid = NamespaceCreate(temp_namespace, BOOTSTRAP_SUPERUSERID, true);
 		toast_nsp_oid = NamespaceCreate(temp_toast_namespace, BOOTSTRAP_SUPERUSERID, true);
 		CommandCounterIncrement();
 	}
-	else
+
+#ifdef PGPRO_EE
+	if (atx_level_start != NULL)
 	{
-		nsp_oid = get_namespace_oid(temp_namespace, false);
-		toast_nsp_oid = get_namespace_oid(temp_toast_namespace, false);
+		memcpy(top_temp_namespace, temp_namespace, atx_level_start - temp_namespace);
+
+		if (SearchSysCacheExists1(NAMESPACENAME, PointerGetDatum(top_temp_namespace)))
+		{
+			top_nsp_oid = get_namespace_oid(top_temp_namespace, false);
+			strlcat(top_temp_namespace, "_toast", NAMEDATALEN);
+			top_toast_nsp_oid = get_namespace_oid(top_temp_namespace, false);
+		}
 	}
 
-	SetTempNamespaceState(nsp_oid, toast_nsp_oid);
+	SetTempNamespaceForMultimaster();
+	SetTempNamespaceStateEx(nsp_oid, toast_nsp_oid,
+							top_nsp_oid, top_toast_nsp_oid,
+							atx_level_start != NULL);
+#else
+	SetTempNamespace(nsp_oid, toast_nsp_oid);
+#endif
 	PG_RETURN_VOID();
 }
 
@@ -1030,7 +1109,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				{
 					/* nothing to do if temp schema wasn't created at all */
 					if (TempDropRegistered)
-						temp_schema_reset();
+						temp_schema_reset(false);
 					SkipCommand(true);
 					MtmGucDiscard();
 				}

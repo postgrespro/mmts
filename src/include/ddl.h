@@ -33,6 +33,8 @@ extern MtmDDLInProgress DDLApplyInProgress;
 extern void MtmDDLReplicationInit(void);
 extern void MtmDDLReplicationShmemStartup(void);
 extern void temp_schema_reset_all(int my_node_id);
+extern void temp_schema_reset(bool transactional);
+extern void temp_schema_init(void);
 extern bool MtmIsRelationLocal(Relation rel);
 extern void MtmDDLResetStatement(void);
 extern void MtmApplyDDLMessage(const char *messageBody, bool transactional);
