@@ -86,6 +86,7 @@ $cluster->await_nodes( [0,1,2] );
 # to work with several postgreses on a single node
 my $schedule = TestLib::slurp_file('../../src/test/regress/parallel_schedule');
 $schedule =~ s/test: tablespace/#test: tablespace/g;
+$schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
 unlink('parallel_schedule');
