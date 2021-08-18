@@ -488,3 +488,45 @@ table seq_test;
  105
 (8 rows)
 
+--
+-- Check a sequence generation by function, procedure, direct insertion.
+--
+CREATE SEQUENCE seq1;
+CREATE TABLE t1 (id int);
+CREATE OR REPLACE PROCEDURE p1 () LANGUAGE 'plpgsql' AS $$
+BEGIN
+	INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+END; $$;
+CREATE OR REPLACE FUNCTION p2 () RETURNS VOID LANGUAGE 'plpgsql' AS $$
+BEGIN
+	INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+END; $$;
+-- Generate value by different ways.
+CALL p1();
+SELECT p2();
+ p2 
+----
+ 
+(1 row)
+
+INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+-- Fix generated values of a sequence
+SELECT * FROM t1 ORDER BY id;
+ id 
+----
+  1
+  4
+  7
+(3 rows)
+
+-- Try to UPDATE. In the case of data divergence we will get an error.
+UPDATE t1 SET id = id + 1;
+-- Check for new values, just to be sure.
+SELECT * FROM t1  ORDER BY id;
+ id 
+----
+  2
+  5
+  8
+(3 rows)
+

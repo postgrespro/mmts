@@ -947,6 +947,7 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 		case T_PlannedStmt:
 		case T_FetchStmt:
 		case T_DoStmt:
+		case T_CallStmt:
 		case T_CommentStmt:
 		case T_PrepareStmt:
 		case T_ExecuteStmt:
