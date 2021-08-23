@@ -327,3 +327,32 @@ insert into seq_test values (default);
 insert into seq_test values (default);
 \c :node1
 table seq_test;
+
+--
+-- Check a sequence generation by function, procedure, direct insertion.
+--
+CREATE SEQUENCE seq1;
+CREATE TABLE t1 (id int);
+CREATE OR REPLACE PROCEDURE p1 () LANGUAGE 'plpgsql' AS $$
+BEGIN
+	INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+END; $$;
+
+CREATE OR REPLACE FUNCTION p2 () RETURNS VOID LANGUAGE 'plpgsql' AS $$
+BEGIN
+	INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+END; $$;
+
+-- Generate value by different ways.
+CALL p1();
+SELECT p2();
+INSERT INTO t1 (id) VALUES (nextval('seq1'::regclass));
+
+-- Fix generated values of a sequence
+SELECT * FROM t1 ORDER BY id;
+
+-- Try to UPDATE. In the case of data divergence we will get an error.
+UPDATE t1 SET id = id + 1;
+
+-- Check for new values, just to be sure.
+SELECT * FROM t1  ORDER BY id;
