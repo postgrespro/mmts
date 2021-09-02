@@ -195,6 +195,10 @@ CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void
 AS 'MODULE_PATHNAME','mtm_set_temp_schema'
 LANGUAGE C;
 
+CREATE FUNCTION mtm.set_temp_schema(nsp text, force bool) RETURNS void
+AS 'MODULE_PATHNAME','mtm_set_temp_schema'
+LANGUAGE C;
+
 CREATE TABLE mtm.local_tables(
     rel_schema name,
     rel_name name,

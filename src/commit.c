@@ -46,6 +46,7 @@ static bool inside_mtm_begin;
 static MtmConfig *mtm_cfg;
 
 MtmCurrentTrans MtmTx;
+int MtmTxAtxLevel = 0;
 
 /* holds state defining cleanup actions in case of failure during commit */
 static struct MtmCommitState
@@ -399,6 +400,9 @@ MtmTwoPhaseCommit(void)
 		CommitTransactionCommand();
 		StartTransactionCommand();
 	}
+
+	if (MtmTxAtxLevel > 0)
+		temp_schema_reset(true);
 
 	/* prepare for cleanup */
 	mtm_commit_state.gtx = NULL;

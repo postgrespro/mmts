@@ -3920,6 +3920,7 @@ MtmMonitor(Datum arg)
 	 */
 	{
 		int			rc;
+		uint64 		nfuncs;
 
 		StartTransactionCommand();
 		if (SPI_connect() != SPI_OK_CONNECT)
@@ -3955,7 +3956,8 @@ MtmMonitor(Datum arg)
 						 true, 0);
 		if (rc < 0 || rc != SPI_OK_SELECT)
 			mtm_log(ERROR, "Failed to query pg_proc");
-		if (SPI_processed == 0)
+		nfuncs = SPI_processed;
+		if (nfuncs == 0)
 		{
 			rc = SPI_execute("CREATE FUNCTION mtm.set_temp_schema(nsp text) RETURNS void "
 							 "AS '$libdir/multimaster','mtm_set_temp_schema' "
@@ -3963,7 +3965,18 @@ MtmMonitor(Datum arg)
 			if (rc < 0 || rc != SPI_OK_UTILITY)
 				mtm_log(ERROR, "Failed to create mtm.set_temp_schema()");
 
-			mtm_log(LOG, "Creating mtm.set_temp_schema()");
+			mtm_log(LOG, "Creating mtm.set_temp_schema(nsp)");
+		}
+
+		if (nfuncs <= 1)
+		{
+			rc = SPI_execute("CREATE FUNCTION mtm.set_temp_schema(nsp text, force bool) RETURNS void "
+							 "AS '$libdir/multimaster','mtm_set_temp_schema' "
+							 "LANGUAGE C; ", false, 0);
+			if (rc < 0 || rc != SPI_OK_UTILITY)
+				mtm_log(ERROR, "Failed to create mtm.set_temp_schema()");
+
+			mtm_log(LOG, "Creating mtm.set_temp_schema(nsp, force)");
 		}
 
 		SPI_finish();

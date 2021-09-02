@@ -216,6 +216,7 @@ extern MtmShared *Mtm;
 
 /* XXX: to delete */
 extern MtmCurrentTrans MtmTx;
+extern int MtmTxAtxLevel;
 extern MemoryContext MtmApplyContext;
 
 /* bgworker identities */

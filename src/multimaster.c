@@ -369,6 +369,8 @@ MtmSuspendTransaction(void)
 	MtmCurrentTrans *ctx = malloc(sizeof(MtmCurrentTrans));
 
 	*ctx = MtmTx;
+	MtmTxAtxLevel++;
+	temp_schema_init();
 	CallXactCallbacks(XACT_EVENT_START);
 	return ctx;
 }
@@ -378,6 +380,8 @@ MtmResumeTransaction(void *ctx)
 {
 	MtmTx = *(MtmCurrentTrans *) ctx;
 	free(ctx);
+	MtmTxAtxLevel--;
+	temp_schema_init();
 }
 #endif
 
