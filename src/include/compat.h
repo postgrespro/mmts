@@ -9,7 +9,7 @@
 #endif
 
 #ifdef PGPRO_EE /* atx */
-#define BeginTransactionBlockCompat() (BeginTransactionBlock(false))
+#define BeginTransactionBlockCompat() (BeginTransactionBlock(false, NIL))
 #define UserAbortTransactionBlockCompat(chain) (UserAbortTransactionBlock(false, (chain)))
 #else
 #define BeginTransactionBlockCompat() (BeginTransactionBlock())
