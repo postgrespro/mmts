@@ -172,7 +172,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  \d concur_heap
             Table "public.concur_heap"
   Column | Type | Collation | Nullable | Default 
-@@ -2428,46 +2428,38 @@
+@@ -2447,46 +2447,38 @@
  INSERT INTO concur_reindex_tab4 VALUES (1), (1), (2);
  -- This trick creates an invalid index.
  CREATE UNIQUE INDEX CONCURRENTLY concur_reindex_ind5 ON concur_reindex_tab4 (c1);
@@ -570,7 +570,34 @@ diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_out
 diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/results/atx.out
 --- ../../../src/test/regress/expected/atx.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx.out	CENSORED
-@@ -1143,6 +1143,7 @@
+@@ -851,6 +851,7 @@
+     declare c2 cursor with hold for select count_tt1_v(), count_tt1_s();
+     insert into atx_tt1 values(2);
+   commit;
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ begin;
+   begin autonomous;
+@@ -866,6 +867,7 @@
+ drop function count_tt1_s();
+ drop table if exists atx_tt1;
+ close c2;
++ERROR:  cursor "c2" does not exist
+ -- 13
+ create table atx_13_t(i int);
+ begin;
+@@ -985,9 +987,7 @@
+ 		insert into atx_tt2 values(1);
+ 		declare c2 cursor with hold for select error_function();
+ 	commit;
+-NOTICE:  other exception 22012, division by zero
+-ERROR:  control reached end of function without RETURN
+-CONTEXT:  PL/pgSQL function error_function()
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ drop function if exists error_function();
+ drop table if exists atx_tt2;
+@@ -1074,6 +1074,7 @@
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
