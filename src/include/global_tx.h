@@ -4,7 +4,7 @@
  *	  Persistent and in-memory state necessary for our E3PC-like atomic commit
  #	  protocol.
  *
- * Copyright (c) 2016-2019, Postgres Professional
+ * Copyright (c) 2016-2021, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */

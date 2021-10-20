@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #
 # Multimaster testing framework based on testgres.
-# Copyright (c) 2017, Postgres Professional
+# Copyright (c) 2017-2021, Postgres Professional
 #
 # Execute this file in order to run 3-node mm cluster
 

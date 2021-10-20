@@ -4,6 +4,7 @@
  *		pglogical output plugin
  *
  * Copyright (c) 2015, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2021, Postgres Professional
  *
  * IDENTIFICATION
  *		pglogical_output.h

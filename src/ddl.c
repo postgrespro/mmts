@@ -3,7 +3,7 @@
  * ddl.c
  *	  Statement based replication of DDL commands.
  *
- * Copyright (c) 2019-2020, Postgres Professional
+ * Copyright (c) 2019-2021, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */

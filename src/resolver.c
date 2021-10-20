@@ -4,7 +4,7 @@
  *	  Recovery procedures to resolve transactions that were left uncommited
  *	  because of detected failure.
  *
- * Copyright (c) 2015-2020, Postgres Professional
+ * Copyright (c) 2015-2021, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */

@@ -3,7 +3,7 @@
  *
  * Bron–Kerbosch algorithm to find maximum clique in a graph.
  *
- * Copyright (c) 2017-2020, Postgres Professional
+ * Copyright (c) 2017-2021, Postgres Professional
  *
  */
 #ifndef TEST

@@ -22,7 +22,7 @@
  *
  * XXX: is there max size for a connstr?
  *
- * Copyright (c) 2019-2020, Postgres Professional
+ * Copyright (c) 2019-2021, Postgres Professional
  *
  *----------------------------------------------------------------------------
  */
