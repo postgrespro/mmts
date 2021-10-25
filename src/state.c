@@ -2862,8 +2862,8 @@ MtmStateLoad(void)
 	fsync_fname("pg_mtm", true);
 
 
-	readBytes = read(fd, &ondisk, MtmStateOnDiskConstantSize);
-	if (readBytes != MtmStateOnDiskConstantSize)
+	readBytes = read(fd, &ondisk, sizeof(MtmStateOnDisk));
+	if (readBytes != sizeof(MtmStateOnDisk))
 	{
 		int			save_errno = errno;
 
@@ -2895,30 +2895,6 @@ MtmStateLoad(void)
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("mtm state file \"%s\" has unsupported version: %u instead of %u",
 						path, ondisk.version, MTMSTATE_VERSION)));
-
-	readBytes = read(fd, &ondisk.current_gen,
-					 sizeof(MtmStateOnDisk) - MtmStateOnDiskConstantSize);
-
-	if (readBytes != (sizeof(MtmStateOnDisk) - MtmStateOnDiskConstantSize))
-	{
-		int			save_errno = errno;
-
-		CloseTransientFile(fd);
-
-		if (readBytes < 0)
-		{
-			errno = save_errno;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m", path)));
-		}
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, readBytes,
-							sizeof(MtmStateOnDisk) - MtmStateOnDiskConstantSize)));
-	}
 
 	INIT_CRC32C(checksum);
 	COMP_CRC32C(checksum,
