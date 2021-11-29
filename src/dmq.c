@@ -953,17 +953,15 @@ shm_mq_available(shm_mq_handle *mqh)
 	uint64		rb;
 	uint64		wb;
 	uint64		used;
-	Size		ringsize;
 
 	my_shm_mq *mq = (void *) shm_mq_get_queue(mqh);
 
 	/* Compute number of ring buffer bytes used and available. */
 	rb = pg_atomic_read_u64(&mq->mq_bytes_read);
 	wb = pg_atomic_read_u64(&mq->mq_bytes_written);
-	ringsize = mq->mq_ring_size;
 	used = wb - rb;
 	Assert(wb >= rb);
-	Assert(used <= ringsize);
+	Assert(used <= mq->mq_ring_size);
 	return mq->mq_ring_size - used;
 }
 

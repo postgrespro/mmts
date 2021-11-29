@@ -318,7 +318,9 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	}
 	else if (msgtype == 'M')
 	{
+#ifdef USE_ASSERT_CHECKING
 		char		action = pq_getmsgbyte(&s);
+#endif
 		int			messageSize;
 		char const *messageBody;
 
@@ -342,8 +344,11 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 			origin_lsn = InvalidXLogRecPtr;
 		}
 	}
-	else
-		Assert(false);
+	else {
+		ereport(ERROR,
+				(errmsg("invalid message type: %c", msgtype)));
+	}
+
 	tx_lsn = origin_node == rctx->w.sender_node_id ? end_lsn : origin_lsn;
 
 	/*
