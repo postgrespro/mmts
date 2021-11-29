@@ -366,7 +366,7 @@ MtmDeserializeTransactionState(void *ctx)
 static void *
 MtmSuspendTransaction(void)
 {
-	MtmCurrentTrans *ctx = malloc(sizeof(MtmCurrentTrans));
+	MtmCurrentTrans *ctx = MemoryContextAlloc(CurTransactionContext, sizeof(MtmCurrentTrans));
 
 	*ctx = MtmTx;
 	return ctx;
@@ -376,7 +376,7 @@ static void
 MtmResumeTransaction(void *ctx)
 {
 	MtmTx = *(MtmCurrentTrans *) ctx;
-	free(ctx);
+	pfree(ctx);
 }
 #endif
 
