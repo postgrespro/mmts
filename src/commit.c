@@ -135,14 +135,39 @@ mtm_commit_cleanup(int status, Datum arg)
 				/* there was no precommit, we can abort */
 				PG_TRY();
 				{
-					AbortOutOfAnyTransaction();
-					StartTransactionCommand();
+#ifdef PGPRO_EE
+					int atxLevel = DatumGetInt32(arg);
+
+					/*
+					 * If we are inside ATX transaction, we can not call
+					 * AbortOutOfAnyTransaction() because this call will abort
+					 * ALL transactions and we will have problems if the
+					 * calling code is not designed for this case.
+					 */
+					if (atxLevel)
+					{
+						/* Abort (current ATX transaction only): */
+						AbortCurrentTransaction();
+						/* Restart ATX transaction if it was resumed: */
+						if (atxLevel > getNestLevelATX())
+							SuspendTransaction();
+					}
+					else
+#endif
+					{
+						AbortOutOfAnyTransaction();
+						StartTransactionCommand();
+					}
 					FinishPreparedTransaction(mtm_commit_state.gid, false, false);
 					mtm_commit_state.gtx->state.status = GTXAborted;
 					mtm_log(MtmTxFinish, "%s aborted as own orphaned not precomitted",
 							mtm_commit_state.gid);
 					CommitTransactionCommand();
-
+#ifdef PGPRO_EE
+					/* Restart ATX transaction if it was resumed: */
+					if (atxLevel > getNestLevelATX())
+						SuspendTransaction();
+#endif
 				}
 				/*
 				 * this should be extremely unlikely, but if we fail, don't
@@ -218,7 +243,7 @@ MtmBeginTransaction()
 		 * register gtx hook first (it will be called last)
 		 */
 		GlobalTxEnsureBeforeShmemExitHook();
-		before_shmem_exit(mtm_commit_cleanup, Int32GetDatum(1));
+		before_shmem_exit(mtm_commit_cleanup, Int32GetDatum(0));
 		mtm_commit_state.mctx = AllocSetContextCreate(TopMemoryContext,
 													  "MtmCommitContext",
 													  ALLOCSET_DEFAULT_SIZES);
@@ -373,6 +398,9 @@ MtmTwoPhaseCommit(void)
 	MtmGeneration xact_gen;
 	char dmq_stream_name[DMQ_STREAM_NAME_MAXLEN];
 	GTxState gtx_state;
+#ifdef PGPRO_EE
+	int atxLevel = getNestLevelATX();
+#endif
 
 	if (MtmNo3PC)
 	{
@@ -714,7 +742,7 @@ commit_tour_done:
 	}
 	PG_CATCH();
 	{
-		mtm_commit_cleanup(0, Int32GetDatum(0));
+		mtm_commit_cleanup(0, Int32GetDatum(atxLevel));
 
 		PG_RE_THROW();
 	}
