@@ -933,7 +933,8 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 
 	/* parse array with peer connstrings */
 	Assert(ARR_ELEMTYPE(peers_arr) == TEXTOID);
-	Assert(ARR_NDIM(peers_arr) == 1);
+	if (ARR_NDIM(peers_arr) != 1)
+		mtm_log(ERROR, "node list should not be empty");
 	deconstruct_array(peers_arr,
 					  TEXTOID, -1, false, 'i',
 					  &peers_datums, &peers_nulls, &n_peers);
