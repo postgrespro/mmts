@@ -194,9 +194,10 @@ static void
 process_remote_begin(StringInfo s, MtmReceiverWorkerContext *rwctx)
 {
 	/* there is no need to send this, but since we do, check its sanity */
-#ifdef USE_ASSERT_CHECKING
 	int sender_node_id = pq_getmsgint(s, 4);
-#endif
+
+	(void) sender_node_id;		/* keep the compiler quiet when asserts are disabled*/
+
 	Assert(rwctx->sender_node_id == sender_node_id);
 	rwctx->origin_xid = pq_getmsgint64(s);
 	mtm_log(MtmApplyTrace, "processing begin of xid " XID_FMT, rwctx->origin_xid);

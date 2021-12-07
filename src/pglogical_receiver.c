@@ -318,11 +318,11 @@ MtmFilterTransaction(char *record, int size, Syncpoint *spvector,
 	}
 	else if (msgtype == 'M')
 	{
-#ifdef USE_ASSERT_CHECKING
 		char		action = pq_getmsgbyte(&s);
-#endif
 		int			messageSize;
 		char const *messageBody;
+
+		(void) action;		/* keep the compiler quiet when asserts are disabled*/
 
 		end_lsn = pq_getmsgint64(&s);
 		messageSize = pq_getmsgint(&s, 4);
