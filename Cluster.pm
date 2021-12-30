@@ -340,7 +340,8 @@ sub add_node()
 {
 	my ($self) = @_;
 
-	my $new_node = get_new_node("node@{[$#{$self->{nodes}} + 2]}");
+	my $new_node = get_new_node("node@{[$#{$self->{nodes}} + 2]}",
+	(port => mm_get_free_port()));
 	push(@{$self->{nodes}}, $new_node);
 
 	return $#{$self->{nodes}};
