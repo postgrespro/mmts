@@ -318,9 +318,9 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  stud_emp|f
  student|f
 +syncpoints|t
+ tab_core_types|f
  tableam_parted_a_heap2|f
  tableam_parted_b_heap2|f
- tableam_parted_c_heap2|f
 diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_outdir/results/transactions.out
 --- ../../../src/test/regress/expected/transactions.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/transactions.out	CENSORED
