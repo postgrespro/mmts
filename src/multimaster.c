@@ -88,8 +88,8 @@ static void MtmDeserializeTransactionState(void *ctx);
 #endif
 
 #ifdef PGPRO_EE
-static void *MtmSuspendTransaction(void);
-static void MtmResumeTransaction(void *ctx);
+//static void *MtmSuspendTransaction(void);
+//static void MtmResumeTransaction(void *ctx);
 #endif
 
 static void release_pb_holders_xact_cb(XactEvent event, void *arg);
@@ -363,21 +363,21 @@ MtmDeserializeTransactionState(void *ctx)
  * ATX compatibility support.
  */
 #ifdef PGPRO_EE
-static void *
-MtmSuspendTransaction(void)
-{
-	MtmCurrentTrans *ctx = MemoryContextAlloc(CurTransactionContext, sizeof(MtmCurrentTrans));
+//static void *
+//MtmSuspendTransaction(void)
+//{
+//	MtmCurrentTrans *ctx = MemoryContextAlloc(CurTransactionContext, sizeof(MtmCurrentTrans));
+//
+//	*ctx = MtmTx;
+//	return ctx;
+//}
 
-	*ctx = MtmTx;
-	return ctx;
-}
-
-static void
-MtmResumeTransaction(void *ctx)
-{
-	MtmTx = *(MtmCurrentTrans *) ctx;
-	pfree(ctx);
-}
+//static void
+//MtmResumeTransaction(void *ctx)
+//{
+//	MtmTx = *(MtmCurrentTrans *) ctx;
+//	pfree(ctx);
+//}
 #endif
 
 /*
@@ -744,8 +744,8 @@ NULL);
 	DetectGlobalDeadLock = MtmDetectGlobalDeadLock;
 
 #ifdef PGPRO_EE
-	SuspendTransactionHook = MtmSuspendTransaction;
-	ResumeTransactionHook = MtmResumeTransaction;
+//	SuspendTransactionHook = MtmSuspendTransaction;
+//	ResumeTransactionHook = MtmResumeTransaction;
 #endif
 }
 
@@ -1712,8 +1712,10 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 	int			i,
 				node_id;
 
+	mtm_log(LOG, "-------> ReloadConfig");
 	new_cfg = MtmLoadConfig(elevel_on_absent);
 
+	mtm_log(LOG, "-------> ReloadConfig. new config %p", new_cfg);
 	/*
 	 * Construct bitmapsets from old and new mtm_config's and find out whether
 	 * some nodes were added or deleted.
@@ -1758,8 +1760,9 @@ MtmReloadConfig(MtmConfig *old_cfg, mtm_cfg_change_cb node_add_cb,
 		}
 
 		node_id = -1;
-		while ((node_id = bms_next_member(created, node_id)) >= 0)
+		while ((node_id = bms_next_member(created, node_id)) >= 0) {
 			node_add_cb(node_id, new_cfg, arg);
+		}
 	}
 
 	if (node_drop_cb)

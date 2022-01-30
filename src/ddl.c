@@ -119,7 +119,7 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next);
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
 
-static void MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
+static void MtmProcessUtility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 							  ProcessUtilityContext context, ParamListInfo params,
 							  QueryEnvironment *queryEnv, DestReceiver *dest,
 							  QueryCompletion *qc);
@@ -359,7 +359,7 @@ MtmGucInit(void)
 	MtmGucHash = hash_create("MtmGucHash",
 							 MTM_GUC_HASHSIZE,
 							 &hash_ctl,
-							 HASH_ELEM | HASH_CONTEXT);
+							 HASH_ELEM | HASH_CONTEXT | HASH_STRINGS);
 
 	/*
 	 * If current role is not equal to MtmDatabaseUser, than set it before any
@@ -661,7 +661,7 @@ MtmFinishDDLCommand()
 
 
 static void
-MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
+MtmProcessUtility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 				  ProcessUtilityContext context, ParamListInfo params,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  QueryCompletion *qc)
@@ -677,13 +677,13 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	{
 		if (PreviousProcessUtilityHook != NULL)
 		{
-			PreviousProcessUtilityHook(pstmt, queryString,
+			PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 									   context, params, queryEnv,
 									   dest, qc);
 		}
 		else
 		{
-			standard_ProcessUtility(pstmt, queryString,
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
 		}
@@ -841,13 +841,17 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 
 	if (PreviousProcessUtilityHook != NULL)
 	{
-		PreviousProcessUtilityHook(pstmt, queryString,
+		bool readOnlyTree = false;
+
+		PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 								   context, params, queryEnv,
 								   dest, qc);
 	}
 	else
 	{
-		standard_ProcessUtility(pstmt, queryString,
+		bool readOnlyTree = false;
+
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
 	}
@@ -1188,13 +1192,17 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 
 	if (PreviousProcessUtilityHook != NULL)
 	{
-		PreviousProcessUtilityHook(pstmt, queryString,
+		bool readOnlyTree = false;
+
+		PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 								   context, params, queryEnv,
 								   dest, qc);
 	}
 	else
 	{
-		standard_ProcessUtility(pstmt, queryString,
+		bool readOnlyTree = false;
+
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
 	}
@@ -1312,11 +1320,17 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 		if (operation == CMD_INSERT || operation == CMD_UPDATE ||
 			operation == CMD_DELETE || pstmt->hasModifyingCTE)
 		{
-			int			i;
+//			int			i;
 
-			for (i = 0; i < estate->es_num_result_relations; i++)
-			{
-				Relation	rel = estate->es_result_relations[i].ri_RelationDesc;
+//			for (i = 0; i < estate->es_num_result_relations; i++)
+//			{
+//
+			ListCell   *l;
+
+			foreach(l, estate->es_opened_result_relations)                                                                                                                                             
+			{                                                                                                                                                                                          
+				ResultRelInfo *resultRelInfo = lfirst(l);                                                                                                                                              
+				Relation	rel = resultRelInfo->ri_RelationDesc;
 
 				/*
 				 * Don't run 3pc unless we modified at least one non-local table.
@@ -1710,7 +1724,7 @@ MtmInitializeRemoteFunctionsMap()
 		if (q != NULL)
 			*q++ = '\0';
 
-		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
+		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true, true);
 		if (clist == NULL)
 			mtm_log(DEBUG1, "Can't resolve function '%s', postponing that", p);
 		else
@@ -1725,7 +1739,7 @@ MtmInitializeRemoteFunctionsMap()
 		p = q;
 	} while (p != NULL);
 
-	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true);
+	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true, true);
 	if (clist != NULL)
 		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 

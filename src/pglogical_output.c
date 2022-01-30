@@ -74,7 +74,7 @@ static void pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN 
 static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 							  XLogRecPtr lsn);
 static void pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-							 XLogRecPtr lsn);
+							 XLogRecPtr lsn, TimestampTz prepare_time);
 
 static bool pg_filter_prepare(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				  TransactionId xid, const char *gid);
@@ -137,7 +137,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->filter_prepare_cb = pg_filter_prepare;
 	cb->prepare_cb = pg_decode_prepare_txn;
 	cb->commit_prepared_cb = pg_decode_commit_prepared_txn;
-	cb->abort_prepared_cb = pg_decode_abort_prepared_txn;
+	cb->rollback_prepared_cb = pg_decode_abort_prepared_txn;
 
 	cb->filter_by_origin_cb = pg_decode_origin_filter;
 	cb->shutdown_cb = pg_decode_shutdown;
@@ -506,7 +506,7 @@ pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn
 
 void
 pg_decode_abort_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
-							 XLogRecPtr lsn)
+							 XLogRecPtr lsn, TimestampTz prepare_time)
 {
 	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
 

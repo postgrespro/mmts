@@ -185,7 +185,7 @@ MtmGlobalTxShmemStartup(void)
 		gtx_shared->lock = &(GetNamedLWLockTranche("mtm-gtx-lock"))->lock;
 
 	gtx_shared->gid2gtx = ShmemInitHash("gid2gtx", 2*MaxConnections, 2*MaxConnections,
-							&info, HASH_ELEM);
+							&info, HASH_ELEM | HASH_STRINGS);
 
 	LWLockRelease(AddinShmemInitLock);
 }

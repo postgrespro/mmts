@@ -482,9 +482,9 @@ MtmTwoPhaseCommit(void)
 		 * XXX: check the same xact block stuff in case of cleanup
 		 */
 #ifdef PGPRO_EE
-		if (IsTransactionState())
-			SuspendTransaction();
-		else
+//		if (IsTransactionState())
+//			SuspendTransaction();
+//		else
 #endif
 			StartTransactionCommand();
 

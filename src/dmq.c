@@ -367,7 +367,7 @@ dmq_shmem_startup_hook(void)
 									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
 									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
 									  &hash_info,
-									  HASH_ELEM);
+									  HASH_ELEM | HASH_STRINGS);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -388,6 +388,7 @@ dmq_init(int send_timeout, int connect_timeout)
 {
 	BackgroundWorker worker;
 
+	mtm_log(LOG, "------> dmq_init starting");
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
@@ -414,6 +415,7 @@ dmq_init(int send_timeout, int connect_timeout)
 	/* Register shmem hooks */
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = dmq_shmem_startup_hook;
+	mtm_log(LOG, "------> dmq_init started");
 }
 
 static Size
@@ -516,6 +518,8 @@ dmq_sender_main(Datum main_arg)
 	 */
 	int			sconn_cnt[DMQ_MAX_DESTINATIONS];
 	double		prev_timer_at = dmq_now();
+	
+	mtm_log(LOG, "------> dmq_sender starting");
 
 	MtmBackgroundWorker = true; /* includes bgw name in mtm_log */
 
@@ -562,6 +566,7 @@ dmq_sender_main(Datum main_arg)
 
 	got_SIGHUP = true;
 
+	mtm_log(LOG, "------> dmq_sender 1");
 	for (;;)
 	{
 		WaitEvent	event;
@@ -570,6 +575,7 @@ dmq_sender_main(Datum main_arg)
 		double		now_millisec;
 		bool		timer_event = false;
 
+		mtm_log(LOG, "------> dmq_sender 2");
 		if (ProcDiePending)
 			break;
 
@@ -1444,7 +1450,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		extra = dmq_receiver_start_hook(sender_name);
 
 	/* do not hold globalxmin. XXX: try to carefully release snaps */
-	MyPgXact->xmin = InvalidTransactionId;
+//	MyPgXact->xmin = InvalidTransactionId;
 
 	for (;;)
 	{

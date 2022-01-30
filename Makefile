@@ -69,7 +69,7 @@ all: multimaster.so
 
 submake-regress:
 	$(MAKE) -C $(top_builddir)/src/test/regress all
-	$(MAKE) -C $(top_builddir)/src/test/regress tablespace-setup
+#	$(MAKE) -C $(top_builddir)/src/test/regress tablespace-setup
 
 # all .pl tests should pass now, but let's see what the buildfarm says
 # ifndef MTM_ALL

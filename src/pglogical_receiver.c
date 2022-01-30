@@ -647,6 +647,7 @@ pglogical_receiver_main(Datum main_arg)
 		Mtm->peers[sender - 1].walreceiver_proc = MyProc;
 		LWLockRelease(Mtm->lock);
 
+		mtm_log(LOG, "-----> logical_recv_main: 2");
 		/*
 		 * Determine how we should pull and ensure we won't interfere with
 		 * other receivers.
@@ -693,6 +694,7 @@ pglogical_receiver_main(Datum main_arg)
 		mtm_log(MtmReceiverState, "registered as running in %s mode",
 				MtmReplicationModeMnem[rctx->w.mode]);
 
+		mtm_log(LOG, "-----> logical_recv_main: 7");
 		/*
 		 * do not start until dmq connection to the node is established,
 		 * c.f. MtmOnDmqReceiverDisconnect
@@ -702,6 +704,7 @@ pglogical_receiver_main(Datum main_arg)
 			elog(ERROR, "receiver %s exits as dmq connection to node %d is not yet established",
 				 MyBgworkerEntry->bgw_name, rctx->w.sender_node_id);
 
+		mtm_log(LOG, "-----> logical_recv_main: 8");
 		/*
 		 * Acquire filter rep slot, so we can advance it during normal work
 		 * without search
@@ -716,6 +719,7 @@ pglogical_receiver_main(Datum main_arg)
 		/* Establish connection to the remote server */
 		rctx->wrconn = walrcv_connect(conninfo, true, MyBgworkerEntry->bgw_name,
 									  &err);
+		mtm_log(LOG, "-----> logical_recv_main: 9");
 		if (rctx->wrconn == NULL)
 			ereport(ERROR,
 					(errmsg("could not connect to the sender: %s", err)));
@@ -724,6 +728,7 @@ pglogical_receiver_main(Datum main_arg)
 		/* Create new slot if needed */
 		query = createPQExpBuffer();
 
+		mtm_log(LOG, "-----> logical_recv_main: 10");
 		/*
 		 * Make sure config is up to date as we are going to check out
 		 * backup_node_id; if it has been cleared we must be aware of that.
@@ -739,6 +744,7 @@ pglogical_receiver_main(Datum main_arg)
 			receiver_mtm_cfg_valid = true;
 		}
 
+		mtm_log(LOG, "-----> logical_recv_main: 11");
 		if (rctx->w.mode == REPLMODE_RECOVERY)
 		{
 			/*
