@@ -57,6 +57,7 @@
 #include "multimaster.h"
 #include "logger.h"
 #include "state.h"
+#include "mtm_utils.h"
 
 extern void _PG_output_plugin_init(OutputPluginCallbacks *cb);
 
@@ -143,6 +144,8 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->shutdown_cb = pg_decode_shutdown;
 	cb->message_cb = pg_decode_message;
 	cb->caughtup_cb = pg_decode_caughtup;
+
+	MtmDisableTimeouts();
 }
 
 #if 0

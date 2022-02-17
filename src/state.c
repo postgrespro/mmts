@@ -45,6 +45,7 @@
 #include "syncpoint.h"
 #include "logger.h"
 #include "messaging.h"
+#include "mtm_utils.h"
 
 char const *const MtmNeighborEventMnem[] =
 {
@@ -1671,6 +1672,8 @@ CampaignerMain(Datum main_arg)
 	static unsigned short drandom_seed[3] = {0, 0, 0};
 	TimestampTz last_campaign_at = 0;
 	int			rc = WL_TIMEOUT;
+
+	MtmDisableTimeouts();
 
 	MtmBackgroundWorker = true;
 	mtm_log(MtmStateMessage, "campaigner started");
@@ -3416,6 +3419,8 @@ ReplierMain(Datum main_arg)
 													  "ReplierContext",
 													  ALLOCSET_DEFAULT_SIZES);
 	bool	job_pending;
+
+	MtmDisableTimeouts();
 
 	MtmBackgroundWorker = true;
 	before_shmem_exit(ReplierOnExit, (Datum) 0);

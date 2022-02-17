@@ -31,6 +31,7 @@
 #include "dmq.h"
 #include "logger.h"
 #include "compat.h"
+#include "mtm_utils.h"
 
 #include "access/transam.h"
 #include "libpq/libpq.h"
@@ -527,6 +528,8 @@ dmq_sender_main(Datum main_arg)
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
+	MtmDisableTimeouts();
+
 	memcpy(&heartbeat_send_timeout, MyBgworkerEntry->bgw_extra, sizeof(int));
 	memcpy(&connect_timeout, MyBgworkerEntry->bgw_extra + sizeof(int), sizeof(int));
 
@@ -796,7 +799,7 @@ dmq_sender_main(Datum main_arg)
 						int			pos = event.pos;
 
 						pqtime = dmq_now();
-						status = PQconnectPoll(conns[conn_id].pgconn);
+						status = MtmPQconnectPoll(conns[conn_id].pgconn);
 						mtm_log(DmqPqTiming, "[DMQ] [TIMING] pqp = %f ms", dmq_now() - pqtime);
 
 						mtm_log(DmqStateIntermediate,
@@ -1385,6 +1388,11 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	int			recv_timeout;
 	double		last_message_at = dmq_now();
 	void		*extra = NULL;
+
+	/*
+	 * We do not call MtmDisbaleTimeouts() here because of connection to this
+	 * client is made by MtmPQconnectPoll() that sets all needed timeouts.
+	 */
 
 	sender_name = text_to_cstring(PG_GETARG_TEXT_PP(0));
 	recv_timeout = PG_GETARG_INT32(1);

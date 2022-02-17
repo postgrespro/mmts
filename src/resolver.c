@@ -30,6 +30,7 @@
 #include "commit.h"
 #include "global_tx.h"
 #include "messaging.h"
+#include "mtm_utils.h"
 
 static MtmConfig *mtm_cfg = NULL;
 static bool		send_requests;
@@ -636,6 +637,8 @@ ResolverMain(Datum main_arg)
 {
 	Oid			db_id,
 				user_id;
+
+	MtmDisableTimeouts();
 
 	/* init this worker */
 	pqsignal(SIGHUP, ResolverSigHupHandler);

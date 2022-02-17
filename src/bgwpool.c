@@ -31,6 +31,7 @@
 #include "multimaster.h"
 #include "state.h"
 #include "logger.h"
+#include "mtm_utils.h"
 
 /*
  * Store the size of tx body, position of it in the tx list and transaction
@@ -324,6 +325,7 @@ BgwPoolMainLoop(BgwPool *poolDesc)
 void
 BgwPoolDynamicWorkerMainLoop(Datum arg)
 {
+	MtmDisableTimeouts();
 	BgwPoolMainLoop((BgwPool *) DatumGetPointer(arg));
 }
 

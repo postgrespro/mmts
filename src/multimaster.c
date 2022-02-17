@@ -48,6 +48,7 @@
 #include "commit.h"
 #include "messaging.h"
 #include "syncpoint.h"
+#include "mtm_utils.h"
 
 #include "compat.h"
 
@@ -332,7 +333,6 @@ MtmSleep(int64 usec)
 				  sleepfor / 1000.0, WAIT_EVENT_BGWORKER_STARTUP);
 	}
 }
-
 
 /*
  * These were once used to setup mtm state in parallel workers, but as long as
@@ -970,7 +970,7 @@ mtm_init_cluster(PG_FUNCTION_ARGS)
 		int			j;
 
 		/* connect */
-		peer_conns[i] = PQconnectdb(conninfo);
+		peer_conns[i] = MtmPQconnectdb(conninfo);
 		if (PQstatus(peer_conns[i]) != CONNECTION_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(peer_conns[i]));
@@ -1300,7 +1300,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	if (new_node == NULL)
 		mtm_log(ERROR, "new node %d not found", new_node_id);
 	conninfo = new_node->conninfo;
-	conn = PQconnectdb(conninfo);
+	conn = MtmPQconnectdb(conninfo);
 	if (PQstatus(conn) != CONNECTION_OK)
 	{
 		char	   *msg = pchomp(PQerrorMessage(conn));
@@ -1495,7 +1495,7 @@ mtm_ping(PG_FUNCTION_ARGS)
 		if (!BIT_CHECK(curr_gen.members, peer->node_id - 1))
 			continue;
 
-		conn = PQconnectdb(peer->conninfo);
+		conn = MtmPQconnectdb(peer->conninfo);
 		if (PQstatus(conn) != CONNECTION_OK)
 		{
 			char	   *msg = pchomp(PQerrorMessage(conn));
@@ -2554,7 +2554,7 @@ _mtm_get_snapshots(const MtmConfig *mcfg, PGconn **conns, char **snapnames,
 	for (i = 0; i < mcfg->n_nodes; i++)
 	{
 		/* Establish connection to each node */
-		conns[i] = PQconnectdb(mcfg->nodes[i].conninfo);
+		conns[i] = MtmPQconnectdb(mcfg->nodes[i].conninfo);
 
 		if (conns[i] == NULL || PQstatus(conns[i]) == CONNECTION_BAD)
 		{
@@ -2680,7 +2680,7 @@ mtm_check_query(PG_FUNCTION_ARGS)
 			int pos = index[i];
 
 			/* Establish connection to each online node */
-			conn = PQconnectdb(cfg->nodes[pos].conninfo);
+			conn = MtmPQconnectdb(cfg->nodes[pos].conninfo);
 
 			if (conn == NULL || PQstatus(conn) == CONNECTION_BAD)
 			{
