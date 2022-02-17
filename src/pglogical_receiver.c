@@ -56,6 +56,7 @@
 #include "compat.h"
 #include "syncpoint.h"
 #include "global_tx.h"
+#include "mtm_utils.h"
 
 #define ERRCODE_DUPLICATE_OBJECT_STR  "42710"
 
@@ -583,6 +584,8 @@ pglogical_receiver_main(Datum main_arg)
 	 * restarted. We also reconnect through restart when needed.
 	 */
 	on_shmem_exit(pglogical_receiver_at_exit, PointerGetDatum(rctx));
+
+	MtmDisableTimeouts();
 
 	MtmIsReceiver = true;
 	/* Run as replica session replication role. */

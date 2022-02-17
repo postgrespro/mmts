@@ -666,7 +666,6 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  QueryCompletion *qc)
 {
-
 	/*
 	 * Quick exit if multimaster is not enabled.
 	 * XXX it's better to do MtmIsEnabled here, but this needs cache access
