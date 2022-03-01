@@ -882,6 +882,14 @@ CampaignerWake(void)
 		kill(mtm_state->campaigner_pid, SIGHUP);
 }
 
+/* Service to restart a campaigner process. */
+void
+CampaignerStop(void)
+{
+	if (mtm_state->campaigner_pid != 0)
+		kill(mtm_state->campaigner_pid, SIGTERM);
+}
+
 /* campaigner never rereads PG config, but it currently it hardly needs to */
 static void
 CampaignerSigHupHandler(SIGNAL_ARGS)
@@ -3856,6 +3864,12 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	pfree(bgws[node_id - 1].handle);
 	bgws[node_id - 1].handle = NULL;
 
+	/*
+	 * Only cleaning a name field guarantees that monitor wouldn't restart this
+	 * receiver.
+	*/
+	bgws[node_id - 1].name[0] = '\0';
+
 	/* delete recovery slot, was acquired by receiver */
 	ReplicationSlotDrop(filter_slot_name, true);
 
@@ -4102,6 +4116,8 @@ MtmMonitor(Datum arg)
 			 * Note that if for some reason monitor wasn't running
 			 * (e.g. process killed) during node drop, cleanup in
 			 * stop_node_workers will be skipped. Very unlikely, but not nice.
+			 * XXX: Should rethink this code, because problem, described above,
+			 * has cought in PGPRO-6146.
 			 */
 			mtm_cfg = MtmReloadConfig(mtm_cfg, start_node_workers,
 									  stop_node_workers, PointerGetDatum(bgws),
