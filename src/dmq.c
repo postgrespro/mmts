@@ -32,6 +32,8 @@
 #include "logger.h"
 #include "compat.h"
 #include "mtm_utils.h"
+#include "multimaster.h"
+#include "state.h"
 
 #include "access/transam.h"
 #include "libpq/libpq.h"
@@ -51,23 +53,6 @@
 
 #define DMQ_MQ_SIZE  ((Size) 65536)
 #define DMQ_MQ_MAGIC 0x646d71
-
-/*  XXX: move to common */
-#define BIT_CLEAR(mask, bit) ((mask) &= ~((uint64)1 << (bit)))
-#define BIT_CHECK(mask, bit) (((mask) & ((uint64)1 << (bit))) != 0)
-static int
-first_set_bit(uint64 mask)
-{
-	int i;
-
-	for (i = 0; i < DMQ_N_MASK_POS; i++)
-	{
-		if (BIT_CHECK(mask, i))
-			return i;
-	}
-	return -1;
-}
-
 
 /*
  * Shared data structures to hold current connections topology.
@@ -497,6 +482,12 @@ dmq_sender_at_exit(int status, Datum arg)
 		}
 	}
 	LWLockRelease(dmq_state->lock);
+
+	/*
+	 * Restart the Campaigner to be sure that all critical data reset before the
+	 * next voting.
+	 */
+	CampaignerStop();
 }
 
 void
@@ -1390,7 +1381,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 	void		*extra = NULL;
 
 	/*
-	 * We do not call MtmDisbaleTimeouts() here because of connection to this
+	 * We do not call MtmDisableTimeouts() here because of connection to this
 	 * client is made by MtmPQconnectPoll() that sets all needed timeouts.
 	 */
 
@@ -1660,7 +1651,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
-		mtm_log(WARNING, "[DMQ] dmq_push: can't send to queue");
+		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
 }
 
 /*
@@ -1776,7 +1767,8 @@ dmq_reattach_shm_mq(int handle_id)
  * from which receivers caller wants to get message and filters inhandles
  * through it.
  */
-void dmq_attach_receiver(char *sender_name, int8 mask_pos)
+void
+dmq_attach_receiver(char *sender_name, int8 mask_pos)
 {
 	int			i;
 	int			handle_id = -1;

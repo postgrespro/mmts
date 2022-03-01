@@ -99,7 +99,6 @@ static void MtmShmemStartup(void);
 
 static void launcher_init(void);
 void		launcher_main(Datum main_arg);
-void		drop_node_entry(int node_id);
 
 MtmShared  *Mtm;
 
@@ -1863,6 +1862,7 @@ launcher_main(Datum main_arg)
 	/* init this worker */
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
+	MtmBackgroundWorker = true;
 
 	memset(&hash_info, 0, sizeof(hash_info));
 	hash_info.entrysize = hash_info.keysize = sizeof(Oid);

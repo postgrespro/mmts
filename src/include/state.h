@@ -149,5 +149,6 @@ extern void MtmMonitorStart(Oid db_id, Oid user_id);
 extern void MtmRefreshClusterStatus(void);
 extern nodemask_t MtmGetDisabledNodeMask(void);
 extern nodemask_t MtmGetEnabledNodeMask(bool ignore_disabled);
+extern void CampaignerStop(void);
 
 #endif

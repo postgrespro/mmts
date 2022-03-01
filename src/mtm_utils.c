@@ -22,42 +22,36 @@
  *
  * This timeouts, when set in the postgres config file, affect all process.
  * The multimaster needs his sessions not to be interrupted, so we disable
- * these timeouts. 
+ * these timeouts.
  *
  * This function raises an error on PQExec failed.
  */
-static void
+static bool
 disable_client_timeouts(PGconn *conn)
 {
 	PGresult   *res;
 
 	res = PQexec(conn, "SET statement_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-	{
-		char	   *msg = pchomp(PQerrorMessage(conn));
-		mtm_log(ERROR, "failed to set statement_timeout: %s", msg);
-	}
+		mtm_log(ERROR, "failed to set statement_timeout: %s",
+				pchomp(PQerrorMessage(conn)));
 
 	res = PQexec(conn, "SET lock_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-	{
-		char	   *msg = pchomp(PQerrorMessage(conn));
-		mtm_log(ERROR, "failed to set lock_timeout: %s", msg);
-	}
+		mtm_log(ERROR, "failed to set lock_timeout: %s",
+				pchomp(PQerrorMessage(conn)));
 
 	res = PQexec(conn, "SET idle_in_transaction_session_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-	{
-		char	   *msg = pchomp(PQerrorMessage(conn));
-		mtm_log(ERROR, "failed to set idle_in_transaction_session_timeout: %s", msg);
-	}
+		mtm_log(ERROR, "failed to set idle_in_transaction_session_timeout: %s",
+				pchomp(PQerrorMessage(conn)));
 
 	res = PQexec(conn, "SET idle_session_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-	{
-		char	   *msg = pchomp(PQerrorMessage(conn));
-		mtm_log(ERROR, "failed to set idle_session_timeout: %s", msg);
-	}
+		mtm_log(ERROR, "failed to set idle_session_timeout: %s",
+				pchomp(PQerrorMessage(conn)));
+
+	return true;
 }
 
 /*
@@ -73,24 +67,13 @@ extern void
 MtmDisableTimeouts(void)
 {
 	if (get_timeout_active(STATEMENT_TIMEOUT))
-	{
 		disable_timeout(STATEMENT_TIMEOUT, false);
-	}
-
 	if (get_timeout_active(LOCK_TIMEOUT))
-	{
 		disable_timeout(LOCK_TIMEOUT, false);
-	}
-
 	if (get_timeout_active(IDLE_IN_TRANSACTION_SESSION_TIMEOUT))
-	{
 		disable_timeout(IDLE_IN_TRANSACTION_SESSION_TIMEOUT, false);
-	}
-
 	if (get_timeout_active(IDLE_SESSION_TIMEOUT))
-	{
 		disable_timeout(IDLE_SESSION_TIMEOUT, false);
-	}
 }
 
 /*
