@@ -1651,7 +1651,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
 	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
-		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
+		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue, status = %d", res);
 }
 
 /*
