@@ -33,23 +33,35 @@ disable_client_timeouts(PGconn *conn)
 
 	res = PQexec(conn, "SET statement_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		mtm_log(ERROR, "failed to set statement_timeout: %s",
+	{
+		mtm_log(WARNING, "failed to set statement_timeout: %s",
 				pchomp(PQerrorMessage(conn)));
+		return false;
+	}
 
 	res = PQexec(conn, "SET lock_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		mtm_log(ERROR, "failed to set lock_timeout: %s",
+	{
+		mtm_log(WARNING, "failed to set lock_timeout: %s",
 				pchomp(PQerrorMessage(conn)));
+		return false;
+	}
 
 	res = PQexec(conn, "SET idle_in_transaction_session_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		mtm_log(ERROR, "failed to set idle_in_transaction_session_timeout: %s",
+	{
+		mtm_log(WARNING, "failed to set idle_in_transaction_session_timeout: %s",
 				pchomp(PQerrorMessage(conn)));
+		return false;
+	}
 
 	res = PQexec(conn, "SET idle_session_timeout = 0");
 	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		mtm_log(ERROR, "failed to set idle_session_timeout: %s",
+	{
+		mtm_log(WARNING, "failed to set idle_session_timeout: %s",
 				pchomp(PQerrorMessage(conn)));
+		return false;
+	}
 
 	return true;
 }
@@ -90,7 +102,8 @@ MtmPQconnectPoll(PGconn *conn)
 	if (status != PGRES_POLLING_OK)
 		return status;
 
-	disable_client_timeouts(conn);
+	if (!disable_client_timeouts(conn))
+		status = PGRES_POLLING_FAILED;
 
 	return status;
 }
@@ -109,7 +122,11 @@ MtmPQconnectdb(const char *conninfo)
 	if (PQstatus(conn) != CONNECTION_OK)
 		return conn;
 
-	disable_client_timeouts(conn);
+	if (!disable_client_timeouts(conn))
+	{
+		PQfinish(conn);
+		return NULL;
+	}
 
 	return conn;
 }
