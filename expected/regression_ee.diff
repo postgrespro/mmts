@@ -29,7 +29,7 @@ diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_ou
 diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_outdir/results/create_index.out
 --- ../../../src/test/regress/expected/create_index.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/create_index.out	CENSORED
-@@ -1367,31 +1367,33 @@
+@@ -1394,31 +1394,33 @@
  CREATE TABLE concur_heap (f1 text, f2 text);
  -- empty table
  CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
@@ -70,7 +70,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  COMMIT;
  -- test where predicate is able to do a transactional update during
  -- a concurrent build before switching pg_index state flags.
-@@ -1403,7 +1405,9 @@
+@@ -1430,7 +1432,9 @@
  END; $$;
  CREATE INDEX CONCURRENTLY concur_index8 ON concur_heap (f1)
    WHERE predicate_stable();
@@ -80,7 +80,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DROP FUNCTION predicate_stable();
  -- But you can do a regular index build in a transaction
  BEGIN;
-@@ -1412,8 +1416,6 @@
+@@ -1439,8 +1443,6 @@
  -- Failed builds are left invalid by VACUUM FULL, fixed by REINDEX
  VACUUM FULL concur_heap;
  REINDEX TABLE concur_heap;
@@ -89,7 +89,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DELETE FROM concur_heap WHERE f1 = 'b';
  VACUUM FULL concur_heap;
  \d concur_heap
-@@ -1423,12 +1425,6 @@
+@@ -1450,12 +1452,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -102,7 +102,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  REINDEX TABLE concur_heap;
-@@ -1439,12 +1435,6 @@
+@@ -1466,12 +1462,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -115,7 +115,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  -- Temporary tables with concurrent builds and on-commit actions
-@@ -1454,7 +1444,9 @@
+@@ -1481,7 +1471,9 @@
    ON COMMIT PRESERVE ROWS;
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -125,7 +125,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DROP TABLE concur_temp;
  -- ON COMMIT DROP
  BEGIN;
-@@ -1463,34 +1455,42 @@
+@@ -1490,34 +1482,42 @@
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  -- Fails when running in a transaction.
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -172,7 +172,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  \d concur_heap
             Table "public.concur_heap"
   Column | Type | Collation | Nullable | Default 
-@@ -2447,46 +2447,38 @@
+@@ -2474,46 +2474,38 @@
  INSERT INTO concur_reindex_tab4 VALUES (1), (1), (2);
  -- This trick creates an invalid index.
  CREATE UNIQUE INDEX CONCURRENTLY concur_reindex_ind5 ON concur_reindex_tab4 (c1);

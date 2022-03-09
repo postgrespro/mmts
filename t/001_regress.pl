@@ -92,7 +92,7 @@ $schedule =~ s/largeobject//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
-my $regress_shlib = TestLib::perl2host($ENV{REGRESS_SHLIB});
+my $regress_shlib = $ENV{REGRESS_SHLIB};
 my $regress_libdir = dirname($regress_shlib);
 my $regress_outdir = "$ENV{TESTDIR}/tmp_check/regress_outdir";
 mkdir($regress_outdir);
