@@ -381,20 +381,20 @@ GetRecoveryHorizon(int sender_node_id)
 
 	sql = psprintf("select mtm.get_recovery_horizon(%d)", sender_node_id);
 	rc = SPI_execute(sql, true, 0);
-	mtm_log(LOG, "----> GetRecoveryHorizont: sql '%s'", sql);
+	mtm_log(LOG, "----> GetRecoveryHorizon: sql '%s'", sql);
 
 	if (rc != SPI_OK_SELECT && SPI_processed != 1)
 		mtm_log(ERROR, "mtm.get_recovery_horizon failed: rc=%d, SPI_processed=" UINT64_FORMAT,
 				rc, SPI_processed);
 
 	tup = SPI_tuptable->vals[0];
-	mtm_log(LOG, "----> GetRecoveryHorizont: %d", SPI_tuptable->tupdesc->natts);
+	mtm_log(LOG, "----> GetRecoveryHorizon: %d", SPI_tuptable->tupdesc->natts);
 
 	type = SPI_gettype(SPI_tuptable->tupdesc, 1);
-	mtm_log(LOG, "----> GetRecoveryHorizont: type %s", type ? type: "NULL");
+	mtm_log(LOG, "----> GetRecoveryHorizon: type %s", type ? type: "NULL");
 
 	value = SPI_getvalue(tup, SPI_tuptable->tupdesc, 1);
-	mtm_log(LOG, "----> GetRecoveryHorizont: value %s", value ? value: "NULL");
+	mtm_log(LOG, "----> GetRecoveryHorizon: value %s", value ? value: "NULL");
 	
 	horizon = DatumGetLSN(SPI_getbinval(tup, SPI_tuptable->tupdesc, 1, &isnull));
 	if (isnull)

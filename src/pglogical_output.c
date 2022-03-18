@@ -69,6 +69,7 @@ static void pg_decode_begin_txn(LogicalDecodingContext *ctx,
 static void pg_decode_commit_txn(LogicalDecodingContext *ctx,
 					 ReorderBufferTXN *txn, XLogRecPtr commit_lsn);
 
+static void pg_decode_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn);
 static void pg_decode_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					  XLogRecPtr lsn);
 static void pg_decode_commit_prepared_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
@@ -135,6 +136,7 @@ _PG_output_plugin_init(OutputPluginCallbacks *cb)
 	cb->abort_cb = pg_decode_abort_txn;
 
 	cb->filter_prepare_cb = pg_filter_prepare;
+	cb->begin_prepare_cb = pg_decode_begin_prepare_txn;
 	cb->prepare_cb = pg_decode_prepare_txn;
 	cb->commit_prepared_cb = pg_decode_commit_prepared_txn;
 	cb->rollback_prepared_cb = pg_decode_abort_prepared_txn;
@@ -479,6 +481,46 @@ pg_decode_commit_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 		MtmOutputPluginPrepareWrite(ctx, true, true);
 		data->api->write_commit(ctx->out, data, txn, commit_lsn);
 		MtmOutputPluginWrite(ctx, true, true);
+	}
+}
+
+void
+pg_decode_begin_prepare_txn(LogicalDecodingContext *ctx, ReorderBufferTXN *txn)
+{
+	PGLogicalOutputData *data = (PGLogicalOutputData *) ctx->output_plugin_private;
+	bool		send_replication_origin = data->forward_changeset_origins;
+
+	if (!startup_message_sent)
+		send_startup_message(ctx, data, false /* can't be last message */ );
+
+	/* If the record didn't originate locally, send origin info */
+	send_replication_origin &= txn->origin_id != InvalidRepOriginId;
+
+	if (data->api)
+	{
+		MtmOutputPluginPrepareWrite(ctx, !send_replication_origin, true);
+		data->api->write_begin(ctx->out, data, txn);
+
+		if (send_replication_origin)
+		{
+			char	   *origin;
+
+			/* Message boundary */
+			MtmOutputPluginWrite(ctx, false, false);
+			MtmOutputPluginPrepareWrite(ctx, true, false);
+
+			/*
+			 * XXX: which behaviour we want here?
+			 *
+			 * Alternatives: - don't send origin message if origin name not
+			 * found (that's what we do now) - throw error - that will break
+			 * replication, not good - send some special "unknown" origin
+			 */
+			if (data->api->write_origin &&
+				replorigin_by_oid(txn->origin_id, true, &origin))
+				data->api->write_origin(ctx->out, origin, txn->origin_lsn);
+		}
+		MtmOutputPluginWrite(ctx, true, false);
 	}
 }
 
