@@ -1255,19 +1255,83 @@ WARNING: mismatch in column 'b' of row 0: 256 on node0, 255 on node1
       </para>
     </listitem>
   </varlistentry>
+  <varlistentry id="mtm-break-connection">
+    <term><varname>multimaster.break_connection</varname>
+    <indexterm><primary><varname>multimaster.break_connection</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>Break connection with clients connected to the node if this node disconnects
+      from the cluster. If this variable is set to <literal>false</literal>, the client stays
+      connected to the node but receives an error that the node is disabled.
+      </para>
+      <para>Default: <literal>false</literal></para>
+    </listitem>
+  </varlistentry>
 
-    <varlistentry id="mtm-break-connection">
-      <term><varname>multimaster.break_connection</varname>
-      <indexterm><primary><varname>multimaster.break_connection</varname></primary></indexterm>
-      </term>
-      <listitem>
-        <para>Break connection with clients connected to the node if this node disconnects
-        from the cluster. If this variable is set to <literal>false</literal>, the client stays
-        connected to the node but receives an error that the node is disabled.
-        </para>
-        <para>Default: <literal>false</literal></para>
-      </listitem>
-    </varlistentry>
+  <varlistentry id="mtm-connect-timeout">
+    <term><varname>multimaster.connect_timeout</varname>
+    <indexterm><primary><varname>multimaster.connect_timeout</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>
+       Maximum time to wait while connecting, in seconds. Zero, negative, or not specified means
+       wait indefinitely. The minimum allowed timeout is 2 seconds, therefore
+       a value of <literal>1</literal> is interpreted as <literal>2</literal>.
+      </para>
+      <para>Default: <literal>0</literal></para>
+    </listitem>
+   </varlistentry>
+
+  <varlistentry id="mtm-ignore-tables-without-pk">
+    <term><varname>multimaster.ignore_tables_without_pk</varname>
+    <indexterm><primary><varname>multimaster.ignore_tables_without_pk</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>
+        Do not replicate tables without primary key. When <literal>false</literal>,
+        such tables are replicated.
+      </para>
+      <para>Default: <literal>false</literal></para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry id="mtm-syncpoint-interval">
+    <term><varname>multimaster.syncpoint_interval</varname>
+    <indexterm><primary><varname>multimaster.syncpoint_interval</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>
+        Amount of WAL generated between synchronization points.
+      </para>
+      <para>Default: <literal>10 MB</literal></para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry id="mtm-binary-basetypes">
+    <term><varname>multimaster.binary_basetypes</varname>
+    <indexterm><primary><varname>multimaster.binary_basetypes</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>
+        Send data of built-in types in binary format.
+      </para>
+      <para>Default: <literal>true</literal></para>
+    </listitem>
+  </varlistentry>
+
+  <varlistentry id="mtm-wait-peer-commits">
+    <term><varname>multimaster.wait_peer_commits</varname>
+    <indexterm><primary><varname>multimaster.wait_peer_commits</varname></primary></indexterm>
+    </term>
+    <listitem>
+      <para>
+        Wait until all peers commit the transaction before the command returns
+        a success indication to the client.
+      </para>
+      <para>Default: <literal>true</literal></para>
+    </listitem>
+  </varlistentry>
+
 </variablelist>
 </sect3>
 
