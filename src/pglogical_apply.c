@@ -166,23 +166,26 @@ create_rel_estate(Relation rel)
 	EState	   *estate;
 	ResultRelInfo *resultRelInfo;
 	RangeTblEntry *rte;
+	List *rangeTable;
 
 	estate = CreateExecutorState();
 
 	resultRelInfo = makeNode(ResultRelInfo);
 	InitResultRelInfo(resultRelInfo, rel, 1, NULL, 0);
 
-	estate->es_result_relations = resultRelInfo;
-	estate->es_num_result_relations = 1;
-	estate->es_result_relation_info = resultRelInfo;
-	estate->es_output_cid = GetCurrentCommandId(true);
-
 	rte = makeNode(RangeTblEntry);
 	rte->rtekind = RTE_RELATION;
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = AccessShareLock;
+	rangeTable = list_make1(rte);
 	ExecInitRangeTable(estate, list_make1(rte));
+
+	ExecInitRangeTable(estate, rangeTable);
+	ExecInitResultRelation(estate, resultRelInfo, 1);
+
+	estate->es_result_relation_info = resultRelInfo;
+	estate->es_output_cid = GetCurrentCommandId(true);
 
 	/* Prepare to catch AFTER triggers. */
 	AfterTriggerBeginQuery();
@@ -1238,9 +1241,10 @@ process_remote_insert(StringInfo s, Relation rel)
 			if (relinfo->ri_NumIndices > 0)
 			{
 				List	   *recheckIndexes;
+				ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 
-				recheckIndexes = ExecInsertIndexTuples(bufferedSlots[i],
-													   estate, false, NULL, NIL);
+				recheckIndexes = ExecInsertIndexTuples(resultRelInfo, bufferedSlots[i],
+													   estate, false, false, NULL, NIL);
 
 				/* AFTER ROW INSERT Triggers */
 				ExecARInsertTriggers(estate, relinfo, bufferedSlots[i],
@@ -1267,11 +1271,12 @@ process_remote_insert(StringInfo s, Relation rel)
 	else
 	{
 		TupleTableSlot *newslot;
+		ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 
 		newslot = ExecInitExtraTupleSlot(estate, tupDesc, &TTSOpsHeapTuple);
 		tuple_to_slot(estate, rel, &new_tuple, newslot);
 
-		ExecSimpleRelationInsert(estate, newslot);
+		ExecSimpleRelationInsert(resultRelInfo, estate, newslot);
 	}
 	ExecCloseIndices(estate->es_result_relation_info);
 	if (ActiveSnapshotSet())
@@ -1367,6 +1372,7 @@ process_remote_update(StringInfo s, Relation rel)
 	if (found)
 	{
 		HeapTuple	remote_tuple = NULL;
+		ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
 
 		remote_tuple = heap_modify_tuple(ExecFetchSlotHeapTuple(localslot, true, NULL),
 										 tupDesc,
@@ -1376,7 +1382,7 @@ process_remote_update(StringInfo s, Relation rel)
 		ExecStoreHeapTuple(remote_tuple, remoteslot, false);
 
 		EvalPlanQualSetSlot(&epqstate, remoteslot);
-		ExecSimpleRelationUpdate(estate, &epqstate, localslot, remoteslot);
+		ExecSimpleRelationUpdate(resultRelInfo, estate, &epqstate, localslot, remoteslot);
 	}
 	else
 	{
@@ -1444,8 +1450,10 @@ process_remote_delete(StringInfo s, Relation rel)
 
 	if (found)
 	{
+		ResultRelInfo *resultRelInfo = estate->es_result_relation_info;
+
 		EvalPlanQualSetSlot(&epqstate, localslot);
-		ExecSimpleRelationDelete(estate, &epqstate, localslot);
+		ExecSimpleRelationDelete(resultRelInfo, estate, &epqstate, localslot);
 	}
 	else
 	{

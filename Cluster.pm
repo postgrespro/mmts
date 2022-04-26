@@ -141,6 +141,7 @@ sub init
 	{
 		$node->init(allows_streaming => 'logical');
 		$node->append_conf('postgresql.conf', qq{
+			enable_self_join_removal = off
 			max_connections = 50
 			log_line_prefix = '%m [%p] [xid%x] %i '
 			log_statement = all

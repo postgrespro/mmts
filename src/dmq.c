@@ -353,7 +353,7 @@ dmq_shmem_startup_hook(void)
 									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
 									  DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
 									  &hash_info,
-									  HASH_ELEM);
+									  HASH_ELEM | HASH_STRINGS);
 
 	LWLockRelease(AddinShmemInitLock);
 }
@@ -1443,7 +1443,7 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		extra = dmq_receiver_start_hook(sender_name);
 
 	/* do not hold globalxmin. XXX: try to carefully release snaps */
-	MyPgXact->xmin = InvalidTransactionId;
+	MyProc->xmin = InvalidTransactionId;
 
 	for (;;)
 	{

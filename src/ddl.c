@@ -119,19 +119,21 @@ static void MtmSeqNextvalHook(Oid seqid, int64 next);
 static void MtmExecutorStart(QueryDesc *queryDesc, int eflags);
 static void MtmExecutorFinish(QueryDesc *queryDesc);
 
-static void MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
+static void MtmProcessUtility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 							  ProcessUtilityContext context, ParamListInfo params,
 							  QueryEnvironment *queryEnv, DestReceiver *dest,
 							  QueryCompletion *qc);
 
 static void MtmProcessUtilityReceiver(PlannedStmt *pstmt,
 						  const char *queryString,
+						  bool readOnlyTree,
 						  ProcessUtilityContext context, ParamListInfo params,
 						  QueryEnvironment *queryEnv, DestReceiver *dest,
 						  QueryCompletion *qc);
 
 static void MtmProcessUtilitySender(PlannedStmt *pstmt,
 						const char *queryString,
+						bool readOnlyTree,
 						ProcessUtilityContext context, ParamListInfo params,
 						QueryEnvironment *queryEnv, DestReceiver *dest,
 						QueryCompletion *qc);
@@ -359,7 +361,7 @@ MtmGucInit(void)
 	MtmGucHash = hash_create("MtmGucHash",
 							 MTM_GUC_HASHSIZE,
 							 &hash_ctl,
-							 HASH_ELEM | HASH_CONTEXT);
+							 HASH_ELEM | HASH_CONTEXT | HASH_STRINGS);
 
 	/*
 	 * If current role is not equal to MtmDatabaseUser, than set it before any
@@ -661,7 +663,7 @@ MtmFinishDDLCommand()
 
 
 static void
-MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
+MtmProcessUtility(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 				  ProcessUtilityContext context, ParamListInfo params,
 				  QueryEnvironment *queryEnv, DestReceiver *dest,
 				  QueryCompletion *qc)
@@ -676,13 +678,13 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	{
 		if (PreviousProcessUtilityHook != NULL)
 		{
-			PreviousProcessUtilityHook(pstmt, queryString,
+			PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 									   context, params, queryEnv,
 									   dest, qc);
 		}
 		else
 		{
-			standard_ProcessUtility(pstmt, queryString,
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 									context, params, queryEnv,
 									dest, qc);
 		}
@@ -691,12 +693,12 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
 
 	if (MtmIsLogicalReceiver)
 	{
-		MtmProcessUtilityReceiver(pstmt, queryString, context, params,
+		MtmProcessUtilityReceiver(pstmt, queryString, context, readOnlyTree, params,
 								  queryEnv, dest, qc);
 	}
 	else
 	{
-		MtmProcessUtilitySender(pstmt, queryString, context, params,
+		MtmProcessUtilitySender(pstmt, queryString, readOnlyTree, context, params,
 								queryEnv, dest, qc);
 	}
 
@@ -718,7 +720,7 @@ MtmProcessUtility(PlannedStmt *pstmt, const char *queryString,
  * receiver (e.g calling DDL from trigger) this hook does nothing.
  */
 static void
-MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
+MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 						  ProcessUtilityContext context, ParamListInfo params,
 						  QueryEnvironment *queryEnv, DestReceiver *dest,
 						  QueryCompletion *qc)
@@ -839,22 +841,18 @@ MtmProcessUtilityReceiver(PlannedStmt *pstmt, const char *queryString,
 	}
 
 	if (PreviousProcessUtilityHook != NULL)
-	{
-		PreviousProcessUtilityHook(pstmt, queryString,
+		PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 								   context, params, queryEnv,
 								   dest, qc);
-	}
 	else
-	{
-		standard_ProcessUtility(pstmt, queryString,
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
-	}
 }
 
 
 static void
-MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
+MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString, bool readOnlyTree,
 						ProcessUtilityContext context, ParamListInfo params,
 						QueryEnvironment *queryEnv, DestReceiver *dest,
 						QueryCompletion *qc)
@@ -1186,17 +1184,13 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString,
 				stmt_string, skipCommand, MtmDDLStatement != NULL);
 
 	if (PreviousProcessUtilityHook != NULL)
-	{
-		PreviousProcessUtilityHook(pstmt, queryString,
+		PreviousProcessUtilityHook(pstmt, queryString, readOnlyTree,
 								   context, params, queryEnv,
 								   dest, qc);
-	}
 	else
-	{
-		standard_ProcessUtility(pstmt, queryString,
+		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
 								context, params, queryEnv,
 								dest, qc);
-	}
 
 	/* Catch GUC assignment */
 	if (nodeTag(parsetree) == T_VariableSetStmt)
@@ -1311,11 +1305,12 @@ MtmExecutorFinish(QueryDesc *queryDesc)
 		if (operation == CMD_INSERT || operation == CMD_UPDATE ||
 			operation == CMD_DELETE || pstmt->hasModifyingCTE)
 		{
-			int			i;
+			ListCell   *l;
 
-			for (i = 0; i < estate->es_num_result_relations; i++)
+			foreach(l, estate->es_opened_result_relations)
 			{
-				Relation	rel = estate->es_result_relations[i].ri_RelationDesc;
+				ResultRelInfo *resultRelInfo = lfirst(l);
+				Relation	rel = resultRelInfo->ri_RelationDesc;
 
 				/*
 				 * Don't run 3pc unless we modified at least one non-local table.
@@ -1709,7 +1704,7 @@ MtmInitializeRemoteFunctionsMap()
 		if (q != NULL)
 			*q++ = '\0';
 
-		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true);
+		clist = FuncnameGetCandidates(stringToQualifiedNameList(p), -1, NIL, false, false, true, true);
 		if (clist == NULL)
 			mtm_log(DEBUG1, "Can't resolve function '%s', postponing that", p);
 		else
@@ -1724,7 +1719,7 @@ MtmInitializeRemoteFunctionsMap()
 		p = q;
 	} while (p != NULL);
 
-	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true);
+	clist = FuncnameGetCandidates(stringToQualifiedNameList("mtm.alter_sequences"), -1, NIL, false, false, true, true);
 	if (clist != NULL)
 		hash_search(MtmRemoteFunctions, &clist->oid, HASH_ENTER, NULL);
 

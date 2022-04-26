@@ -3286,7 +3286,7 @@ check_status_requests(MtmConfig *mtm_cfg, bool *job_pending)
 	txset_hash_ctl.entrysize = sizeof(txset_entry);
 	txset_hash_ctl.hcxt = CurrentMemoryContext;
 	txset = hash_create("txset", max_batch_size, &txset_hash_ctl,
-						HASH_ELEM | HASH_CONTEXT);
+						HASH_ELEM | HASH_CONTEXT | HASH_STRINGS);
 
 	while (dmq_pop_nb(&sender_mask_pos, &packed_msg, MtmGetDmqReceiversMask(), &wait))
 	{
@@ -3729,17 +3729,20 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 
 	if (!MtmNodeById(new_cfg, node_id)->init_done)
 	{
+		ReplicationSlot *s;
+
 		/*
 		 * Create filter slot to filter out already applied changes since the
 		 * last syncpoint during replication start
 		 */
 		/* slot might be already created if we failed before setting init_done */
-		int acq = ReplicationSlotAcquire(filter_slot, SAB_Inquire);
-		if (acq == 0)
-			ReplicationSlotRelease();
-		else if (acq == -1)
+
+		s = SearchNamedReplicationSlot(filter_slot, true);
+		if (s == NULL)
 		{
-			ReplicationSlotCreate(filter_slot, false, RS_PERSISTENT);
+			bool two_phase = true;
+
+			ReplicationSlotCreate(filter_slot, false, RS_PERSISTENT, two_phase);
 			ReplicationSlotReserveWal();
 			/* Write this slot to disk */
 			ReplicationSlotMarkDirty();
@@ -3776,17 +3779,18 @@ start_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 
 	if (!MtmNodeById(new_cfg, node_id)->init_done)
 	{
+		ReplicationSlot *s;
 		char	   *query;
 		int			rc;
 
 		/* Create logical slot for our publication to this neighbour */
 		/* slot might be already created if we failed before setting init_done */
-		int acq = ReplicationSlotAcquire(slot, SAB_Inquire);
-		if (acq == 0)
-			ReplicationSlotRelease();
-		else if (acq == -1)
-		{
-			ReplicationSlotCreate(slot, true, RS_EPHEMERAL);
+
+		s = SearchNamedReplicationSlot(slot, true);
+		if (s == NULL) {
+			bool two_phase = true;
+
+			ReplicationSlotCreate(slot, true, RS_EPHEMERAL, two_phase);
 			ctx = CreateInitDecodingContext(MULTIMASTER_NAME, NIL,
 											false,	/* do not build snapshot */
 											InvalidXLogRecPtr,
@@ -3874,7 +3878,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	ReplicationSlotDrop(filter_slot_name, true);
 
 	/* delete replication origin, was acquired by receiver */
-	replorigin_drop(replorigin_by_name(logical_slot, false), true);
+	replorigin_by_name(logical_slot, false);
 
 	/*
 	 * Delete logical slot. It is aquired by walsender, so call with nowait =
@@ -4414,7 +4418,7 @@ mtm_get_logged_prepared_xact_state(PG_FUNCTION_ARGS)
 	txset_hash_ctl.entrysize = sizeof(txset_entry);
 	txset_hash_ctl.hcxt = CurrentMemoryContext;
 	txset = hash_create("txset", 1, &txset_hash_ctl,
-						HASH_ELEM | HASH_CONTEXT);
+						HASH_ELEM | HASH_CONTEXT | HASH_STRINGS);
 
 	txse = hash_search(txset, gid, HASH_ENTER, NULL);
 	txse->resp.state.status = GTXInvalid;
