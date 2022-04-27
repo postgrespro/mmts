@@ -92,11 +92,6 @@ remove-this-suffix-to-enble-test-check:
 	PGXS=$(PGXS) TESTDIR='$(CURDIR)' PATH="$(bindir):$$PATH" PG_REGRESS='$(top_builddir)/src/test/regress/pg_regress' $(PROVE) $(PG_PROVE_FLAGS) $(PROVE_FLAGS) $(if $(PROVE_TESTS),$(PROVE_TESTS),t/*.pl)
 endif
 
-# temporary disable tests
-# to enbale tests remove empty 'check' targetand and fix previous target
-check:
-	
-
 # PG_PROVE_FLAGS adds PostgresNode and friends include dir
 start: temp-install
 	rm -rf '$(CURDIR)'/tmp_check
@@ -164,5 +159,5 @@ run-pathman-regress-ext:
 
 pg-regress: | start run-pg-regress
 pathman-regress: | start run-pathman-regress-ext stop
-installcheck:
+remove-this-suffix-to-enble-test-installcheck:
 	$(prove_installcheck)
