@@ -503,6 +503,26 @@ diff ../../../src/test/regress/expected/brin.out ../tmp_check/regress_outdir/res
  -- vacuum the table, to discard TOAST data
  VACUUM brintest_3;
  -- retry insert with a different random-looking (but deterministic) value
+diff ../../../src/test/regress/expected/privileges.out ../tmp_check/regress_outdir/results/privileges.out
+--- ../../../src/test/regress/expected/privileges.out	CENSORED
++++ ../tmp_check/regress_outdir/results/privileges.out	CENSORED
+@@ -1437,11 +1437,16 @@
+ -- Do the same concurrently
+ CREATE INDEX CONCURRENTLY sro_idx ON sro_tab ((sro_ifun(a) + sro_ifun(0)))
+ 	WHERE sro_ifun(a + 10) > sro_ifun(10);
++ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+ -- REINDEX
+ REINDEX TABLE sro_tab;
++NOTICE:  table "sro_tab" has no indexes to reindex
+ REINDEX INDEX sro_idx;
++ERROR:  relation "sro_idx" does not exist
+ REINDEX TABLE CONCURRENTLY sro_tab;
++NOTICE:  table "sro_tab" has no indexes that can be reindexed concurrently
+ DROP INDEX sro_idx;
++ERROR:  index "sro_idx" does not exist
+ -- CLUSTER
+ CREATE INDEX sro_cluster_idx ON sro_tab ((sro_ifun(a) + sro_ifun(0)));
+ CLUSTER sro_tab USING sro_cluster_idx;
 diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_outdir/results/rowsecurity.out
 --- ../../../src/test/regress/expected/rowsecurity.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/rowsecurity.out	CENSORED
@@ -597,7 +617,7 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  commit;
  drop function if exists error_function();
  drop table if exists atx_tt2;
-@@ -1074,6 +1074,7 @@
+@@ -1077,6 +1077,7 @@
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';

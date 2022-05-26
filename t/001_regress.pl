@@ -89,6 +89,7 @@ $schedule =~ s/test: tablespace/#test: tablespace/g;
 $schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
+$schedule =~ s/atx0//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
