@@ -1,17 +1,3 @@
-diff ../../../src/test/regress/expected/type_sanity.out ../tmp_check/regress_outdir/results/type_sanity.out
---- ../../../src/test/regress/expected/type_sanity.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/type_sanity.out	CENSORED
-@@ -77,7 +77,9 @@
-   5017 | pg_mcv_list
-  13374 | abstime
-  13375 | reltime
--(8 rows)
-+ 16514 | pg_publication
-+ 16518 | pg_subscription
-+(10 rows)
- 
- -- Make sure typarray points to a "true" array type of our own base
- SELECT p1.oid, p1.typname as basetype, p2.typname as arraytype,
 diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_outdir/results/create_table.out
 --- ../../../src/test/regress/expected/create_table.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/create_table.out	CENSORED
@@ -43,7 +29,7 @@ diff ../../../src/test/regress/expected/create_table.out ../tmp_check/regress_ou
 diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_outdir/results/create_index.out
 --- ../../../src/test/regress/expected/create_index.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/create_index.out	CENSORED
-@@ -1371,31 +1371,33 @@
+@@ -1398,31 +1398,33 @@
  CREATE TABLE concur_heap (f1 text, f2 text);
  -- empty table
  CREATE INDEX CONCURRENTLY concur_index1 ON concur_heap(f2,f1);
@@ -84,7 +70,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  COMMIT;
  -- test where predicate is able to do a transactional update during
  -- a concurrent build before switching pg_index state flags.
-@@ -1407,7 +1409,9 @@
+@@ -1434,7 +1436,9 @@
  END; $$;
  CREATE INDEX CONCURRENTLY concur_index8 ON concur_heap (f1)
    WHERE predicate_stable();
@@ -94,7 +80,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DROP FUNCTION predicate_stable();
  -- But you can do a regular index build in a transaction
  BEGIN;
-@@ -1416,8 +1420,6 @@
+@@ -1443,8 +1447,6 @@
  -- Failed builds are left invalid by VACUUM FULL, fixed by REINDEX
  VACUUM FULL concur_heap;
  REINDEX TABLE concur_heap;
@@ -103,7 +89,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DELETE FROM concur_heap WHERE f1 = 'b';
  VACUUM FULL concur_heap;
  \d concur_heap
-@@ -1427,12 +1429,6 @@
+@@ -1454,12 +1456,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -116,7 +102,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  REINDEX TABLE concur_heap;
-@@ -1443,12 +1439,6 @@
+@@ -1470,12 +1466,6 @@
   f1     | text |           |          | 
   f2     | text |           |          | 
  Indexes:
@@ -129,7 +115,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
      "std_index" btree (f2)
  
  -- Temporary tables with concurrent builds and on-commit actions
-@@ -1458,7 +1448,9 @@
+@@ -1485,7 +1475,9 @@
    ON COMMIT PRESERVE ROWS;
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -139,7 +125,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  DROP TABLE concur_temp;
  -- ON COMMIT DROP
  BEGIN;
-@@ -1467,34 +1459,42 @@
+@@ -1494,34 +1486,42 @@
  INSERT INTO concur_temp VALUES (1, 'foo'), (2, 'bar');
  -- Fails when running in a transaction.
  CREATE INDEX CONCURRENTLY concur_temp_ind ON concur_temp(f1);
@@ -186,7 +172,7 @@ diff ../../../src/test/regress/expected/create_index.out ../tmp_check/regress_ou
  \d concur_heap
             Table "public.concur_heap"
   Column | Type | Collation | Nullable | Default 
-@@ -2583,46 +2583,38 @@
+@@ -2610,46 +2610,38 @@
  INSERT INTO concur_reindex_tab4 VALUES (1), (1), (2);
  -- This trick creates an invalid index.
  CREATE UNIQUE INDEX CONCURRENTLY concur_reindex_ind5 ON concur_reindex_tab4 (c1);
@@ -274,700 +260,10 @@ diff ../../../src/test/regress/expected/index_including_gist.out ../tmp_check/re
  
  DROP TABLE tbl_gist;
  /*
-diff ../../../src/test/regress/expected/profiles.out ../tmp_check/regress_outdir/results/profiles.out
---- ../../../src/test/regress/expected/profiles.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/profiles.out	CENSORED
-@@ -21,16 +21,15 @@
- 	PASSWORD_REUSE_TIME 1
- 	PASSWORD_REUSE_MAX 1
- 	PASSWORD_GRACE_TIME 1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER ROLE regress_profile_role PROFILE regress_test_profile;
-+ERROR:  profile "regress_test_profile" does not exist
- DROP PROFILE regress_test_profile; -- error
--ERROR:  profile "regress_test_profile" cannot be dropped because some objects depend on it
--DETAIL:  profile of role regress_profile_role
-+ERROR:  profile "regress_test_profile" does not exist
- -- Test profile parameters
- ALTER PROFILE regress_test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS 0; -- error
--ERROR:  invalid resource limit
--LINE 2:  FAILED_LOGIN_ATTEMPTS 0;
--         ^
-+ERROR:  profile "regress_test_profile" does not exist
- ALTER PROFILE regress_test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS 1.1; -- error
- ERROR:  syntax error at or near "1.1"
-@@ -38,9 +37,7 @@
-                                ^
- ALTER PROFILE regress_test_profile LIMIT
- 	PASSWORD_REUSE_TIME -2; -- error
--ERROR:  invalid resource limit
--LINE 2:  PASSWORD_REUSE_TIME -2;
--         ^
-+ERROR:  profile "regress_test_profile" does not exist
- ALTER PROFILE regress_test_profile LIMIT
- 	PASSWORD_REUSE_MAX -1; -- error
- ERROR:  syntax error at or near "-"
-@@ -48,12 +45,16 @@
-                             ^
- ALTER PROFILE regress_test_profile LIMIT
- 	PASSWORD_LIFE_TIME 0.1;
-+ERROR:  profile "regress_test_profile" does not exist
- ALTER PROFILE regress_test_profile LIMIT
- 	PASSWORD_GRACE_TIME default;
-+ERROR:  profile "regress_test_profile" does not exist
- ALTER PROFILE regress_test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS unlimited;
-+ERROR:  profile "regress_test_profile" does not exist
- ALTER PROFILE regress_test_profile LIMIT
- 	PASSWORD_REUSE_TIME 1;
-+ERROR:  profile "regress_test_profile" does not exist
- -- Use ORDER BY pflname in order to make test results not dependable on possible
- -- changes in records restoring order
- SELECT
-@@ -69,15 +70,15 @@
- 	pflpasswordminlen,
- 	pflpasswordrequirecomplex
- FROM pg_profile ORDER BY pflname;
--       pflname        | pflfailedloginattempts | pflfailedauthkeeptime | pfluserinactivetime | pflpasswordreusetime | pflpasswordreusemax | pflpasswordlifetime | pflpasswordgracetime | pflpasswordminuniqchars | pflpasswordminlen | pflpasswordrequirecomplex 
------------------------+------------------------+-----------------------+---------------------+----------------------+---------------------+---------------------+----------------------+-------------------------+-------------------+---------------------------
-- default              |                     -1 |                    -1 |                  -1 |                   -1 |                  -1 |                  -1 |                   -1 |                      -1 |                -1 |                         0
-- regress_test_profile |                     -1 |                    -2 |                  -2 |                86400 |                   1 |                8640 |                   -2 |                      -2 |                -2 |                        -2
--(2 rows)
-+ pflname | pflfailedloginattempts | pflfailedauthkeeptime | pfluserinactivetime | pflpasswordreusetime | pflpasswordreusemax | pflpasswordlifetime | pflpasswordgracetime | pflpasswordminuniqchars | pflpasswordminlen | pflpasswordrequirecomplex 
-+---------+------------------------+-----------------------+---------------------+----------------------+---------------------+---------------------+----------------------+-------------------------+-------------------+---------------------------
-+ default |                     -1 |                    -1 |                  -1 |                   -1 |                  -1 |                  -1 |                   -1 |                      -1 |                -1 |                         0
-+(1 row)
- 
- -- Cleanup
- ALTER ROLE regress_profile_role PROFILE DEFAULT;
- DROP PROFILE regress_test_profile;
-+ERROR:  profile "regress_test_profile" does not exist
- DROP ROLE regress_profile_role;
- -- Check that the parameters USER_INACTIVE_TIME, FAILED_AUTH_KEEP_TIME and
- -- PASSWORD_LIFE_TIME can't take value 0. Test both cases when these parameters
-@@ -101,22 +102,18 @@
- 	USER_INACTIVE_TIME 1
- 	FAILED_AUTH_KEEP_TIME 1
- 	PASSWORD_LIFE_TIME 1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- error, USER_INACTIVE_TIME can't take zero value
- ALTER PROFILE regress_test_profile LIMIT USER_INACTIVE_TIME 0;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE regress_test_profile LIMIT USER_INACTIVE_TIME ...
--                                                 ^
-+ERROR:  profile "regress_test_profile" does not exist
- -- error, FAILED_AUTH_KEEP_TIME can't take zero value
- ALTER PROFILE regress_test_profile LIMIT FAILED_AUTH_KEEP_TIME 0;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE regress_test_profile LIMIT FAILED_AUTH_KEEP_TI...
--                                                 ^
-+ERROR:  profile "regress_test_profile" does not exist
- -- error, PASSWORD_LIFE_TIME can't take zero value
- ALTER PROFILE regress_test_profile LIMIT PASSWORD_LIFE_TIME 0;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE regress_test_profile LIMIT PASSWORD_LIFE_TIME ...
--                                                 ^
-+ERROR:  profile "regress_test_profile" does not exist
- DROP PROFILE regress_test_profile;
-+ERROR:  profile "regress_test_profile" does not exist
- --
- -- Test cases added within the task #PGPRO-3656 (Merge extra features of
- -- passwordcheck under control of new passoword policy)
-@@ -130,45 +127,54 @@
- 	PASSWORD_MIN_UNIQUE_CHARS 3
- 	PASSWORD_MIN_LEN 3
- 	PASSWORD_REQUIRE_COMPLEX 1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- CREATE USER u1 PROFILE pfl1;
-+ERROR:  profile "pfl1" does not exist
- -- ok, password string satisfies the limits PASSWORD_MIN_LEN,
- -- PASSWORD_REQUIRE_COMPLEX and PASSWORD_MIN_UNIQUE_CHARS
- ALTER USER u1 PASSWORD 'foo1';
-+ERROR:  role "u1" does not exist
- -- error, password string breaks the limit PASSWORD_MIN_LEN.
- ALTER USER u1 PASSWORD 'fo';
--ERROR:  password must be at least 3 characters long
-+ERROR:  role "u1" does not exist
- -- error, password string breaks the limit PASSWORD_REQUIRE_COMPLEX.
- ALTER USER u1 PASSWORD 'fooo';
--ERROR:  password must contain both letters and nonletters
-+ERROR:  role "u1" does not exist
- -- error, password string breaks the limit PASSWORD_MIN_UNIQUE_CHARS.
- ALTER USER u1 PASSWORD 'f000';
--ERROR:  password must contain at least 3 unique characters
-+ERROR:  role "u1" does not exist
- --error, password string contains a user name
- ALTER USER u1 PASSWORD '123u1__';
--ERROR:  password must not contain user name
-+ERROR:  role "u1" does not exist
- -- Turn off PASSWORD_REQUIRE_COMPLEX in order to allow acceptance of password
- -- string containing only letters or digits
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX 0;
-+ERROR:  profile "pfl1" does not exist
- ALTER USER u1 PASSWORD 'foobar';	-- ok, password containing only letter is
-+ERROR:  role "u1" does not exist
- 									-- now acceptable since the limit
- 									-- PASSWORD_REQUIRE_COMPLEX was set to
- 									-- false.
- ALTER USER u1 PASSWORD '1234';	-- ok, by the same reason as for the password
-+ERROR:  role "u1" does not exist
- 								-- string 'foobar'
- -- Check that the limits PASSWORD_MIN_LEN, PASSWORD_MIN_UNIQUE_CHARS are still
- -- followed when the limit PASSWORD_REQUIRE_COMPLEX is off
- -- error, password string breaks the limit PASSWORD_MIN_LEN.
- ALTER USER u1 PASSWORD 'fo';
--ERROR:  password must be at least 3 characters long
-+ERROR:  role "u1" does not exist
- -- error, password string breaks the limit PASSWORD_MIN_UNIQUE_CHARS.
- ALTER USER u1 PASSWORD 'foo';
--ERROR:  password must contain at least 3 unique characters
-+ERROR:  role "u1" does not exist
- -- Check that a user name can be specified as a part of password phrase
- ALTER USER u1 PASSWORD '123u1__'; --ok, it is allowed to specify a password
-+ERROR:  role "u1" does not exist
- 								  -- string containing a user name
- -- Clean up
- DROP USER u1;
-+ERROR:  role "u1" does not exist
- DROP PROFILE pfl1;
-+ERROR:  profile "pfl1" does not exist
- -- Check that a value for clauses PASSWORD_MIN_UNIQUE_CHARS and PASSWORD_MIN_LEN
- -- is positive integer
- -- error, value of PASSWORD_MIN_UNIQUE_CHARS must be > 0
-@@ -192,16 +198,13 @@
- LINE 1: CREATE PROFILE pfl1 LIMIT PASSWORD_MIN_LEN 1.2;
-                                                    ^
- CREATE PROFILE pfl1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- error, value of PASSWORD_MIN_UNIQUE_CHARS must be > 0
- ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_UNIQUE_CHARS 0;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_UNIQUE_CHARS 0;
--                                 ^
-+ERROR:  profile "pfl1" does not exist
- -- error, value of PASSWORD_MIN_LEN must be > 0
- ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_LEN 0;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_LEN 0;
--                                 ^
-+ERROR:  profile "pfl1" does not exist
- -- error, value of PASSWORD_MIN_UNIQUE_CHARS must be integer
- ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_UNIQUE_CHARS 1.2;
- ERROR:  syntax error at or near "1.2"
-@@ -214,17 +217,26 @@
-                                                   ^
- -- Clean up
- DROP PROFILE pfl1;
-+ERROR:  profile "pfl1" does not exist
- -- Check that boolean value for the clause PASSWORD_REQUIRE_COMPLEX can take any
- -- of the following values: ON, OFF, TRUE, FALSE, 1, 0
- CREATE PROFILE pfl1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX 0; -- ok
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX 1; -- ok
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX false; -- ok
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX true; -- ok
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX on; -- ok
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX off; -- ok
-+ERROR:  profile "pfl1" does not exist
- -- Clean up
- DROP PROFILE pfl1;
-+ERROR:  profile "pfl1" does not exist
- -- Check that the error "ERROR:  conflicting or redundant resource" is emitted
- -- in case one of the options PASSWORD_MIN_UNIQUE_CHARS, PASSWORD_MIN_LEN,
- -- PASSWORD_REQUIRE_COMPLEX repeated twice.
-@@ -244,20 +256,15 @@
-                                            ^
- -- The same test for ALTER PROFILE
- CREATE PROFILE pfl1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_LEN 2 PASSWORD_MIN_LEN 1; -- error
--ERROR:  conflicting or redundant resource
--LINE 1: ALTER PROFILE pfl1 LIMIT PASSWORD_MIN_LEN 2 PASSWORD_MIN_LEN...
--                                                    ^
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1
- LIMIT PASSWORD_MIN_UNIQUE_CHARS 2 PASSWORD_MIN_UNIQUE_CHARS 1; -- error
--ERROR:  conflicting or redundant resource
--LINE 2: LIMIT PASSWORD_MIN_UNIQUE_CHARS 2 PASSWORD_MIN_UNIQUE_CHARS ...
--                                          ^
-+ERROR:  profile "pfl1" does not exist
- ALTER PROFILE pfl1
- LIMIT PASSWORD_REQUIRE_COMPLEX off PASSWORD_REQUIRE_COMPLEX on; -- error
--ERROR:  conflicting or redundant resource
--LINE 2: LIMIT PASSWORD_REQUIRE_COMPLEX off PASSWORD_REQUIRE_COMPLEX ...
--                                           ^
-+ERROR:  profile "pfl1" does not exist
- -- Unlike other profile options, PASSWORD_REQUIRE_COMPLEX cannot be set to
- -- UNLIMITED.
- ALTER PROFILE pfl1 LIMIT PASSWORD_REQUIRE_COMPLEX UNLIMITED;
-@@ -266,56 +273,58 @@
-                                                           ^
- -- Clean up
- DROP PROFILE pfl1;
-+ERROR:  profile "pfl1" does not exist
- -- Begin of tests that were added within implementation of the task PGPRO-4309
- -- Check that ALTER PROFILE RENAME does work as expected.
- CREATE PROFILE profile_test;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- Query what profiles are currently stored in the system catalog table 'pg_profile'.
- -- Use ORDER BY pflname in order to make test results not dependable on possible
- -- changes in records restoring order
- SELECT pflname FROM pg_profile ORDER BY pflname;
--   pflname    
----------------
-+ pflname 
-+---------
-  default
-- profile_test
--(2 rows)
-+(1 row)
- 
- -- Rename profile 'profile_test' to 'profile_test_new'
- ALTER PROFILE profile_test RENAME TO profile_test_new;
-+ERROR:  profile "profile_test" does not exist
- -- and check that the new profile name is stored in
- -- the system catalog table pg_profile
- SELECT pflname FROM pg_profile ORDER BY pflname;
--     pflname      
--------------------
-+ pflname 
-+---------
-  default
-- profile_test_new
--(2 rows)
-+(1 row)
- 
- -- Clean up
- DROP PROFILE profile_test_new;
-+ERROR:  profile "profile_test_new" does not exist
- -- Check that rounding of a time value is correct
- CREATE PROFILE test_profile LIMIT PASSWORD_LIFE_TIME 0.00001;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME 0.0000000000000000000000000000000001;
--ERROR:  invalid resource limit
--LINE 1: ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME 0.000000...
--                                         ^
-+ERROR:  profile "test_profile" does not exist
- SELECT pflpasswordlifetime FROM pg_profile WHERE pflname = 'test_profile';
-  pflpasswordlifetime 
- ---------------------
--                   1
--(1 row)
-+(0 rows)
- 
- -- Check that PASSWORD_GRACE_TIME can be assigned the value 0;
- ALTER PROFILE test_profile LIMIT PASSWORD_GRACE_TIME 0 PASSWORD_LIFE_TIME 1;
-+ERROR:  profile "test_profile" does not exist
- SELECT pflpasswordgracetime, pflpasswordlifetime FROM pg_profile WHERE pflname = 'test_profile';
-  pflpasswordgracetime | pflpasswordlifetime 
- ----------------------+---------------------
--                    0 |               86400
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Check that a value of interval type can be supplied for time-related profile options in
- -- the statement CREATE PROFILE
- CREATE PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '1' DAY PASSWORD_GRACE_TIME INTERVAL '2' HOUR PASSWORD_REUSE_TIME INTERVAL '30' MINUTE USER_INACTIVE_TIME INTERVAL '75' SECOND ;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT
-     pflpasswordlifetime,
-     pflpasswordgracetime,
-@@ -324,13 +333,14 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- ---------------------+----------------------+----------------------+---------------------
--               86400 |                 7200 |                 1800 |                  75
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Check that a value of interval type can be supplied in all supported formats
- -- the statement CREATE PROFILE
- CREATE PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 YEAR 2 MONTHS 3 DAYS 4 HOURS 5 MINUTES 6.123 SECONDS' PASSWORD_LIFE_TIME INTERVAL '1 MINUTE' MINUTE PASSWORD_GRACE_TIME INTERVAL '1 SECOND' MINUTE PASSWORD_REUSE_TIME INTERVAL '1 MINUTE 1 SECOND' SECOND USER_INACTIVE_TIME INTERVAL '1 MINUTE 1 SECOND' MINUTE;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT
-     pflfailedauthkeeptime,
-     pflpasswordlifetime,
-@@ -340,11 +350,12 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflfailedauthkeeptime | pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- -----------------------+---------------------+----------------------+----------------------+---------------------
--              37015506 |                  60 |                    0 |                   61 |                  60
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- CREATE PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 YEAR 2 MONTHS 3 DAYS 4 HOURS 5 MINUTES 6.523 SECONDS' PASSWORD_LIFE_TIME INTERVAL '1 MINUTE' SECOND PASSWORD_GRACE_TIME INTERVAL '1 MINUTE' PASSWORD_REUSE_TIME INTERVAL '1-2' SECOND USER_INACTIVE_TIME INTERVAL '3 4:05:06' SECOND;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT
-     pflfailedauthkeeptime,
-     pflpasswordlifetime,
-@@ -354,21 +365,22 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflfailedauthkeeptime | pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- -----------------------+---------------------+----------------------+----------------------+---------------------
--              37015507 |                  60 |                   60 |             36741600 |              273906
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- CREATE PROFILE test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL 'P2Y3M4DT5H6M7S' USER_INACTIVE_TIME INTERVAL 'P0003-04-05T06:07:08';
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT
-     pflpasswordreusetime,
-     pfluserinactivetime
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordreusetime | pfluserinactivetime 
- ----------------------+---------------------
--             71255167 |           105494828
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Invalid interval type values
- -- the statement CREATE PROFILE
- --FAILED_AUTH_KEEP_TIME value must be from 1 to 2147483647 seconds
-@@ -419,6 +431,7 @@
- -- Check that an interval type value and a real type value can intermixed
- -- in the same CREATE PROFILE statement.
- CREATE PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '1' DAY PASSWORD_GRACE_TIME 0.01 PASSWORD_REUSE_TIME INTERVAL '30' MINUTE USER_INACTIVE_TIME 1;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT
-     pflpasswordlifetime,
-     pflpasswordgracetime,
-@@ -427,14 +440,16 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- ---------------------+----------------------+----------------------+---------------------
--               86400 |                  864 |                 1800 |               86400
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- CREATE PROFILE test_profile;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- Check that a value of interval type can be supplied for time-related profile options in
- -- the statement ALTER PROFILE
- ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '1' DAY PASSWORD_GRACE_TIME INTERVAL '2' HOUR PASSWORD_REUSE_TIME INTERVAL '30' MINUTE USER_INACTIVE_TIME INTERVAL '75' SECOND ;
-+ERROR:  profile "test_profile" does not exist
- SELECT
-     pflpasswordlifetime,
-     pflpasswordgracetime,
-@@ -443,12 +458,12 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- ---------------------+----------------------+----------------------+---------------------
--               86400 |                 7200 |                 1800 |                  75
--(1 row)
-+(0 rows)
- 
- -- Check that a value of interval type can be supplied in all supported formats
- -- the statement ALTER PROFILE
- ALTER PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 YEAR 2 MONTHS 3 DAYS 4 HOURS 5 MINUTES 6.123 SECONDS' PASSWORD_LIFE_TIME INTERVAL '1 MINUTE' MINUTE PASSWORD_GRACE_TIME INTERVAL '1 SECOND' MINUTE PASSWORD_REUSE_TIME INTERVAL '1 MINUTE 1 SECOND' SECOND USER_INACTIVE_TIME INTERVAL '1 MINUTE 1 SECOND' MINUTE;
-+ERROR:  profile "test_profile" does not exist
- SELECT
-     pflfailedauthkeeptime,
-     pflpasswordlifetime,
-@@ -458,10 +473,10 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflfailedauthkeeptime | pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- -----------------------+---------------------+----------------------+----------------------+---------------------
--              37015506 |                  60 |                    0 |                   61 |                  60
--(1 row)
-+(0 rows)
- 
- ALTER PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 YEAR 2 MONTHS 3 DAYS 4 HOURS 5 MINUTES 6.523 SECONDS' PASSWORD_LIFE_TIME INTERVAL '1 MINUTE' SECOND PASSWORD_GRACE_TIME INTERVAL '1 MINUTE' PASSWORD_REUSE_TIME INTERVAL '1-2' SECOND USER_INACTIVE_TIME INTERVAL '3 4:05:06' SECOND;
-+ERROR:  profile "test_profile" does not exist
- SELECT
-     pflfailedauthkeeptime,
-     pflpasswordlifetime,
-@@ -471,69 +486,49 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflfailedauthkeeptime | pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- -----------------------+---------------------+----------------------+----------------------+---------------------
--              37015507 |                  60 |                   60 |             36741600 |              273906
--(1 row)
-+(0 rows)
- 
- ALTER PROFILE test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL 'P2Y3M4DT5H6M7S' USER_INACTIVE_TIME INTERVAL 'P0003-04-05T06:07:08';
-+ERROR:  profile "test_profile" does not exist
- SELECT
-     pflpasswordreusetime,
-     pfluserinactivetime
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordreusetime | pfluserinactivetime 
- ----------------------+---------------------
--             71255167 |           105494828
--(1 row)
-+(0 rows)
- 
- -- Invalid interval type values
- -- the statement ALTER PROFILE
- --FAILED_AUTH_KEEP_TIME value must be from 1 to 2147483647 seconds
- ALTER PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '100' YEAR; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '100' YEAR...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- ALTER PROFILE test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 MINUTE' DAY; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...test_profile LIMIT FAILED_AUTH_KEEP_TIME INTERVAL '1 MINUTE'...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- --PASSWORD_LIFE_TIME value must be from 1 to 2147483647 seconds
- ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '100' YEAR; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...LE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '100' YEAR...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '1 MINUTE' HOUR; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...LE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '1 MINUTE'...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- --PASSWORD_GRACE_TIME value must be from 0 to 2147483647 seconds
- ALTER PROFILE test_profile LIMIT PASSWORD_GRACE_TIME INTERVAL '100' YEAR; --error
--ERROR:  interval must be in range 0..2147483647 seconds
--LINE 1: ...E test_profile LIMIT PASSWORD_GRACE_TIME INTERVAL '100' YEAR...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- ALTER PROFILE test_profile LIMIT PASSWORD_GRACE_TIME INTERVAL '-1 SECOND'; --error
--ERROR:  interval must be in range 0..2147483647 seconds
--LINE 1: ...E test_profile LIMIT PASSWORD_GRACE_TIME INTERVAL '-1 SECOND...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- --PASSWORD_REUSE_TIME value must be from 0 to 2147483647 seconds
- ALTER PROFILE test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL '100' YEAR; --error
--ERROR:  interval must be in range 0..2147483647 seconds
--LINE 1: ...E test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL '100' YEAR...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- ALTER PROFILE test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL '-1 SECOND'; --error
--ERROR:  interval must be in range 0..2147483647 seconds
--LINE 1: ...E test_profile LIMIT PASSWORD_REUSE_TIME INTERVAL '-1 SECOND...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- --USER_INACTIVE_TIME value must be from 1 to 2147483647 seconds
- ALTER PROFILE test_profile LIMIT USER_INACTIVE_TIME INTERVAL '100' YEAR; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...LE test_profile LIMIT USER_INACTIVE_TIME INTERVAL '100' YEAR...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- ALTER PROFILE test_profile LIMIT USER_INACTIVE_TIME INTERVAL '1 SECOND' YEAR; --error
--ERROR:  interval must be in range 1..2147483647 seconds
--LINE 1: ...LE test_profile LIMIT USER_INACTIVE_TIME INTERVAL '1 SECOND'...
--                                                             ^
-+ERROR:  profile "test_profile" does not exist
- -- Check that an interval type value and a real type value can intermixed
- -- in the same ALTER PROFILE statement.
- ALTER PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '5' DAY PASSWORD_GRACE_TIME 0.01 PASSWORD_REUSE_TIME INTERVAL '70' MINUTE USER_INACTIVE_TIME 1;
-+ERROR:  profile "test_profile" does not exist
- SELECT
-     pflpasswordlifetime,
-     pflpasswordgracetime,
-@@ -542,36 +537,40 @@
- FROM pg_profile WHERE pflname='test_profile';
-  pflpasswordlifetime | pflpasswordgracetime | pflpasswordreusetime | pfluserinactivetime 
- ---------------------+----------------------+----------------------+---------------------
--              432000 |                  864 |                 4200 |               86400
--(1 row)
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Check support of statement CREATE PROFILE IF NOT EXISTS
- CREATE PROFILE IF NOT EXISTS test_profile;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- Check that the profile test_profile was created
- SELECT 1 FROM pg_profile WHERE pflname='test_profile';
-  ?column? 
- ----------
--        1
--(1 row)
-+(0 rows)
- 
- -- Re-execute the same CREATE PROFILE statement and check it doesn't fail
- CREATE PROFILE IF NOT EXISTS test_profile;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Check support of statement CREATE PROFILE FROM
- CREATE PROFILE test_profile LIMIT PASSWORD_LIFE_TIME INTERVAL '10' HOUR FAILED_LOGIN_ATTEMPTS 7;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- CREATE PROFILE test_profile_copy FROM test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Use ORDER BY pflname in order to make test results not dependable on possible
- -- changes in records restoring order
- SELECT pflname, pflfailedloginattempts, pflfailedauthkeeptime, pfluserinactivetime, pflpasswordreusetime, pflpasswordreusemax, pflpasswordlifetime, pflpasswordgracetime, pflpasswordminuniqchars, pflpasswordminlen, pflpasswordrequirecomplex FROM pg_profile WHERE pflname IN ('test_profile', 'test_profile_copy') ORDER BY pflname;
--      pflname      | pflfailedloginattempts | pflfailedauthkeeptime | pfluserinactivetime | pflpasswordreusetime | pflpasswordreusemax | pflpasswordlifetime | pflpasswordgracetime | pflpasswordminuniqchars | pflpasswordminlen | pflpasswordrequirecomplex 
---------------------+------------------------+-----------------------+---------------------+----------------------+---------------------+---------------------+----------------------+-------------------------+-------------------+---------------------------
-- test_profile      |                      7 |                    -2 |                  -2 |                   -2 |                  -2 |               36000 |                   -2 |                      -2 |                -2 |                        -2
-- test_profile_copy |                      7 |                    -2 |                  -2 |                   -2 |                  -2 |               36000 |                   -2 |                      -2 |                -2 |                        -2
--(2 rows)
-+ pflname | pflfailedloginattempts | pflfailedauthkeeptime | pfluserinactivetime | pflpasswordreusetime | pflpasswordreusemax | pflpasswordlifetime | pflpasswordgracetime | pflpasswordminuniqchars | pflpasswordminlen | pflpasswordrequirecomplex 
-+---------+------------------------+-----------------------+---------------------+----------------------+---------------------+---------------------+----------------------+-------------------------+-------------------+---------------------------
-+(0 rows)
- 
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- DROP PROFILE test_profile_copy;
-+ERROR:  profile "test_profile_copy" does not exist
- -- Check that all profile options support the value DEFAULT.
- CREATE PROFILE test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS DEFAULT
-@@ -584,6 +583,7 @@
- 	PASSWORD_MIN_UNIQUE_CHARS DEFAULT
- 	PASSWORD_MIN_LEN DEFAULT
- 	PASSWORD_REQUIRE_COMPLEX DEFAULT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- \x
- SELECT
- 	pflfailedloginattempts,
-@@ -597,21 +597,13 @@
- 	pflpasswordminlen,
- 	pflpasswordrequirecomplex
- FROM pg_profile WHERE pflname = 'test_profile';
---[ RECORD 1 ]-------------+---
--pflfailedloginattempts    | -2
--pflfailedauthkeeptime     | -2
--pfluserinactivetime       | -2
--pflpasswordreusetime      | -2
--pflpasswordreusemax       | -2
--pflpasswordlifetime       | -2
--pflpasswordgracetime      | -2
--pflpasswordminuniqchars   | -2
--pflpasswordminlen         | -2
--pflpasswordrequirecomplex | -2
-+(0 rows)
- 
- \x
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- CREATE PROFILE test_profile;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER PROFILE test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS DEFAULT
- 	FAILED_AUTH_KEEP_TIME DEFAULT
-@@ -623,6 +615,7 @@
- 	PASSWORD_MIN_UNIQUE_CHARS DEFAULT
- 	PASSWORD_MIN_LEN DEFAULT
- 	PASSWORD_REQUIRE_COMPLEX DEFAULT;
-+ERROR:  profile "test_profile" does not exist
- \x
- SELECT
- 	pflfailedloginattempts,
-@@ -636,20 +629,11 @@
- 	pflpasswordminlen,
- 	pflpasswordrequirecomplex
- FROM pg_profile WHERE pflname = 'test_profile';
---[ RECORD 1 ]-------------+---
--pflfailedloginattempts    | -2
--pflfailedauthkeeptime     | -2
--pfluserinactivetime       | -2
--pflpasswordreusetime      | -2
--pflpasswordreusemax       | -2
--pflpasswordlifetime       | -2
--pflpasswordgracetime      | -2
--pflpasswordminuniqchars   | -2
--pflpasswordminlen         | -2
--pflpasswordrequirecomplex | -2
-+(0 rows)
- 
- \x
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- -- Check that almost all profile options (except for PASSWORD_REQUIRE_COMPLEX)
- -- support the value UNLIMITED.
- CREATE PROFILE test_profile LIMIT
-@@ -662,6 +646,7 @@
- 	PASSWORD_GRACE_TIME UNLIMITED
- 	PASSWORD_MIN_UNIQUE_CHARS UNLIMITED
- 	PASSWORD_MIN_LEN UNLIMITED;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- \x
- SELECT
- 	pflfailedloginattempts,
-@@ -675,21 +660,13 @@
- 	pflpasswordminlen,
- 	pflpasswordrequirecomplex
- FROM pg_profile WHERE pflname = 'test_profile';
---[ RECORD 1 ]-------------+---
--pflfailedloginattempts    | -1
--pflfailedauthkeeptime     | -1
--pfluserinactivetime       | -1
--pflpasswordreusetime      | -1
--pflpasswordreusemax       | -1
--pflpasswordlifetime       | -1
--pflpasswordgracetime      | -1
--pflpasswordminuniqchars   | -1
--pflpasswordminlen         | -1
--pflpasswordrequirecomplex | -2
-+(0 rows)
- 
- \x
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
- CREATE PROFILE test_profile;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- ALTER PROFILE test_profile LIMIT
- 	FAILED_LOGIN_ATTEMPTS UNLIMITED
- 	FAILED_AUTH_KEEP_TIME UNLIMITED
-@@ -700,6 +677,7 @@
- 	PASSWORD_GRACE_TIME UNLIMITED
- 	PASSWORD_MIN_UNIQUE_CHARS UNLIMITED
- 	PASSWORD_MIN_LEN UNLIMITED;
-+ERROR:  profile "test_profile" does not exist
- \x
- SELECT
- 	pflfailedloginattempts,
-@@ -713,17 +691,8 @@
- 	pflpasswordminlen,
- 	pflpasswordrequirecomplex
- FROM pg_profile WHERE pflname = 'test_profile';
---[ RECORD 1 ]-------------+---
--pflfailedloginattempts    | -1
--pflfailedauthkeeptime     | -1
--pfluserinactivetime       | -1
--pflpasswordreusetime      | -1
--pflpasswordreusemax       | -1
--pflpasswordlifetime       | -1
--pflpasswordgracetime      | -1
--pflpasswordminuniqchars   | -1
--pflpasswordminlen         | -1
--pflpasswordrequirecomplex | -2
-+(0 rows)
- 
- \x
- DROP PROFILE test_profile;
-+ERROR:  profile "test_profile" does not exist
 diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_outdir/results/sanity_check.out
 --- ../../../src/test/regress/expected/sanity_check.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/sanity_check.out	CENSORED
-@@ -11,6 +11,8 @@
-    FROM pg_class c LEFT JOIN pg_namespace n ON n.oid = relnamespace
-    WHERE relkind IN ('r', 'p') AND (nspname ~ '^pg_temp_') IS NOT TRUE
-    ORDER BY relname;
-+_pg_publication|t
-+_pg_subscription|t
- a|f
- a_star|f
- aggtest|f
-@@ -32,6 +34,8 @@
+@@ -32,6 +32,8 @@
  check_tbl|f
  circle_tbl|t
  city|f
@@ -976,7 +272,7 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  copy_tbl|f
  d|f
  d_star|f
-@@ -67,6 +71,7 @@
+@@ -67,6 +69,7 @@
  jtbl|t
  kd_point_tbl|t
  line_tbl|f
@@ -984,7 +280,7 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  log_table|f
  lseg_tbl|f
  main_table|f
-@@ -83,6 +88,7 @@
+@@ -83,6 +86,7 @@
  mlparted_defd|f
  money_data|f
  mytable|t
@@ -992,22 +288,6 @@ diff ../../../src/test/regress/expected/sanity_check.out ../tmp_check/regress_ou
  num_data|f
  num_exp_add|t
  num_exp_div|t
-@@ -141,7 +147,6 @@
- pg_policy|t
- pg_proc|t
- pg_profile|t
--pg_publication|t
- pg_publication_rel|t
- pg_range|t
- pg_replication_origin|t
-@@ -155,7 +160,6 @@
- pg_statistic|t
- pg_statistic_ext|t
- pg_statistic_ext_data|t
--pg_subscription|t
- pg_subscription_rel|t
- pg_tablespace|t
- pg_transform|t
 @@ -187,6 +191,7 @@
  sql_sizing|f
  stud_emp|f
@@ -1068,421 +348,6 @@ diff ../../../src/test/regress/expected/select_into.out ../tmp_check/regress_out
  DROP USER regress_selinto_user;
  -- Tests for WITH NO DATA and column name consistency
  CREATE TABLE ctas_base (i int, j int);
-diff ../../../src/test/regress/expected/join.out ../tmp_check/regress_outdir/results/join.out
---- ../../../src/test/regress/expected/join.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/join.out	CENSORED
-@@ -4936,11 +4936,14 @@
- -- Trivial self-join case.
- explain (costs off)
- select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
--                  QUERY PLAN                   
-------------------------------------------------
-- Seq Scan on sj q
--   Filter: ((a IS NOT NULL) AND (b = (a - 1)))
--(2 rows)
-+          QUERY PLAN           
-+-------------------------------
-+ Nested Loop
-+   Join Filter: (p.a = q.a)
-+   ->  Seq Scan on sj q
-+         Filter: (b = (a - 1))
-+   ->  Seq Scan on sj p
-+(5 rows)
- 
- select p.* from sj p, sj q where q.a = p.a and q.b = q.a - 1;
-  a | b | c 
-@@ -4954,11 +4957,15 @@
- select * from sj p
- where exists (select * from sj q
- 				where q.a = p.a and q.b < 10);
--                QUERY PLAN                
--------------------------------------------
-- Seq Scan on sj q
--   Filter: ((a IS NOT NULL) AND (b < 10))
--(2 rows)
-+           QUERY PLAN           
-+--------------------------------
-+ Nested Loop
-+   Join Filter: (p.a = q.a)
-+   ->  Seq Scan on sj p
-+   ->  Materialize
-+         ->  Seq Scan on sj q
-+               Filter: (b < 10)
-+(6 rows)
- 
- select * from sj p where exists (select * from sj q where q.a = p.a and q.b < 10);
-  a | b | c 
-@@ -4985,13 +4992,11 @@
- 	(select a as x from sj where false) as q1,
- 	(select a as y from sj where false) as q2
- where q1.x = q2.y;
--           QUERY PLAN            
-----------------------------------
-+        QUERY PLAN        
-+--------------------------
-  Result
-    One-Time Filter: false
--   ->  Seq Scan on sj
--         Filter: (a IS NOT NULL)
--(4 rows)
-+(2 rows)
- 
- -- We can't use a cross-EC generated self join qual because of current logic of
- -- the generate_join_implied_equalities routine.
-@@ -5032,11 +5037,18 @@
- explain (costs off)
- select * from sj t1 join sj t2 on t1.a = t2.a and t1.b = t2.b
- 	join sj t3 on t2.a = t3.a and t2.b + 1 = t3.b + 1;
--                                QUERY PLAN                                 
-----------------------------------------------------------------------------
-- Seq Scan on sj t3
--   Filter: ((a IS NOT NULL) AND (b IS NOT NULL) AND ((b + 1) IS NOT NULL))
--(2 rows)
-+                                   QUERY PLAN                                   
-+--------------------------------------------------------------------------------
-+ Nested Loop
-+   Join Filter: ((t1.a = t2.a) AND (t1.b = t2.b) AND ((t3.b + 1) = (t2.b + 1)))
-+   ->  Seq Scan on sj t2
-+   ->  Materialize
-+         ->  Nested Loop
-+               Join Filter: (t1.a = t3.a)
-+               ->  Seq Scan on sj t1
-+               ->  Materialize
-+                     ->  Seq Scan on sj t3
-+(9 rows)
- 
- -- subselect that references the removed relation
- explain (costs off)
-@@ -5045,14 +5057,17 @@
- where t1.a = t2.a;
-                 QUERY PLAN                
- ------------------------------------------
-- Seq Scan on sj t2
--   Filter: (a IS NOT NULL)
-+ Nested Loop
-+   Join Filter: (t1.a = t2.a)
-+   ->  Seq Scan on sj t1
-+   ->  Materialize
-+         ->  Seq Scan on sj t2
-    SubPlan 1
-      ->  Result
--           One-Time Filter: (t2.a = t2.a)
-+           One-Time Filter: (t2.a = t1.a)
-            ->  Seq Scan on sj
--                 Filter: (a = t2.a)
--(7 rows)
-+                 Filter: (a = t1.a)
-+(10 rows)
- 
- -- self-join under outer join
- explain (costs off)
-@@ -5061,12 +5076,15 @@
-              QUERY PLAN             
- ------------------------------------
-  Nested Loop Left Join
--   Join Filter: (y.a = z.q1)
--   ->  Seq Scan on sj y
--         Filter: (a IS NOT NULL)
-+   Join Filter: (x.a = z.q1)
-+   ->  Nested Loop
-+         Join Filter: (x.a = y.a)
-+         ->  Seq Scan on sj x
-+         ->  Materialize
-+               ->  Seq Scan on sj y
-    ->  Materialize
-          ->  Seq Scan on int8_tbl z
--(6 rows)
-+(9 rows)
- 
- explain (costs off)
- select * from sj x join sj y on x.a = y.a
-@@ -5075,11 +5093,14 @@
- ------------------------------------
-  Nested Loop Left Join
-    Join Filter: (y.a = z.q1)
--   ->  Seq Scan on sj y
--         Filter: (a IS NOT NULL)
-+   ->  Nested Loop
-+         Join Filter: (x.a = y.a)
-+         ->  Seq Scan on sj x
-+         ->  Materialize
-+               ->  Seq Scan on sj y
-    ->  Materialize
-          ->  Seq Scan on int8_tbl z
--(6 rows)
-+(9 rows)
- 
- -- Test that placeholders are updated correctly after join removal
- explain (costs off)
-@@ -5088,44 +5109,56 @@
- 	right join sj j1 inner join sj j2 on j1.a = j2.a
- 	on true) z
- on true;
--                QUERY PLAN                
--------------------------------------------
-+                QUERY PLAN                 
-+-------------------------------------------
-  Nested Loop Left Join
-    ->  Result
-    ->  Nested Loop Left Join
--         ->  Seq Scan on sj j2
--               Filter: (a IS NOT NULL)
-+         ->  Nested Loop
-+               Join Filter: (j1.a = j2.a)
-+               ->  Seq Scan on sj j1
-+               ->  Materialize
-+                     ->  Seq Scan on sj j2
-          ->  Materialize
-                ->  Seq Scan on int8_tbl y
--(7 rows)
-+(10 rows)
- 
- -- Test that OR predicated are updated correctly after join removal
- CREATE TABLE tab_with_flag ( id INT PRIMARY KEY, is_flag SMALLINT);
- CREATE INDEX idx_test_is_flag ON tab_with_flag (is_flag);
- explain (costs off)
- SELECT COUNT(*) FROM tab_with_flag WHERE (is_flag IS NULL OR is_flag = 0) AND id IN (SELECT id FROM tab_with_flag WHERE id IN (2, 3));
--                                    QUERY PLAN                                    
------------------------------------------------------------------------------------
-+                               QUERY PLAN                               
-+------------------------------------------------------------------------
-  Aggregate
--   ->  Bitmap Heap Scan on tab_with_flag
--         Recheck Cond: ((id = ANY ('{2,3}'::integer[])) AND (id IS NOT NULL))
--         Filter: ((is_flag IS NULL) OR (is_flag = 0))
--         ->  Bitmap Index Scan on tab_with_flag_pkey
--               Index Cond: ((id = ANY ('{2,3}'::integer[])) AND (id IS NOT NULL))
--(6 rows)
-+   ->  Nested Loop
-+         ->  Bitmap Heap Scan on tab_with_flag tab_with_flag_1
-+               Recheck Cond: (id = ANY ('{2,3}'::integer[]))
-+               ->  Bitmap Index Scan on tab_with_flag_pkey
-+                     Index Cond: (id = ANY ('{2,3}'::integer[]))
-+         ->  Memoize
-+               Cache Key: tab_with_flag_1.id
-+               Cache Mode: logical
-+               ->  Index Scan using tab_with_flag_pkey on tab_with_flag
-+                     Index Cond: (id = tab_with_flag_1.id)
-+                     Filter: ((is_flag IS NULL) OR (is_flag = 0))
-+(12 rows)
- 
- DROP TABLE tab_with_flag;
- -- HAVING clause
- explain (costs off)
- select p.b from sj p join sj q on p.a = q.a group by p.b having sum(p.a) = 1;
--           QUERY PLAN            
-----------------------------------
-+             QUERY PLAN             
-+------------------------------------
-  HashAggregate
--   Group Key: q.b
--   Filter: (sum(q.a) = 1)
--   ->  Seq Scan on sj q
--         Filter: (a IS NOT NULL)
--(5 rows)
-+   Group Key: p.b
-+   Filter: (sum(p.a) = 1)
-+   ->  Nested Loop
-+         Join Filter: (p.a = q.a)
-+         ->  Seq Scan on sj p
-+         ->  Materialize
-+               ->  Seq Scan on sj q
-+(8 rows)
- 
- -- update lateral references and range table entry reference
- explain (verbose, costs off)
-@@ -5135,13 +5168,20 @@
- ------------------------------------------------------
-  Nested Loop
-    Output: 1
--   ->  Seq Scan on public.sj y
--         Output: y.a, y.b, y.c
--         Filter: (y.a IS NOT NULL)
-+   ->  Nested Loop
-+         Output: x.a
-+         Inner Unique: true
-+         Join Filter: (x.a = y.a)
-+         ->  Seq Scan on public.sj x
-+               Output: x.a, x.b, x.c
-+         ->  Materialize
-+               Output: y.a
-+               ->  Seq Scan on public.sj y
-+                     Output: y.a
-    ->  Function Scan on pg_catalog.generate_series gs
-          Output: gs.i
--         Function Call: generate_series(1, y.a)
--(8 rows)
-+         Function Call: generate_series(1, x.a)
-+(15 rows)
- 
- explain (verbose, costs off)
- select 1 from (select y.* from sj x, sj y where x.a = y.a) q,
-@@ -5150,13 +5190,20 @@
- ------------------------------------------------------
-  Nested Loop
-    Output: 1
--   ->  Seq Scan on public.sj y
--         Output: y.a, y.b, y.c
--         Filter: (y.a IS NOT NULL)
-+   ->  Nested Loop
-+         Output: y.a
-+         Inner Unique: true
-+         Join Filter: (x.a = y.a)
-+         ->  Seq Scan on public.sj x
-+               Output: x.a, x.b, x.c
-+         ->  Materialize
-+               Output: y.a
-+               ->  Seq Scan on public.sj y
-+                     Output: y.a
-    ->  Function Scan on pg_catalog.generate_series gs
-          Output: gs.i
-          Function Call: generate_series(1, y.a)
--(8 rows)
-+(15 rows)
- 
- -- Test that a non-EC-derived join clause is processed correctly. Use an
- -- outer join so that we can't form an EC.
-@@ -5165,22 +5212,29 @@
-              QUERY PLAN             
- ------------------------------------
-  Nested Loop Left Join
--   Join Filter: ((q.a + q.a) = r.a)
--   ->  Seq Scan on sj q
--         Filter: (a IS NOT NULL)
-+   Join Filter: ((p.a + q.a) = r.a)
-+   ->  Nested Loop
-+         Join Filter: (p.a = q.a)
-+         ->  Seq Scan on sj p
-+         ->  Materialize
-+               ->  Seq Scan on sj q
-    ->  Materialize
-          ->  Seq Scan on sj r
--(6 rows)
-+(9 rows)
- 
- -- FIXME this constant false filter doesn't look good. Should we merge
- -- equivalence classes?
- explain (costs off)
- select * from sj p, sj q where p.a = q.a and p.b = 1 and q.b = 2;
--                     QUERY PLAN                      
-------------------------------------------------------
-- Seq Scan on sj q
--   Filter: ((a IS NOT NULL) AND (b = 2) AND (b = 1))
--(2 rows)
-+         QUERY PLAN         
-+----------------------------
-+ Nested Loop
-+   Join Filter: (p.a = q.a)
-+   ->  Seq Scan on sj p
-+         Filter: (b = 1)
-+   ->  Seq Scan on sj q
-+         Filter: (b = 2)
-+(6 rows)
- 
- -- Check that attr_needed is updated correctly after self-join removal. In this
- -- test, the join of j1 with j2 is removed. k1.b is required at either j1 or j2.
-@@ -5195,24 +5249,29 @@
- explain (costs off) select 1 from
- 	(sk k1 join sk k2 on k1.a = k2.a)
- 	join (sj j1 join sj j2 on j1.a = j2.a) on j1.b = k1.b;
--                     QUERY PLAN                      
-------------------------------------------------------
-+                           QUERY PLAN                            
-+-----------------------------------------------------------------
-  Nested Loop
--   Join Filter: (k1.b = j2.b)
-+   Join Filter: (k1.b = j1.b)
-    ->  Nested Loop
-          ->  Index Scan using sk_a_idx on sk k1
-          ->  Index Only Scan using sk_a_idx on sk k2
-                Index Cond: (a = k1.a)
-    ->  Materialize
--         ->  Index Scan using sj_a_key on sj j2
--               Index Cond: (a IS NOT NULL)
--(9 rows)
-+         ->  Nested Loop
-+               ->  Index Scan using sj_a_key on sj j1
-+               ->  Memoize
-+                     Cache Key: j1.a
-+                     Cache Mode: logical
-+                     ->  Index Only Scan using sj_a_key on sj j2
-+                           Index Cond: (a = j1.a)
-+(14 rows)
- 
- explain (costs off) select 1 from
- 	(sk k1 join sk k2 on k1.a = k2.a)
- 	join (sj j1 join sj j2 on j1.a = j2.a) on j2.b = k1.b;
--                     QUERY PLAN                      
-------------------------------------------------------
-+                         QUERY PLAN                         
-+------------------------------------------------------------
-  Nested Loop
-    Join Filter: (k1.b = j2.b)
-    ->  Nested Loop
-@@ -5220,9 +5279,14 @@
-          ->  Index Only Scan using sk_a_idx on sk k2
-                Index Cond: (a = k1.a)
-    ->  Materialize
--         ->  Index Scan using sj_a_key on sj j2
--               Index Cond: (a IS NOT NULL)
--(9 rows)
-+         ->  Nested Loop
-+               ->  Index Only Scan using sj_a_key on sj j1
-+               ->  Memoize
-+                     Cache Key: j1.a
-+                     Cache Mode: logical
-+                     ->  Index Scan using sj_a_key on sj j2
-+                           Index Cond: (a = j1.a)
-+(14 rows)
- 
- reset join_collapse_limit;
- reset enable_seqscan;
-@@ -5230,12 +5294,18 @@
- CREATE TABLE emp1 ( id SERIAL PRIMARY KEY NOT NULL, code int);
- explain (verbose, costs off)
- SELECT * FROM emp1 e1, emp1 e2 WHERE e1.id = e2.id AND e2.code <> e1.code;
--                        QUERY PLAN                        
------------------------------------------------------------
-- Seq Scan on public.emp1 e2
--   Output: e2.id, e2.code, e2.id, e2.code
--   Filter: ((e2.id IS NOT NULL) AND (e2.code <> e2.code))
--(3 rows)
-+                     QUERY PLAN                     
-+----------------------------------------------------
-+ Nested Loop
-+   Output: e1.id, e1.code, e2.id, e2.code
-+   Inner Unique: true
-+   ->  Seq Scan on public.emp1 e1
-+         Output: e1.id, e1.code
-+   ->  Index Scan using emp1_pkey on public.emp1 e2
-+         Output: e2.id, e2.code
-+         Index Cond: (e2.id = e1.id)
-+         Filter: (e2.code <> e1.code)
-+(9 rows)
- 
- -- We can remove the join even if we find the join can't duplicate rows and
- -- the base quals of each side are different.  In the following case we end up
-@@ -5246,11 +5316,15 @@
- -- Both sides are unique, but base quals are different
- explain (costs off)
- select * from sl t1, sl t2 where t1.a = t2.a and t1.b = 1 and t2.b = 2;
--                     QUERY PLAN                      
-------------------------------------------------------
-- Seq Scan on sl t2
--   Filter: ((a IS NOT NULL) AND (b = 2) AND (b = 1))
--(2 rows)
-+          QUERY PLAN          
-+------------------------------
-+ Nested Loop
-+   Join Filter: (t1.a = t2.a)
-+   ->  Seq Scan on sl t1
-+         Filter: (b = 1)
-+   ->  Seq Scan on sl t2
-+         Filter: (b = 2)
-+(6 rows)
- 
- --
- ---- Only one side is unqiue
 diff ../../../src/test/regress/expected/transactions.out ../tmp_check/regress_outdir/results/transactions.out
 --- ../../../src/test/regress/expected/transactions.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/transactions.out	CENSORED
@@ -1665,491 +530,84 @@ diff ../../../src/test/regress/expected/brin.out ../tmp_check/regress_outdir/res
  -- vacuum the table, to discard TOAST data
  VACUUM brintest_3;
  -- retry insert with a different random-looking (but deterministic) value
-diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_outdir/results/rowsecurity.out
---- ../../../src/test/regress/expected/rowsecurity.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/rowsecurity.out	CENSORED
-@@ -113,30 +113,7 @@
- (3 rows)
- 
- \d document
--        Table "regress_rls_schema.document"
-- Column  |  Type   | Collation | Nullable | Default 
-----------+---------+-----------+----------+---------
-- did     | integer |           | not null | 
-- cid     | integer |           |          | 
-- dlevel  | integer |           | not null | 
-- dauthor | name    |           |          | 
-- dtitle  | text    |           |          | 
--Indexes:
--    "document_pkey" PRIMARY KEY, btree (did)
--Foreign-key constraints:
--    "document_cid_fkey" FOREIGN KEY (cid) REFERENCES category(cid)
--Policies:
--    POLICY "p1"
--      USING ((dlevel <= ( SELECT uaccount.seclv
--   FROM uaccount
--  WHERE (uaccount.pguser = CURRENT_USER))))
--    POLICY "p1r" AS RESTRICTIVE
--      TO regress_rls_dave
--      USING ((cid <> 44))
--    POLICY "p2r" AS RESTRICTIVE
--      TO regress_rls_dave
--      USING (((cid <> 44) AND (cid < 50)))
--
-+ERROR:  permission denied for view pg_publication
- SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename = 'document' ORDER BY policyname;
-      schemaname     | tablename | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
- --------------------+-----------+------------+-------------+--------------------+-----+--------------------------------------------+------------
-@@ -938,27 +915,7 @@
- CREATE POLICY pp1r ON part_document AS RESTRICTIVE TO regress_rls_dave
-     USING (cid < 55);
- \d+ part_document
--                    Partitioned table "regress_rls_schema.part_document"
-- Column  |  Type   | Collation | Nullable | Default | Storage  | Stats target | Description 
-----------+---------+-----------+----------+---------+----------+--------------+-------------
-- did     | integer |           |          |         | plain    |              | 
-- cid     | integer |           |          |         | plain    |              | 
-- dlevel  | integer |           | not null |         | plain    |              | 
-- dauthor | name    |           |          |         | plain    |              | 
-- dtitle  | text    |           |          |         | extended |              | 
--Partition key: RANGE (cid)
--Policies:
--    POLICY "pp1"
--      USING ((dlevel <= ( SELECT uaccount.seclv
--   FROM uaccount
--  WHERE (uaccount.pguser = CURRENT_USER))))
--    POLICY "pp1r" AS RESTRICTIVE
--      TO regress_rls_dave
--      USING ((cid < 55))
--Partitions: part_document_fiction FOR VALUES FROM (11) TO (12),
--            part_document_nonfiction FOR VALUES FROM (99) TO (100),
--            part_document_satire FOR VALUES FROM (55) TO (56)
--
-+ERROR:  permission denied for view pg_publication
- SELECT * FROM pg_policies WHERE schemaname = 'regress_rls_schema' AND tablename like '%part_document%' ORDER BY policyname;
-      schemaname     |   tablename   | policyname | permissive  |       roles        | cmd |                    qual                    | with_check 
- --------------------+---------------+------------+-------------+--------------------+-----+--------------------------------------------+------------
-diff ../../../src/test/regress/expected/object_address.out ../tmp_check/regress_outdir/results/object_address.out
---- ../../../src/test/regress/expected/object_address.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/object_address.out	CENSORED
-@@ -580,44 +580,6 @@
-          AS descr
- FROM objects
- ORDER BY objects.classid, objects.objid, objects.objsubid;
--("(""default acl"",,,)")|("(""default acl"",,)")|NULL
--("(tablespace,,,)")|("(tablespace,,)")|NULL
--("(type,,,)")|("(type,,)")|NULL
--("(routine,,,)")|("(routine,,)")|NULL
--("(relation,,,)")|("(relation,,)")|NULL
--("(""table column"",,,)")|("(""table column"",,)")|NULL
--("(role,,,)")|("(role,,)")|NULL
--("(database,,,)")|("(database,,)")|NULL
--("(server,,,)")|("(server,,)")|NULL
--("(""user mapping"",,,)")|("(""user mapping"",,)")|NULL
--("(""foreign-data wrapper"",,,)")|("(""foreign-data wrapper"",,)")|NULL
--("(""access method"",,,)")|("(""access method"",,)")|NULL
--("(""operator of access method"",,,)")|("(""operator of access method"",,)")|NULL
--("(""function of access method"",,,)")|("(""function of access method"",,)")|NULL
--("(""default value"",,,)")|("(""default value"",,)")|NULL
--("(cast,,,)")|("(cast,,)")|NULL
--("(constraint,,,)")|("(constraint,,)")|NULL
--("(conversion,,,)")|("(conversion,,)")|NULL
--("(language,,,)")|("(language,,)")|NULL
--("(""large object"",,,)")|("(""large object"",,)")|NULL
--("(schema,,,)")|("(schema,,)")|NULL
--("(""operator class"",,,)")|("(""operator class"",,)")|NULL
--("(operator,,,)")|("(operator,,)")|NULL
--("(rule,,,)")|("(rule,,)")|NULL
--("(trigger,,,)")|("(trigger,,)")|NULL
--("(""operator family"",,,)")|("(""operator family"",,)")|NULL
--("(extension,,,)")|("(extension,,)")|NULL
--("(policy,,,)")|("(policy,,)")|NULL
--("(""statistics object"",,,)")|("(""statistics object"",,)")|NULL
--("(collation,,,)")|("(collation,,)")|NULL
--("(""event trigger"",,,)")|("(""event trigger"",,)")|NULL
--("(transform,,,)")|("(transform,,)")|NULL
--("(""text search dictionary"",,,)")|("(""text search dictionary"",,)")|NULL
--("(""text search parser"",,,)")|("(""text search parser"",,)")|NULL
--("(""text search configuration"",,,)")|("(""text search configuration"",,)")|NULL
--("(""text search template"",,,)")|("(""text search template"",,)")|NULL
--("(subscription,,,)")|("(subscription,,)")|NULL
--("(publication,,,)")|("(publication,,)")|NULL
--("(""publication relation"",,,)")|("(""publication relation"",,)")|NULL
-+ERROR:  unrecognized object class: 16512
- -- restore normal output mode
- \a\t
+diff ../../../src/test/regress/expected/privileges.out ../tmp_check/regress_outdir/results/privileges.out
+--- ../../../src/test/regress/expected/privileges.out	CENSORED
++++ ../tmp_check/regress_outdir/results/privileges.out	CENSORED
+@@ -1493,11 +1493,16 @@
+ -- Do the same concurrently
+ CREATE INDEX CONCURRENTLY sro_idx ON sro_tab ((sro_ifun(a) + sro_ifun(0)))
+ 	WHERE sro_ifun(a + 10) > sro_ifun(10);
++ERROR:  multimaster doesn't support CREATE INDEX CONCURRENTLY
+ -- REINDEX
+ REINDEX TABLE sro_tab;
++NOTICE:  table "sro_tab" has no indexes to reindex
+ REINDEX INDEX sro_idx;
++ERROR:  relation "sro_idx" does not exist
+ REINDEX TABLE CONCURRENTLY sro_tab;
++NOTICE:  table "sro_tab" has no indexes that can be reindexed concurrently
+ DROP INDEX sro_idx;
++ERROR:  index "sro_idx" does not exist
+ -- CLUSTER
+ CREATE INDEX sro_cluster_idx ON sro_tab ((sro_ifun(a) + sro_ifun(0)));
+ CLUSTER sro_tab USING sro_cluster_idx;
 diff ../../../src/test/regress/expected/atx2.out ../tmp_check/regress_outdir/results/atx2.out
 --- ../../../src/test/regress/expected/atx2.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx2.out	CENSORED
-@@ -287,362 +287,9 @@
+@@ -287,17 +287,14 @@
    return 1;
  end$$;
  select atx_lo_test10(:my_loid);
-- atx_lo_test10 
-----------------
--             1
--(1 row)
--
--select lo_unlink(:my_loid);
++NOTICE:  other exception 42703, [MTM] failed to prepare transaction at peer node
+  atx_lo_test10 
+ ---------------
+              1
+ (1 row)
+ 
+ select lo_unlink(:my_loid);
 - lo_unlink 
 ------------
 -         1
 -(1 row)
 -
---- put some initial data
--select lo_creat(-1) as my_loid \gset
--select lo_put( :my_loid, 0, 'lo test' );
-- lo_put 
----------
-- 
--(1 row)
--
---- This function should not fail
--select * from lo_test_func( :my_loid );
-- lo_test_func 
----------------
--            0
--(1 row)
--
---- Read something
--select convert_from(data, 'UTF8') from pg_largeobject where loid = :my_loid;
--  convert_from   
-------------------
-- My mega lo test
--(1 row)
--
---- 11
--DO $body$
--begin
--  begin
--    begin autonomous
--      set datestyle = 'euro';
--    end;
--  exception
--    when others then
--      raise notice 'exception %, %', SQLSTATE, SQLERRM;
--  end;
--end;
--$body$ language plpgsql;
---- 12
--create table if not exists atx_tt1(f1 int);
--create function count_tt1_v() returns int8 as 'select count(*) from atx_tt1' language sql volatile;
--create function count_tt1_s() returns int8 as 'select count(*) from atx_tt1' language sql stable;
--begin;
--   begin autonomous;
--    insert into atx_tt1 values(1);
--    declare c1 cursor for select count_tt1_v(), count_tt1_s();
--    insert into atx_tt1 values(2);
--    fetch all from c1;
-- count_tt1_v | count_tt1_s 
---------------+-------------
--           2 |           1
--(1 row)
--
--  rollback;
--rollback;
--begin;
--  begin autonomous;
--    insert into atx_tt1 values(1);
--    declare c2 cursor with hold for select count_tt1_v(), count_tt1_s();
--    insert into atx_tt1 values(2);
--  commit;
--commit;
--begin;
--  begin autonomous;
--    insert into atx_tt1 values(1);
--    declare c1 cursor for select count_tt1_v(), count_tt1_s();
--    begin autonomous;
--      fetch all from c1;
--ERROR:  cursor "c1" does not exist
--    rollback;
--  rollback;
--rollback;
--drop function count_tt1_v();
--drop function count_tt1_s();
--drop table if exists atx_tt1;
--close c2;
---- 13
--create table atx_13_t(i int);
--begin;
--  begin autonomous;
--    update atx_13_t set i = 1;
--  rollback;
--  begin autonomous;
--    update atx_13_t set i = 2;
--  rollback;
--  drop table if exists atx_13_t;
--  begin autonomous;
--    update atx_13_t set i = 3 where i in (select i from atx_13_t);
--ERROR:  lockmode RowExclusiveLock conflicts with lock AccessExclusiveLock of parent transaction, acquiring this lock in an autonomous transaction will lead to a sure deadlock
--LINE 1: update atx_13_t set i = 3 where i in (select i from atx_13_t...
--               ^
--  rollback;
--commit;
---- 14
--create or replace function atx_14_trigger_func() returns trigger as $body$
--begin
--  return null;
--end;
--$body$ language plpgsql;
--create table atx_14_test(a text, b text);
--create trigger atx_14_test_audit
--after insert on atx_14_test
--for each row execute procedure atx_14_trigger_func();
--begin;
--  insert into atx_14_test values (125);
--    begin autonomous transaction;
--    commit;
--  insert into atx_14_test values (1);
--commit;
--drop table if exists atx_14_test;
--drop function atx_14_trigger_func();
---- 15
--create or replace function atx_15_dummy() returns text as $$
--declare
--  x text;
--begin
--  x := 'one';
--  begin autonomous
--    x := 'two';
--  end;
--  return x;
--end; $$ language plpgsql;
--create table atx_15_test as select 1 as int, NULL as name;
--update atx_15_test set name = atx_15_dummy() returning *;
-- int | name 
-------+------
--   1 | two
--(1 row)
--
--drop table if exists atx_15_test;
--drop function if exists atx_15_dummy();
---- 16
--create table test(i int);
--begin;
--	begin autonomous;
--		insert into test values(1);
--		declare c cursor for select * from test;
--		begin autonomous;
--		commit;
--	rollback;
--rollback;
--drop table if exists test;
---- 17
--create table test(f1 int);
--begin;
--	begin autonomous;
--		insert into test values(1);
--		declare c1 cursor for select * from test;
--		begin autonomous;
--			fetch all from c1;
--ERROR:  cursor "c1" does not exist
--		rollback;
--	rollback;
--rollback;
--drop table if exists test;
---- 19
--create or replace function error_func() returns int as $body$
--begin
--  return 0/0;
--end;
--$body$ language plpgsql;
--DO $body$
--begin
--  begin
--    begin autonomous
--        select error_func();
--    end;
--  exception
--    when others then
--      raise notice 'exception %, %', SQLSTATE, SQLERRM;
--  end;
--end;
--$body$ language plpgsql;
--NOTICE:  exception 22012, division by zero
--drop function if exists error_func();
---- 21
--CREATE OR REPLACE FUNCTION error_function()
--	RETURNS integer AS
--$BODY$
--begin
--	begin autonomous
--		SELECT 0/0;
--	end;
--	return 1;
--exception
--	when others then
--		raise notice 'other exception %, %', SQLSTATE, SQLERRM;
--end;
--$BODY$ LANGUAGE plpgsql;
--create table if not exists atx_tt2(f1 int);
--begin;
--	begin autonomous;
--		insert into atx_tt2 values(1);
--		declare c2 cursor with hold for select error_function();
--	commit;
++ERROR:  [MTM] failed to prepare transaction at peer node
+ -- put some initial data
+ select lo_creat(-1) as my_loid \gset
+ select lo_put( :my_loid, 0, 'lo test' );
+@@ -356,6 +353,7 @@
+     declare c2 cursor with hold for select count_tt1_v(), count_tt1_s();
+     insert into atx_tt1 values(2);
+   commit;
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ begin;
+   begin autonomous;
+@@ -371,6 +369,7 @@
+ drop function count_tt1_s();
+ drop table if exists atx_tt1;
+ close c2;
++ERROR:  cursor "c2" does not exist
+ -- 13
+ create table atx_13_t(i int);
+ begin;
+@@ -490,9 +489,7 @@
+ 		insert into atx_tt2 values(1);
+ 		declare c2 cursor with hold for select error_function();
+ 	commit;
 -NOTICE:  other exception 22012, division by zero
 -ERROR:  control reached end of function without RETURN
 -CONTEXT:  PL/pgSQL function error_function()
--commit;
--drop function if exists error_function();
--drop table if exists atx_tt2;
---- 22
--create or replace function if_modified_func_22() returns trigger as $body$
--declare
--	v_new_data text;
--begin
--	v_new_data := row(new.*);
--	begin autonomous
--		return new;
--	end;
--end;
--$body$ language plpgsql;
--create table atx_test_22(a text, b text);
--create trigger atx_test_22_audit
--after insert on atx_test_22
--for each row execute procedure if_modified_func_22();
--begin;
--	insert into atx_test_22 values (1);
--	begin autonomous transaction;
--	commit;
--	insert into atx_test_22 values (2);
--commit;
--drop table if exists atx_test_22;
--drop function if exists if_modified_func_22();
---- 23
--CREATE OR REPLACE FUNCTION error_function3()
--	RETURNS integer AS
--$BODY$
--begin
--	begin autonomous
--		SELECT 0/0;
--	end;
--	return 1;
--exception
--	when others then
--		raise notice 'other exception %, %', SQLSTATE, SQLERRM;
--end;
--$BODY$ LANGUAGE plpgsql;
--begin;
--	begin autonomous;
--		declare c2 cursor with hold for select error_function3();
--	commit;
--NOTICE:  other exception 22012, division by zero
--ERROR:  control reached end of function without RETURN
--CONTEXT:  PL/pgSQL function error_function3()
--commit;
--drop function if exists error_function3();
--close c2;
--ERROR:  cursor "c2" does not exist
---- 24
--CREATE OR REPLACE FUNCTION error_function3()
--	RETURNS integer AS
--$BODY$
--begin
--	begin autonomous
--		SELECT 0/0;
--	end;
--	return 1;
--exception
--	when others then
--		raise notice 'other exception %, %', SQLSTATE, SQLERRM;
--        return 0;
--end;
--$BODY$ LANGUAGE plpgsql;
--begin;
--	begin autonomous;
--		declare c3 cursor with hold for select error_function3();
--	commit;
--NOTICE:  other exception 22012, division by zero
--commit;
--drop function if exists error_function3();
--close c3;
---- 25
--select count(*) * 0 as dummy_res from ( select pg_terminate_backend(pid) from pg_stat_activity where datname = 'regression_atx_test_database' ) as foo;
-- dummy_res 
-------------
--         0
--(1 row)
--
--SET client_min_messages TO 'warning';
--drop database if exists regression_atx_test_database;
--RESET client_min_messages;
--create database regression_atx_test_database;
--ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
--\c regression_atx_test_database
--create table atx_test as select 1 as id;
--begin;
--  begin autonomous;
--     create table tmp1 as select id from atx_test;
--     delete from atx_test where id in ( select id from unknown );
--ERROR:  relation "unknown" does not exist
--LINE 1: delete from atx_test where id in ( select id from unknown );
--                                                          ^
--  rollback;
--  begin autonomous;
--    drop table atx_test;
--\c regression
---- PGPRO-5052
--BEGIN TRANSACTION; BEGIN AUTONOMOUS TRANSACTION;
--CREATE FUNCTION atx_srf_test_func() RETURNS setof text AS
--$$ SELECT 'foo'::varchar $$
--LANGUAGE SQL;
--SELECT atx_srf_test_func();
-- atx_srf_test_func 
---------------------
-- foo
--(1 row)
--
--COMMIT AUTONOMOUS; COMMIT;
--DROP FUNCTION atx_srf_test_func();
---- PGPRO-5860
--create table mmm5860(i int);
--create or replace function crash_func5860() returns int language plpgsql as $$
--declare
--begin
--	create table if not exists mmm5860(i int);
--	begin autonomous
--		begin
--			create table if not exists mmm5860(i int);
--		exception
--			when others then
--				raise notice 'other exception %, %', SQLSTATE, SQLERRM;
--		end;
--	end;
--	return 1;
--end$$;
--select * from crash_func5860();
--NOTICE:  relation "mmm5860" already exists, skipping
--NOTICE:  relation "mmm5860" already exists, skipping
-- crash_func5860 
------------------
--              1
--(1 row)
--
--drop function crash_func5860();
--drop table mmm5860;
---- PGPRO-6207
--BEGIN;
--COMMIT AUTONOMOUS;
--WARNING:  there is no autonomous transaction in progress
--BEGIN;
--ABORT AUTONOMOUS;
--WARNING:  there is no autonomous transaction in progress
--BEGIN;
--	SAVEPOINT sp;
--COMMIT AUTONOMOUS;
--WARNING:  there is no autonomous transaction in progress
--BEGIN;
--	SAVEPOINT sp;
--ABORT AUTONOMOUS;
--WARNING:  there is no autonomous transaction in progress
-+FATAL:  RollbackAndReleaseCurrentSubTransaction: unexpected state DEFAULT
-+CONTEXT:  PL/pgSQL function atx_lo_test10(oid) line 9 during exception cleanup
-+server closed the connection unexpectedly
-+	This probably means the server terminated abnormally
-+	before or while processing the request.
-+connection to server was lost
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ drop function if exists error_function();
+ drop table if exists atx_tt2;
+@@ -582,6 +579,7 @@
+ RESET client_min_messages;
+ create database regression_atx_test_database;
+ ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
++ERROR:  [MTM] failed to prepare transaction at peer node
+ \c regression_atx_test_database
+ create table atx_test as select 1 as id;
+ begin;
 diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/results/atx3.out
 --- ../../../src/test/regress/expected/atx3.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx3.out	CENSORED
@@ -2274,18 +732,6 @@ diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/res
  
  RESET default_transaction_read_only;
  DROP TABLE abc;
-diff ../../../src/test/regress/expected/sysviews.out ../tmp_check/regress_outdir/results/sysviews.out
---- ../../../src/test/regress/expected/sysviews.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/sysviews.out	CENSORED
-@@ -119,7 +119,7 @@
-  enable_partition_pruning       | on
-  enable_partitionwise_aggregate | off
-  enable_partitionwise_join      | off
-- enable_self_join_removal       | on
-+ enable_self_join_removal       | off
-  enable_seqscan                 | on
-  enable_sort                    | on
-  enable_tidscan                 | on
 diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/results/rules.out
 --- ../../../src/test/regress/expected/rules.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/rules.out	CENSORED
@@ -2305,7 +751,7 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
  iexit| SELECT ih.name,
      ih.thepath,
      interpt_pp(ih.thepath, r.thepath) AS exit
-@@ -1443,19 +1452,30 @@
+@@ -1465,15 +1474,15 @@
      p.generic_plans,
      p.custom_plans
     FROM pg_prepared_statement() p(name, statement, prepare_time, parameter_types, from_sql, generic_plans, custom_plans);
@@ -2327,246 +773,224 @@ diff ../../../src/test/regress/expected/rules.out ../tmp_check/regress_outdir/re
 +   FROM _pg_prepared_xacts
 +  WHERE (_pg_prepared_xacts.gid !~~ 'MTM-%'::text)
 +  ORDER BY ((_pg_prepared_xacts.transaction)::text)::bigint;
-+pg_publication| SELECT _pg_publication.oid,
-+    _pg_publication.pubname,
-+    _pg_publication.pubowner,
-+    _pg_publication.puballtables,
-+    _pg_publication.pubinsert,
-+    _pg_publication.pubupdate,
-+    _pg_publication.pubdelete,
-+    _pg_publication.pubtruncate,
-+    _pg_publication.pubviaroot
-+   FROM _pg_publication
-+  WHERE (_pg_publication.pubname <> 'multimaster'::name);
  pg_publication_tables| SELECT p.pubname,
      n.nspname AS schemaname,
      c.relname AS tablename
--   FROM pg_publication p,
-+   FROM _pg_publication p,
-     LATERAL pg_get_publication_tables((p.pubname)::text) gpt(relid),
-     (pg_class c
-      JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
-@@ -1651,7 +1671,7 @@
-     l.provider,
-     l.label
-    FROM (pg_seclabel l
--     JOIN pg_publication p ON (((l.classoid = p.tableoid) AND (l.objoid = p.oid))))
-+     JOIN _pg_publication p ON (((l.classoid = p.tableoid) AND (l.objoid = p.oid))))
-   WHERE (l.objsubid = 0)
- UNION ALL
-  SELECT l.objoid,
-@@ -1663,7 +1683,7 @@
-     l.provider,
-     l.label
-    FROM (pg_shseclabel l
--     JOIN pg_subscription s ON (((l.classoid = s.tableoid) AND (l.objoid = s.oid))))
-+     JOIN _pg_subscription s ON (((l.classoid = s.tableoid) AND (l.objoid = s.oid))))
- UNION ALL
-  SELECT l.objoid,
-     l.classoid,
-@@ -2099,7 +2119,7 @@
-     st.last_msg_receipt_time,
-     st.latest_end_lsn,
-     st.latest_end_time
--   FROM (pg_subscription su
-+   FROM (_pg_subscription su
-      LEFT JOIN pg_stat_get_subscription(NULL::oid) st(subid, relid, pid, received_lsn, last_msg_send_time, last_msg_receipt_time, latest_end_lsn, latest_end_time) ON ((st.subid = su.oid)));
- pg_stat_sys_indexes| SELECT pg_stat_all_indexes.relid,
-     pg_stat_all_indexes.indexrelid,
-@@ -2524,6 +2544,19 @@
-      LEFT JOIN pg_namespace sn ON ((sn.oid = s.stxnamespace)))
-      JOIN LATERAL ( SELECT unnest(pg_get_statisticsobjdef_expressions(s.oid)) AS expr,
-             unnest(sd.stxdexpr) AS a) stat ON ((stat.expr IS NOT NULL)));
-+pg_subscription| SELECT _pg_subscription.oid,
-+    _pg_subscription.subdbid,
-+    _pg_subscription.subname,
-+    _pg_subscription.subowner,
-+    _pg_subscription.subenabled,
-+    _pg_subscription.subbinary,
-+    _pg_subscription.substream,
-+    _pg_subscription.subconninfo,
-+    _pg_subscription.subslotname,
-+    _pg_subscription.subsynccommit,
-+    _pg_subscription.subpublications
-+   FROM _pg_subscription
-+  WHERE (_pg_subscription.subname !~~ 'mtm_sub_%'::text);
- pg_tables| SELECT n.nspname AS schemaname,
-     c.relname AS tablename,
-     pg_get_userbyid(c.relowner) AS tableowner,
-diff ../../../src/test/regress/expected/psql.out ../tmp_check/regress_outdir/results/psql.out
---- ../../../src/test/regress/expected/psql.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/psql.out	CENSORED
-@@ -2813,36 +2813,14 @@
- CREATE VIEW view_heap_psql AS SELECT f1 from tbl_heap_psql;
- CREATE MATERIALIZED VIEW mat_view_heap_psql USING heap_psql AS SELECT f1 from tbl_heap_psql;
- \d+ tbl_heap_psql
--                              Table "tableam_display.tbl_heap_psql"
-- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
----------+----------------+-----------+----------+---------+----------+--------------+-------------
-- f1     | integer        |           |          |         | plain    |              | 
-- f2     | character(100) |           |          |         | extended |              | 
--
-+ERROR:  permission denied for view pg_publication
- \d+ tbl_heap
--                                 Table "tableam_display.tbl_heap"
-- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
----------+----------------+-----------+----------+---------+----------+--------------+-------------
-- f1     | integer        |           |          |         | plain    |              | 
-- f2     | character(100) |           |          |         | extended |              | 
--
-+ERROR:  permission denied for view pg_publication
- \set HIDE_TABLEAM off
- \d+ tbl_heap_psql
--                              Table "tableam_display.tbl_heap_psql"
-- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
----------+----------------+-----------+----------+---------+----------+--------------+-------------
-- f1     | integer        |           |          |         | plain    |              | 
-- f2     | character(100) |           |          |         | extended |              | 
--Access method: heap_psql
--
-+ERROR:  permission denied for view pg_publication
- \d+ tbl_heap
--                                 Table "tableam_display.tbl_heap"
-- Column |      Type      | Collation | Nullable | Default | Storage  | Stats target | Description 
----------+----------------+-----------+----------+---------+----------+--------------+-------------
-- f1     | integer        |           |          |         | plain    |              | 
-- f2     | character(100) |           |          |         | extended |              | 
--Access method: heap
--
-+ERROR:  permission denied for view pg_publication
- -- AM is displayed for tables, indexes and materialized views.
- \d+
-                                                            List of relations
 diff ../../../src/test/regress/expected/publication.out ../tmp_check/regress_outdir/results/publication.out
 --- ../../../src/test/regress/expected/publication.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/publication.out	CENSORED
-@@ -11,9 +11,9 @@
- RESET client_min_messages;
- COMMENT ON PUBLICATION testpub_default IS 'test publication';
+@@ -13,8 +13,9 @@
  SELECT obj_description(p.oid, 'pg_publication') FROM pg_publication p;
-- obj_description  
--------------------
-- test publication
-+ obj_description 
-+-----------------
+  obj_description  
+ ------------------
 + 
- (1 row)
+  test publication
+-(1 row)
++(2 rows)
  
  SET client_min_messages = 'ERROR';
+ CREATE PUBLICATION testpib_ins_trunct WITH (publish = insert);
+@@ -31,18 +32,20 @@
+                                               List of publications
+         Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
+ --------------------+--------------------------+------------+---------+---------+---------+-----------+----------
++ multimaster        | miker                    | f          | t       | f       | f       | t         | f
+  testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f
+  testpub_default    | regress_publication_user | f          | f       | t       | f       | f         | f
+-(2 rows)
++(3 rows)
+ 
+ ALTER PUBLICATION testpub_default SET (publish = 'insert, update, delete');
+ \dRp
+                                               List of publications
+         Name        |          Owner           | All tables | Inserts | Updates | Deletes | Truncates | Via root 
+ --------------------+--------------------------+------------+---------+---------+---------+-----------+----------
++ multimaster        | miker                    | f          | t       | f       | f       | t         | f
+  testpib_ins_trunct | regress_publication_user | f          | t       | f       | f       | f         | f
+  testpub_default    | regress_publication_user | f          | t       | t       | t       | f         | f
+-(2 rows)
++(3 rows)
+ 
+ --- adding tables
+ CREATE SCHEMA pub_test;
 diff ../../../src/test/regress/expected/subscription.out ../tmp_check/regress_outdir/results/subscription.out
 --- ../../../src/test/regress/expected/subscription.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/subscription.out	CENSORED
-@@ -32,9 +32,9 @@
- WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
- COMMENT ON SUBSCRIPTION regress_testsub IS 'test subscription';
+@@ -34,8 +34,10 @@
  SELECT obj_description(s.oid, 'pg_subscription') FROM pg_subscription s;
--  obj_description  
---------------------
-- test subscription
-+ obj_description 
-+-----------------
+   obj_description  
+ -------------------
 + 
- (1 row)
++ 
+  test subscription
+-(1 row)
++(3 rows)
  
  -- fail - name already exists
-diff ../../../src/test/regress/expected/equivclass.out ../tmp_check/regress_outdir/results/equivclass.out
---- ../../../src/test/regress/expected/equivclass.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/equivclass.out	CENSORED
-@@ -438,15 +438,17 @@
- explain (costs off)
-   select * from ec0 m join ec0 n on m.ff = n.ff
-   join ec1 p on m.ff + n.ff = p.f1;
--               QUERY PLAN               
------------------------------------------
-+                   QUERY PLAN                   
-+------------------------------------------------
-  Nested Loop
--   Join Filter: ((n.ff + n.ff) = p.f1)
--   ->  Seq Scan on ec1 p
-+   Join Filter: ((m.ff + n.ff) = p.f1)
-+   ->  Nested Loop
-+         ->  Seq Scan on ec0 m
-+         ->  Index Scan using ec0_pkey on ec0 n
-+               Index Cond: (ff = m.ff)
-    ->  Materialize
--         ->  Seq Scan on ec0 n
--               Filter: (ff IS NOT NULL)
--(6 rows)
-+         ->  Seq Scan on ec1 p
-+(8 rows)
+ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false);
+@@ -76,11 +78,13 @@
+ ERROR:  invalid connection string syntax: missing "=" after "foobar" in connection info string
  
- explain (costs off)
-   select * from ec0 m join ec0 n on m.ff = n.ff
-@@ -454,12 +456,14 @@
-                           QUERY PLAN                           
- ---------------------------------------------------------------
-  Nested Loop
--   Join Filter: ((p.f1)::bigint = ((n.ff + n.ff))::int8alias1)
--   ->  Seq Scan on ec1 p
-+   Join Filter: ((p.f1)::bigint = ((m.ff + n.ff))::int8alias1)
-+   ->  Nested Loop
-+         ->  Seq Scan on ec0 m
-+         ->  Index Scan using ec0_pkey on ec0 n
-+               Index Cond: (ff = m.ff)
-    ->  Materialize
--         ->  Seq Scan on ec0 n
--               Filter: (ff IS NOT NULL)
--(6 rows)
-+         ->  Seq Scan on ec1 p
-+(8 rows)
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | f      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | f      | f         | off                | dbname=regress_doesnotexist
++(3 rows)
  
- reset enable_mergejoin;
- -- this could be converted, but isn't at present
-diff ../../../src/test/regress/expected/copy2.out ../tmp_check/regress_outdir/results/copy2.out
---- ../../../src/test/regress/expected/copy2.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/copy2.out	CENSORED
-@@ -359,11 +359,12 @@
- (2 rows)
- 
- COMMIT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT * FROM vistest;
-  a  
- ----
-- d1
-- e
-+ a0
-+ b
- (2 rows)
+ ALTER SUBSCRIPTION regress_testsub SET PUBLICATION testpub2, testpub3 WITH (refresh = false);
+ ALTER SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist2';
+@@ -94,11 +98,13 @@
+ ALTER SUBSCRIPTION regress_testsub SET (create_slot = false);
+ ERROR:  unrecognized subscription parameter: "create_slot"
+ \dRs+
+-                                                                List of subscriptions
+-      Name       |           Owner           | Enabled |     Publication     | Binary | Streaming | Synchronous commit |           Conninfo           
+------------------+---------------------------+---------+---------------------+--------+-----------+--------------------+------------------------------
++                                                                         List of subscriptions
++      Name       |           Owner           | Enabled |     Publication     | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------------+--------+-----------+--------------------+-----------------------------------------------
+  regress_testsub | regress_subscription_user | f       | {testpub2,testpub3} | f      | f         | off                | dbname=regress_doesnotexist2
+-(1 row)
++(3 rows)
  
  BEGIN;
-@@ -387,11 +388,12 @@
- (2 rows)
+ ALTER SUBSCRIPTION regress_testsub ENABLE;
+@@ -106,16 +112,20 @@
+                             List of subscriptions
+       Name       |           Owner           | Enabled |     Publication     
+ -----------------+---------------------------+---------+---------------------
+  regress_testsub | regress_subscription_user | t       | {testpub2,testpub3}
+-(1 row)
++(3 rows)
+ 
+ ALTER SUBSCRIPTION regress_testsub DISABLE;
+ \dRs
+                             List of subscriptions
+       Name       |           Owner           | Enabled |     Publication     
+ -----------------+---------------------------+---------+---------------------
+  regress_testsub | regress_subscription_user | f       | {testpub2,testpub3}
+-(1 row)
++(3 rows)
  
  COMMIT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT * FROM vistest;
-  a  
- ----
-- d2
-- e
-+ a0
-+ b
- (2 rows)
+ -- fail - must be owner of subscription
+@@ -129,11 +139,13 @@
+ ERROR:  invalid value for parameter "synchronous_commit": "foobar"
+ HINT:  Available values: local, remote_write, remote_apply, on, off.
+ \dRs+
+-                                                                  List of subscriptions
+-        Name         |           Owner           | Enabled |     Publication     | Binary | Streaming | Synchronous commit |           Conninfo           
+----------------------+---------------------------+---------+---------------------+--------+-----------+--------------------+------------------------------
++                                                                           List of subscriptions
++        Name         |           Owner           | Enabled |     Publication     | Binary | Streaming | Synchronous commit |                   Conninfo                    
++---------------------+---------------------------+---------+---------------------+--------+-----------+--------------------+-----------------------------------------------
+  regress_testsub_foo | regress_subscription_user | f       | {testpub2,testpub3} | f      | f         | local              | dbname=regress_doesnotexist2
+-(1 row)
++(3 rows)
  
- BEGIN;
-@@ -448,12 +450,11 @@
- (2 rows)
+ -- rename back to keep the rest simple
+ ALTER SUBSCRIPTION regress_testsub_foo RENAME TO regress_testsub;
+@@ -165,20 +177,24 @@
+ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, binary = true);
+ WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | t      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | t      | f         | off                | dbname=regress_doesnotexist
++(3 rows)
  
- COMMIT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- SELECT * FROM vistest;
-- a  
------
-- d4
-- e
--(2 rows)
-+ a 
-+---
-+(0 rows)
+ ALTER SUBSCRIPTION regress_testsub SET (binary = false);
+ ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | f      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | f      | f         | off                | dbname=regress_doesnotexist
++(3 rows)
  
- -- Test FORCE_NOT_NULL and FORCE_NULL options
- CREATE TEMP TABLE forcetest (
+ DROP SUBSCRIPTION regress_testsub;
+ -- fail - streaming must be boolean
+@@ -188,20 +204,24 @@
+ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, streaming = true);
+ WARNING:  tables were not subscribed, you will have to run ALTER SUBSCRIPTION ... REFRESH PUBLICATION to subscribe the tables
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | f      | t         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | f      | t         | off                | dbname=regress_doesnotexist
++(3 rows)
+ 
+ ALTER SUBSCRIPTION regress_testsub SET (streaming = false);
+ ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | f      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | f      | f         | off                | dbname=regress_doesnotexist
++(3 rows)
+ 
+ -- fail - publication already exists
+ ALTER SUBSCRIPTION regress_testsub ADD PUBLICATION testpub WITH (refresh = false);
+@@ -215,11 +235,13 @@
+ ALTER SUBSCRIPTION regress_testsub ADD PUBLICATION testpub1, testpub2 WITH (refresh = false);
+ ERROR:  publication "testpub1" is already in subscription "regress_testsub"
+ \dRs+
+-                                                                    List of subscriptions
+-      Name       |           Owner           | Enabled |         Publication         | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-----------------------------+--------+-----------+--------------------+-----------------------------
++                                                                             List of subscriptions
++      Name       |           Owner           | Enabled |         Publication         | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+-----------------------------+--------+-----------+--------------------+-----------------------------------------------
+  regress_testsub | regress_subscription_user | f       | {testpub,testpub1,testpub2} | f      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++(3 rows)
+ 
+ -- fail - publication used more then once
+ ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION testpub1, testpub1 WITH (refresh = false);
+@@ -233,11 +255,13 @@
+ -- ok - delete publications
+ ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION testpub1, testpub2 WITH (refresh = false);
+ \dRs+
+-                                                            List of subscriptions
+-      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Synchronous commit |          Conninfo           
+------------------+---------------------------+---------+-------------+--------+-----------+--------------------+-----------------------------
+- regress_testsub | regress_subscription_user | f       | {testpub}   | f      | f         | off                | dbname=regress_doesnotexist
+-(1 row)
++                                                                      List of subscriptions
++      Name       |           Owner           | Enabled |  Publication  | Binary | Streaming | Synchronous commit |                   Conninfo                    
++-----------------+---------------------------+---------+---------------+--------+-----------+--------------------+-----------------------------------------------
++ regress_testsub | regress_subscription_user | f       | {testpub}     | f      | f         | off                | dbname=regress_doesnotexist
++(3 rows)
+ 
+ DROP SUBSCRIPTION regress_testsub;
+ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION mypub
 diff ../../../src/test/regress/expected/prepare.out ../tmp_check/regress_outdir/results/prepare.out
 --- ../../../src/test/regress/expected/prepare.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/prepare.out	CENSORED
@@ -2653,52 +1077,3 @@ diff ../../../src/test/regress/expected/indexing.out ../tmp_check/regress_outdir
  
  drop table idxpart_temp;
  -- ALTER INDEX .. ATTACH, error cases
-diff ../../../src/test/regress/expected/oidjoins.out ../tmp_check/regress_outdir/results/oidjoins.out
---- ../../../src/test/regress/expected/oidjoins.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/oidjoins.out	CENSORED
-@@ -257,10 +257,10 @@
- NOTICE:  checking pg_transform {trftosql} => pg_proc {oid}
- NOTICE:  checking pg_sequence {seqrelid} => pg_class {oid}
- NOTICE:  checking pg_sequence {seqtypid} => pg_type {oid}
--NOTICE:  checking pg_publication {pubowner} => pg_authid {oid}
--NOTICE:  checking pg_publication_rel {prpubid} => pg_publication {oid}
-+NOTICE:  checking _pg_publication {pubowner} => pg_authid {oid}
-+NOTICE:  checking pg_publication_rel {prpubid} => _pg_publication {oid}
- NOTICE:  checking pg_publication_rel {prrelid} => pg_class {oid}
--NOTICE:  checking pg_subscription {subdbid} => pg_database {oid}
--NOTICE:  checking pg_subscription {subowner} => pg_authid {oid}
--NOTICE:  checking pg_subscription_rel {srsubid} => pg_subscription {oid}
-+NOTICE:  checking _pg_subscription {subdbid} => pg_database {oid}
-+NOTICE:  checking _pg_subscription {subowner} => pg_authid {oid}
-+NOTICE:  checking pg_subscription_rel {srsubid} => _pg_subscription {oid}
- NOTICE:  checking pg_subscription_rel {srrelid} => pg_class {oid}
-diff ../../../src/test/regress/expected/stats.out ../tmp_check/regress_outdir/results/stats.out
---- ../../../src/test/regress/expected/stats.out	CENSORED
-+++ ../tmp_check/regress_outdir/results/stats.out	CENSORED
-@@ -99,6 +99,7 @@
- TRUNCATE trunc_stats_test1;
- INSERT INTO trunc_stats_test1 DEFAULT VALUES;
- COMMIT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- use a savepoint: 1 insert, 1 live
- BEGIN;
- INSERT INTO trunc_stats_test2 DEFAULT VALUES;
-@@ -109,6 +110,7 @@
- INSERT INTO trunc_stats_test2 DEFAULT VALUES;
- RELEASE SAVEPOINT p1;
- COMMIT;
-+ERROR:  [MTM] failed to prepare transaction at peer node
- -- rollback a savepoint: this should count 4 inserts and have 2
- -- live tuples after commit (and 2 dead ones due to aborted subxact)
- BEGIN;
-@@ -166,8 +168,8 @@
-       relname      | n_tup_ins | n_tup_upd | n_tup_del | n_live_tup | n_dead_tup 
- -------------------+-----------+-----------+-----------+------------+------------
-  trunc_stats_test  |         3 |         0 |         0 |          0 |          0
-- trunc_stats_test1 |         4 |         2 |         1 |          1 |          0
-- trunc_stats_test2 |         1 |         0 |         0 |          1 |          0
-+ trunc_stats_test1 |         3 |         4 |         1 |          2 |          5
-+ trunc_stats_test2 |         2 |         0 |         0 |          0 |          2
-  trunc_stats_test3 |         4 |         0 |         0 |          2 |          2
-  trunc_stats_test4 |         2 |         0 |         0 |          0 |          2
- (5 rows)

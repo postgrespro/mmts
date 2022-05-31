@@ -68,10 +68,6 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	CREATE VIEW pg_prepared_xacts AS
 		select * from _pg_prepared_xacts where gid not like 'MTM-%'
 		ORDER BY transaction::text::bigint;
-	ALTER TABLE pg_publication RENAME TO _pg_publication;
-	CREATE VIEW pg_catalog.pg_publication AS SELECT * FROM pg_catalog._pg_publication WHERE pubname<>'multimaster';
-	ALTER TABLE pg_subscription RENAME TO _pg_subscription;
-	CREATE VIEW pg_catalog.pg_subscription AS SELECT * FROM pg_catalog._pg_subscription WHERE subname NOT LIKE 'mtm_sub_%';
 });
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
@@ -89,6 +85,7 @@ $schedule =~ s/test: tablespace/#test: tablespace/g;
 $schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
+$schedule =~ s/atx0//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
@@ -146,6 +143,7 @@ else
 	$expected_file = "expected/regression_vanilla.diff"
 }
 $diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
+run [ "sed", "-i", "/mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
 run [ "diff", "-U3", "${expected_file}", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
 
