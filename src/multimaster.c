@@ -742,9 +742,11 @@ NULL);
 
 	DetectGlobalDeadLock = MtmDetectGlobalDeadLock;
 
+#if 0
 #ifdef PGPRO_EE
 	SuspendTransactionHook = MtmSuspendTransaction;
 	ResumeTransactionHook = MtmResumeTransaction;
+#endif
 #endif
 }
 
@@ -1095,6 +1097,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	bool		conninfo_isnull;
 	int			n_nodes;
 	int			rc;
+	ParseState *pstate;
 
 	Assert(CALLED_AS_TRIGGER(fcinfo));
 	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
@@ -1135,6 +1138,8 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 
 	mtm_log(NodeMgmt, "mtm_after_node_create %d", node_id);
 
+	pstate = make_parsestate(NULL);
+
 	if (is_self)
 	{
 		/*
@@ -1143,11 +1148,11 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 */
 		pub_stmt->pubname = MULTIMASTER_NAME;
 		pub_stmt->for_all_tables = false;
-		pub_stmt->tables = NIL;
+		pub_stmt->pubobjects = NIL;
 		pub_stmt->options = list_make1(
 									   makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
 			);
-		CreatePublication(pub_stmt);
+		CreatePublication(pstate, pub_stmt);
 
 		/* liftoff */
 		MtmMonitorStart(MyDatabaseId, GetUserId());
@@ -1186,7 +1191,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		client_min_messages = ERROR;
 		log_min_messages = ERROR;
 
-		CreateSubscription(cs_stmt, true);
+		CreateSubscription(pstate, cs_stmt, true);
 
 		/* restore log_level's */
 		client_min_messages = saved_client_min_messages;
@@ -1204,6 +1209,7 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		replorigin_create(origin_name);
 	}
+	free_parsestate(pstate);
 
 	PG_RETURN_VOID();
 }

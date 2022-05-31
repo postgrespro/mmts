@@ -27,17 +27,44 @@ if ($action eq "start")
 	$cluster->create_mm('regression');
 
 	# prevent PostgresNode.pm from shutting down nodes on exit in END {}
-	@PostgresNode::all_nodes = ();
+	eval
+	{
+		if ($Cluster::pg_15_modules)
+		{
+			@PostgreSQL::Test::Cluster::all_nodes = ();
+		}
+		else
+		{
+			@PostgresNode::all_nodes = ();
+		}
+	};
 }
 elsif ($action eq "stop")
 {
-	my @datas = <$TestLib::tmp_check/*data>;
-	foreach my $data (@datas) {
-		TestLib::system_log('pg_ctl',
-							'-D', "$data/pgdata",
-							'-m', 'fast',
-							'stop');
-	}
+	eval
+	{
+		if ($Cluster::pg_15_modules)
+		{
+			my @datas = <$PostgreSQL::Test::Utils::tmp_check/*data>;
+			foreach my $data (@datas) {
+				PostgreSQL::Test::Utils::system_log('pg_ctl',
+													'-D', "$data/pgdata",
+													'-m', 'fast',
+													'stop');
+			}
+			@PostgreSQL::Test::Cluster::all_nodes = ();
+		}
+		else
+		{
+			my @datas = <$TestLib::tmp_check/*data>;
+			foreach my $data (@datas) {
+				TestLib::system_log('pg_ctl',
+									'-D', "$data/pgdata",
+									'-m', 'fast',
+									'stop');
+			}
+		}
+	};
 }
 else
 {

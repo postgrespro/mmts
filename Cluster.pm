@@ -3,12 +3,30 @@ package Cluster;
 use strict;
 use warnings;
 
-use PostgresNode;
-use TestLib;
 use Test::More;
 use Cwd;
 use IPC::Run;
 use Socket;
+
+our $pg_15_modules;
+
+BEGIN
+{
+	$pg_15_modules = eval
+	{
+		require PostgreSQL::Test::Cluster;
+		require PostgreSQL::Test::Utils;
+		return 1;
+	};
+
+	unless (defined $pg_15_modules)
+	{
+		$pg_15_modules = 0;
+
+		require PostgresNode;
+		require TestLib;
+	}
+}
 
 our $last_port_assigned;
 our $mm_listen_address = '127.0.0.1';
@@ -38,10 +56,24 @@ sub mm_get_free_port
 		# Check first that candidate port number is not included in
 		# the list of already-registered nodes.
 		$found = 1;
-		foreach my $node (@PostgresNode::all_nodes)
+		eval
 		{
-			$found = 0 if ($node->port == $port);
-		}
+			if ($pg_15_modules)
+			{
+				foreach my $node (@PostgreSQL::Test::Cluster::all_nodes)
+				{
+					$found = 0 if ($node->port == $port);
+				}
+			}
+			else
+			{
+				foreach my $node (@PostgresNode::all_nodes)
+				{
+					$found = 0 if ($node->port == $port);
+				}
+			}
+		};
+
 
 		# Check to see if anything else is listening on this TCP port.
 		# Seek a port available for all possible listen_addresses values,
@@ -57,15 +89,33 @@ sub mm_get_free_port
 		# 0.0.0.0 is unnecessary on non-Windows systems.
 		if ($found == 1)
 		{
-			foreach my $addr (qw(127.0.0.1),
-				$PostgresNode::use_tcp && ($^O eq "linux" || $windows_os) ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+			eval
 			{
-				if (!PostgresNode::can_bind($addr, $port))
+				if ($pg_15_modules)
 				{
-					$found = 0;
-					last;
+					foreach my $addr (qw(127.0.0.1),
+						$PostgreSQL::Test::Cluster::use_tcp && ($^O eq "linux" || $PostgreSQL::Test::Utils::windows_os) ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+					{
+						if (!PostgreSQL::Test::Cluster::can_bind($addr, $port))
+						{
+							$found = 0;
+							last;
+						}
+					}
 				}
-			}
+				else
+				{
+					foreach my $addr (qw(127.0.0.1),
+						$PostgresNode::use_tcp && ($^O eq "linux" || $TestLib::windows_os) ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+					{
+						if (!PostgresNode::can_bind($addr, $port))
+						{
+							$found = 0;
+							last;
+						}
+					}
+				}
+			};
 		}
 	}
 
@@ -80,21 +130,41 @@ sub mm_get_free_port
 sub new
 {
 	my ($class, $n_nodes, $referee) = @_;
+	my @nodes;
+	my $self;
 
 	# ask PostgresNode to use tcp and listen on mm_listen_address
-	$PostgresNode::use_tcp = 1;
-	$PostgresNode::test_pghost = $mm_listen_address;
-
-	my @nodes = map { get_new_node("node$_", ('port' => mm_get_free_port())) } (1..$n_nodes);
-
-	my $self = {
-		nodes => \@nodes,
-		recv_timeout => 6
-	};
-	if (defined $referee && $referee)
+	eval
 	{
-		$self->{referee} = get_new_node("referee",  ( 'port' => mm_get_free_port() ));
-	}
+		if ($pg_15_modules)
+		{
+			$PostgreSQL::Test::Cluster::use_tcp = 1;
+			$PostgreSQL::Test::Cluster::test_pghost = $mm_listen_address;
+			@nodes = map { PostgreSQL::Test::Cluster->new("node$_", ('port' => mm_get_free_port())) } (1..$n_nodes);
+			$self = {
+				nodes => \@nodes,
+				recv_timeout => 6
+			};
+			if (defined $referee && $referee)
+			{
+				$self->{referee} = PostgreSQL::Test::Cluster->new("referee",  ( 'port' => mm_get_free_port() ));
+			}
+		}
+		else
+		{
+			$PostgresNode::use_tcp = 1;
+			$PostgresNode::test_pghost = $mm_listen_address;
+			@nodes = map { PostgresNode::get_new_node("node$_", ('port' => mm_get_free_port())) } (1..$n_nodes);
+			$self = {
+				nodes => \@nodes,
+				recv_timeout => 6
+			};
+			if (defined $referee && $referee)
+			{
+				$self->{referee} = PostgresNode::get_new_node("referee",  ( 'port' => mm_get_free_port() ));
+			}
+		}
+	};
 
 	bless $self, $class;
 	return $self;
@@ -106,7 +176,17 @@ sub init
 	my $nodes = $self->{nodes};
 
 	# use port range different to ordinary TAP tests
-	$PostgresNode::last_port_assigned = int(rand() * 16384) + 32767;
+	eval
+	{
+		if ($pg_15_modules)
+		{
+			$PostgreSQL::Test::Cluster::last_port_assigned = int(rand() * 16384) + 32767;
+		}
+		else
+		{
+			$PostgresNode::last_port_assigned = int(rand() * 16384) + 32767;
+		}
+	};
 
 	if (defined $self->{referee})
 	{
@@ -122,7 +202,19 @@ sub init
 	# everywhere but on arm (which is the only live arch which might be strict
 	# here)
 	my $binary_basetypes = 0;
-	if (!$TestLib::windows_os)
+	my $is_windows_os;
+	eval
+	{
+		if ($pg_15_modules)
+		{
+			$is_windows_os = $PostgreSQL::Test::Utils::windows_os;
+		}
+		else
+		{
+			$is_windows_os = $TestLib::windows_os;
+		}
+	};
+	if (!$is_windows_os)
 	{
 		my $uname_arch = `uname -m`;
 		if ($? != 0) {
@@ -340,9 +432,21 @@ sub connstr
 sub add_node()
 {
 	my ($self) = @_;
+	my $new_node;
 
-	my $new_node = get_new_node("node@{[$#{$self->{nodes}} + 2]}",
-	(port => mm_get_free_port()));
+	eval
+	{
+		if ($pg_15_modules)
+		{
+			$new_node = PostgreSQL::Test::Cluster->new("node@{[$#{$self->{nodes}} + 2]}",
+													   (port => mm_get_free_port()));
+		}
+		else
+		{
+			$new_node = PostgresNode::get_new_node("node@{[$#{$self->{nodes}} + 2]}",
+												   (port => mm_get_free_port()));
+		}
+	};
 	push(@{$self->{nodes}}, $new_node);
 
 	return $#{$self->{nodes}};

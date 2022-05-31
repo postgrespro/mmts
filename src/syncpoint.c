@@ -477,7 +477,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 
 	/* ensure we will scan everything written up to this point, just in case */
 	XLogFlush(GetXLogWriteRecPtr());
-	current_last_lsn = GetFlushRecPtr();
+	current_last_lsn = GetFlushRecPtr(NULL);
 
 	Assert(current_last_lsn != InvalidXLogRecPtr);
 
@@ -490,7 +490,7 @@ RecoveryFilterLoad(int filter_node_id, Syncpoint *spvector, MtmConfig *mtm_cfg)
 	}
 
 	/* create hash */
-	estimate_size = (GetFlushRecPtr() - start_lsn) / 100;
+	estimate_size = (GetFlushRecPtr(NULL) - start_lsn) / 100;
 	estimate_size = Min(Max(estimate_size, 1000), 100000);
 	MemSet(&hash_ctl, 0, sizeof(hash_ctl));
 	hash_ctl.keysize = hash_ctl.entrysize = sizeof(FilterEntry);

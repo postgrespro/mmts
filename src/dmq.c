@@ -1119,7 +1119,7 @@ dmq_handle_message(StringInfo msg, DmqReceiverSlot *my_slot,
 	}
 	else
 	{
-		res = shm_mq_send(mq_handles[sub.procno], body_len, body, false);
+		res = shm_mq_send(mq_handles[sub.procno], body_len, body, false, true);
 		if (res == SHM_MQ_DETACHED)
 			mtm_log(COMMERROR, "[DMQ] queue %d is detached, dropping message (stream=%s)",
 					sub.procno, stream_name);
@@ -1623,7 +1623,7 @@ dmq_push(DmqDestinationId dest_id, char *stream_name, char *msg)
 			buf.len, buf.len, buf.data);
 
 	/* XXX: use sendv instead */
-	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
+	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false, true);
 	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue");
@@ -1648,7 +1648,7 @@ dmq_push_buffer(DmqDestinationId dest_id, char *stream_name, const void *payload
 			buf.len, buf.len, buf.data);
 
 	/* XXX: use sendv instead */
-	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false);
+	res = shm_mq_send(dmq_local.mq_outh, buf.len, buf.data, false, true);
 	pfree(buf.data);
 	if (res != SHM_MQ_SUCCESS)
 		mtm_log(ERROR, "[DMQ] dmq_push: can't send to queue, status = %d", res);
