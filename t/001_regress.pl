@@ -86,6 +86,7 @@ $schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
 $schedule =~ s/atx0//; # parallel schedule
+$schedule =~ s/atx2//; # parallel schedule
 unlink('parallel_schedule');
 TestLib::append_to_file('parallel_schedule', $schedule);
 
@@ -142,8 +143,12 @@ else
 {
 	$expected_file = "expected/regression_vanilla.diff"
 }
+# Remove lines which contains random data (like ports, users, etc) from output file
+# Remove line which starts with '+ mtm_sub_' from output file because it contains random user
+run [ "sed", "-i", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
+# Remove line which starts from '+ multimaster' from output file because it contains random port number
+run [ "sed", "-i", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
 $diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
-run [ "sed", "-i", "/mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
 run [ "diff", "-U3", "${expected_file}", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
 
