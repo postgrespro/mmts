@@ -145,9 +145,9 @@ else
 }
 # Remove lines which contains random data (like ports, users, etc) from output file
 # Remove line which starts with '+ mtm_sub_' from output file because it contains random user
-run [ "sed", "-i", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
+run [ "sed", "-i.bak", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
 # Remove line which starts from '+ multimaster' from output file because it contains random port number
-run [ "sed", "-i", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
+run [ "sed", "-i.bak", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
 $diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
 run [ "diff", "-U3", "${expected_file}", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
