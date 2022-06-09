@@ -550,6 +550,64 @@ diff ../../../src/test/regress/expected/privileges.out ../tmp_check/regress_outd
  -- CLUSTER
  CREATE INDEX sro_cluster_idx ON sro_tab ((sro_ifun(a) + sro_ifun(0)));
  CLUSTER sro_tab USING sro_cluster_idx;
+diff ../../../src/test/regress/expected/atx2.out ../tmp_check/regress_outdir/results/atx2.out
+--- ../../../src/test/regress/expected/atx2.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx2.out	CENSORED
+@@ -287,17 +287,14 @@
+   return 1;
+ end$$;
+ select atx_lo_test10(:my_loid);
++NOTICE:  other exception 42703, [MTM] failed to prepare transaction at peer node
+  atx_lo_test10 
+ ---------------
+              1
+ (1 row)
+ 
+ select lo_unlink(:my_loid);
+- lo_unlink 
+------------
+-         1
+-(1 row)
+-
++ERROR:  [MTM] failed to prepare transaction at peer node
+ -- put some initial data
+ select lo_creat(-1) as my_loid \gset
+ select lo_put( :my_loid, 0, 'lo test' );
+@@ -356,6 +353,7 @@
+     declare c2 cursor with hold for select count_tt1_v(), count_tt1_s();
+     insert into atx_tt1 values(2);
+   commit;
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ begin;
+   begin autonomous;
+@@ -371,6 +369,7 @@
+ drop function count_tt1_s();
+ drop table if exists atx_tt1;
+ close c2;
++ERROR:  cursor "c2" does not exist
+ -- 13
+ create table atx_13_t(i int);
+ begin;
+@@ -490,9 +489,7 @@
+ 		insert into atx_tt2 values(1);
+ 		declare c2 cursor with hold for select error_function();
+ 	commit;
+-NOTICE:  other exception 22012, division by zero
+-ERROR:  control reached end of function without RETURN
+-CONTEXT:  PL/pgSQL function error_function()
++ERROR:  cannot PREPARE a transaction that has created a cursor WITH HOLD
+ commit;
+ drop function if exists error_function();
+ drop table if exists atx_tt2;
+@@ -582,6 +579,7 @@
+ RESET client_min_messages;
+ create database regression_atx_test_database;
+ ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
++ERROR:  [MTM] failed to prepare transaction at peer node
+ \c regression_atx_test_database
+ create table atx_test as select 1 as id;
+ begin;
 diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/results/atx3.out
 --- ../../../src/test/regress/expected/atx3.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx3.out	CENSORED
