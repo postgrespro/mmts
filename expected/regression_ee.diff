@@ -586,7 +586,7 @@ diff ../../../src/test/regress/expected/atx2.out ../tmp_check/regress_outdir/res
  drop table if exists atx_tt1;
  close c2;
 +ERROR:  cursor "c2" does not exist
- -- 13
+ --
  create table atx_13_t(i int);
  begin;
 @@ -490,9 +489,7 @@
@@ -623,7 +623,7 @@ diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/res
  SET client_min_messages = 'warning';
  DROP FUNCTION IF EXISTS atx_test_30_one();
  DROP FUNCTION IF EXISTS atx_test_30_two();
-@@ -383,50 +380,38 @@
+@@ -547,50 +544,38 @@
  INSERT INTO abc VALUES (1);
  INSERT INTO abc VALUES (2);
  COMMIT AND CHAIN;  -- TBLOCK_END
@@ -683,7 +683,7 @@ diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/res
  COMMIT;
  ROLLBACK;
  BEGIN;
-@@ -498,24 +483,13 @@
+@@ -662,24 +647,13 @@
  
  SAVEPOINT x;
  COMMIT AND CHAIN;  -- TBLOCK_SUBCOMMIT
@@ -712,7 +712,7 @@ diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/res
  COMMIT;
  ROLLBACK;
  -- different mix of options just for fun
-@@ -586,17 +560,14 @@
+@@ -750,17 +724,14 @@
  COMMIT;
  -- not allowed outside a transaction block
  COMMIT AUTONOMOUS AND CHAIN;  -- error
