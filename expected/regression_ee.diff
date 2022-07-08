@@ -590,7 +590,20 @@ diff ../../../src/test/regress/expected/rowsecurity.out ../tmp_check/regress_out
 diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/results/atx.out
 --- ../../../src/test/regress/expected/atx.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx.out	CENSORED
-@@ -851,6 +851,7 @@
+@@ -816,11 +816,7 @@
+ (1 row)
+ 
+ select lo_unlink(:my_loid);
+- lo_unlink 
+------------
+-         1
+-(1 row)
+-
++ERROR:  [MTM] failed to prepare transaction at peer node
+ --
+ DO $body$
+ begin
+@@ -857,6 +853,7 @@
      declare c2 cursor with hold for select count_tt1_v(), count_tt1_s();
      insert into atx_tt1 values(2);
    commit;
@@ -598,15 +611,15 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  commit;
  begin;
    begin autonomous;
-@@ -866,6 +867,7 @@
+@@ -872,6 +869,7 @@
  drop function count_tt1_s();
  drop table if exists atx_tt1;
  close c2;
 +ERROR:  cursor "c2" does not exist
- -- 13
+ --
  create table atx_13_t(i int);
  begin;
-@@ -985,9 +987,7 @@
+@@ -991,9 +989,7 @@
  		insert into atx_tt2 values(1);
  		declare c2 cursor with hold for select error_function();
  	commit;
@@ -617,7 +630,7 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  commit;
  drop function if exists error_function();
  drop table if exists atx_tt2;
-@@ -1077,6 +1077,7 @@
+@@ -1083,6 +1079,7 @@
  RESET client_min_messages;
  create database regression_atx_test_database;
  ALTER DATABASE "regression_atx_test_database" SET lc_messages TO 'C';
@@ -628,7 +641,7 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
 diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/results/atx5.out
 --- ../../../src/test/regress/expected/atx5.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx5.out	CENSORED
-@@ -24,10 +24,7 @@
+@@ -23,10 +23,7 @@
  NOTICE:  function atx_test_30_one() does not exist, skipping
  NOTICE:  function atx_test_30_one() does not exist, skipping
  NOTICE:  function atx_test_30_one() does not exist, skipping
@@ -643,7 +656,7 @@ diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/res
 diff ../../../src/test/regress/expected/atx9.out ../tmp_check/regress_outdir/results/atx9.out
 --- ../../../src/test/regress/expected/atx9.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx9.out	CENSORED
-@@ -29,50 +29,38 @@
+@@ -28,50 +28,38 @@
  INSERT INTO abc VALUES (1);
  INSERT INTO abc VALUES (2);
  COMMIT AND CHAIN;  -- TBLOCK_END
@@ -703,7 +716,7 @@ diff ../../../src/test/regress/expected/atx9.out ../tmp_check/regress_outdir/res
  COMMIT;
  ROLLBACK;
  BEGIN;
-@@ -144,24 +132,13 @@
+@@ -143,24 +131,13 @@
  
  SAVEPOINT x;
  COMMIT AND CHAIN;  -- TBLOCK_SUBCOMMIT
@@ -732,7 +745,7 @@ diff ../../../src/test/regress/expected/atx9.out ../tmp_check/regress_outdir/res
  COMMIT;
  ROLLBACK;
  -- different mix of options just for fun
-@@ -232,17 +209,14 @@
+@@ -231,17 +208,14 @@
  COMMIT;
  -- not allowed outside a transaction block
  COMMIT AUTONOMOUS AND CHAIN;  -- error
