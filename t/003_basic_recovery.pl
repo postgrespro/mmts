@@ -4,7 +4,6 @@
 use strict;
 use warnings;
 use Cluster;
-use TestLib;
 use Test::More tests => 4;
 
 my $cluster = new Cluster(3);

@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use Cluster;
-use TestLib;
 
 # Test whether we have both DBI and DBD::pg
 my $dbdpg_rc = eval

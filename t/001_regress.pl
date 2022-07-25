@@ -34,7 +34,14 @@ if ($ENV{'PGXS'})
 }
 
 # determenistic ports for expected files
-$PostgresNode::last_port_assigned = 55431;
+if ($Cluster::pg_15_modules)
+{
+	$PostgreSQL::Test::Cluster::last_port_assigned = 55431;
+}
+else
+{
+	$PostgresNode::last_port_assigned = 55431;
+}
 
 my $cluster = new Cluster(3);
 $cluster->init(q{
@@ -84,13 +91,28 @@ $cluster->await_nodes( [0,1,2] );
 
 # load schedule without tablespace test which is not expected
 # to work with several postgreses on a single node
-my $schedule = TestLib::slurp_file('../../src/test/regress/parallel_schedule');
+my $schedule;
+if ($Cluster::pg_15_modules)
+{
+	$schedule = PostgreSQL::Test::Utils::slurp_file('../../src/test/regress/parallel_schedule');
+}
+else
+{
+	$schedule = TestLib::slurp_file('../../src/test/regress/parallel_schedule');
+}
 $schedule =~ s/test: tablespace/#test: tablespace/g;
 $schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
 unlink('parallel_schedule');
-TestLib::append_to_file('parallel_schedule', $schedule);
+if ($Cluster::pg_15_modules)
+{
+	PostgreSQL::Test::Utils::append_to_file('parallel_schedule', $schedule);
+}
+else
+{
+	TestLib::append_to_file('parallel_schedule', $schedule);
+}
 
 my $regress_shlib = $ENV{REGRESS_SHLIB};
 my $regress_libdir = dirname($regress_shlib);
@@ -99,13 +121,26 @@ mkdir($regress_outdir);
 # REMOVEME: not needed in 14+, pg_regress fixed in upstream
 mkdir("${regress_outdir}/sql");
 mkdir("${regress_outdir}/expected");
-TestLib::system_log($ENV{'PG_REGRESS'},
-	'--host=' . $cluster->{nodes}->[0]->host, '--port=' . $cluster->{nodes}->[0]->port,
-	'--use-existing', '--bindir=',
-	'--schedule=parallel_schedule',
-	"--dlpath=${regress_libdir}",
-	'--inputdir=../../src/test/regress',
-    "--outputdir=${regress_outdir}");
+if ($Cluster::pg_15_modules)
+{
+	PostgreSQL::Test::Utils::system_log($ENV{'PG_REGRESS'},
+		'--host=' . $cluster->{nodes}->[0]->host, '--port=' . $cluster->{nodes}->[0]->port,
+		'--use-existing', '--bindir=',
+		'--schedule=parallel_schedule',
+		"--dlpath=${regress_libdir}",
+		'--inputdir=../../src/test/regress',
+		"--outputdir=${regress_outdir}");
+}
+else
+{
+	TestLib::system_log($ENV{'PG_REGRESS'},
+		'--host=' . $cluster->{nodes}->[0]->host, '--port=' . $cluster->{nodes}->[0]->port,
+		'--use-existing', '--bindir=',
+		'--schedule=parallel_schedule',
+		"--dlpath=${regress_libdir}",
+		'--inputdir=../../src/test/regress',
+		"--outputdir=${regress_outdir}");
+}
 unlink('parallel_schedule');
 
 # rename s/diffs/diff as some upper level testing systems are searching for all
@@ -114,7 +149,15 @@ rename "${regress_outdir}/regression.diffs", "${regress_outdir}/regression.diff"
   or die "cannot rename file: $!";
 
 # strip absolute paths and dates out of resulted regression.diffs
-my $res_diff = TestLib::slurp_file("${regress_outdir}/regression.diff");
+my $res_diff;
+if ($Cluster::pg_15_modules)
+{
+	$res_diff = PostgreSQL::Test::Utils::slurp_file("${regress_outdir}/regression.diff");
+}
+else
+{
+	$res_diff = TestLib::slurp_file("${regress_outdir}/regression.diff");
+}
 # In <= 11 default diff format was context, since 12 unified; handing lines
 # starting with ---|+++|*** covers both.
 # To make someone's life easier, we prepend .. to make relative paths correct.
@@ -134,7 +177,14 @@ unlink("$ENV{TESTDIR}/results/regression.diff");
 # finally compare regression.diffs with our version
 # Do not use diffs extension as some upper level testing systems are searching for all
 # *.diffs files.
-TestLib::append_to_file("$ENV{TESTDIR}/results/regression.diff", $res_diff);
+if ($Cluster::pg_15_modules)
+{
+	PostgreSQL::Test::Utils::append_to_file("$ENV{TESTDIR}/results/regression.diff", $res_diff);
+}
+else
+{
+    TestLib::append_to_file("$ENV{TESTDIR}/results/regression.diff", $res_diff);
+}
 # TODO: work with diffs on per-test basis
 my $expected_file;
 if (Cluster::is_ee())
@@ -145,7 +195,14 @@ else
 {
 	$expected_file = "expected/regression_vanilla.diff"
 }
-$diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
+if ($Cluster::pg_15_modules)
+{
+	$diff = PostgreSQL::Test::Utils::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
+}
+else
+{
+	$diff = TestLib::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
+}
 run [ "diff", "-U3", "${expected_file}", "$ENV{TESTDIR}/results/regression.diff" ], ">", "$ENV{TESTDIR}/regression.diff.diff";
 my $res = $?;
 

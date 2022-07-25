@@ -1,8 +1,6 @@
 use strict;
 use warnings;
-use PostgresNode;
 use Cluster;
-use TestLib;
 use Test::More tests => 29;
 
 my $cluster = new Cluster(3);

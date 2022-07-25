@@ -5,7 +5,6 @@ use strict;
 use warnings;
 
 use Cluster;
-use TestLib;
 use Test::More tests => 1;
 use Data::Dumper;
 

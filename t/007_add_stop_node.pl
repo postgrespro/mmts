@@ -2,9 +2,7 @@ use strict;
 use warnings;
 
 use Carp;
-use PostgresNode;
 use Cluster;
-use TestLib;
 use Test::More tests => 8;
 
 # Generally add node with concurrent load (and failures) is not supported

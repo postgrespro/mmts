@@ -2,11 +2,9 @@ use Carp;
 use POSIX;
 use strict;
 use Test::More;
-use TestLib;
 use Time::HiRes qw(usleep);
 use warnings;
 
-use PostgresNode;
 use Cluster;
 
 use Test::More tests => Cluster::is_ee() ? 6 : 5;
