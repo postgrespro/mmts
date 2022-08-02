@@ -468,7 +468,11 @@ pglogical_write_prepare(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
+#if PG_VERSION_NUM < 150000
+	pq_sendint64(out, txn->commit_time);
+#else
 	pq_sendint64(out, txn->xact_time.commit_time);
+#endif
 
 	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
@@ -499,7 +503,11 @@ pglogical_write_commit_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
+#if PG_VERSION_NUM < 150000
+	pq_sendint64(out, txn->commit_time);
+#else
 	pq_sendint64(out, txn->xact_time.commit_time);
+#endif
 
 	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
@@ -532,7 +540,11 @@ pglogical_write_abort_prepared(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
+#if PG_VERSION_NUM < 150000
+	pq_sendint64(out, txn->commit_time);
+#else
 	pq_sendint64(out, txn->xact_time.commit_time);
+#endif
 
 	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
@@ -560,7 +572,11 @@ pglogical_write_commit(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
+#if PG_VERSION_NUM < 150000
+	pq_sendint64(out, txn->commit_time);
+#else
 	pq_sendint64(out, txn->xact_time.commit_time);
+#endif
 
 	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);
@@ -583,7 +599,11 @@ pglogical_write_abort(StringInfo out, PGLogicalOutputData *data,
 	/* send fixed fields */
 	pq_sendint64(out, lsn);
 	pq_sendint64(out, txn->end_lsn);
+#if PG_VERSION_NUM < 150000
+	pq_sendint64(out, txn->commit_time);
+#else
 	pq_sendint64(out, txn->xact_time.commit_time);
+#endif
 
 	send_node_id(out, txn, hooks_data);
 	pq_sendint64(out, txn->origin_lsn);

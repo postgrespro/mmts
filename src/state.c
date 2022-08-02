@@ -12,7 +12,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#if PG_VERSION_NUM >= 150000
 #include "common/pg_prng.h"
+#endif
 #include "access/twophase.h"
 #include "access/xlogutils.h"
 #include "access/xlog_internal.h"
@@ -1678,7 +1680,11 @@ CampaignerMain(Datum main_arg)
 	MemoryContext campaigner_ctx =	AllocSetContextCreate(TopMemoryContext,
 														  "CampaignerContext",
 														  ALLOCSET_DEFAULT_SIZES);
+#if PG_VERSION_NUM < 150000
+	static unsigned short drandom_seed[3] = {0, 0, 0};
+#else
 	static pg_prng_state drandom_seed = {0, 0};
+#endif
 	TimestampTz last_campaign_at = 0;
 	int			rc = WL_TIMEOUT;
 
@@ -1720,7 +1726,13 @@ CampaignerMain(Datum main_arg)
 
 		/* Mix the PID with the most predictable bits of the timestamp */
 		iseed = (uint64) now ^ ((uint64) MyProcPid << 32);
+#if PG_VERSION_NUM < 150000
+		drandom_seed[0] = (unsigned short) iseed;
+		drandom_seed[1] = (unsigned short) (iseed >> 16);
+		drandom_seed[2] = (unsigned short) (iseed >> 32);
+#else
 		pg_prng_seed(&drandom_seed, iseed);
+#endif
 	}
 
 	/*
@@ -1800,10 +1812,17 @@ CampaignerMain(Datum main_arg)
 		 * here nodes will mostly propose the same set of candidates,
 		 * supporting each other)
 		 */
+#if PG_VERSION_NUM < 150000
+		rc = WaitLatch(MyLatch,
+					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+					   campaign_retry_interval * pg_erand48(drandom_seed),
+					   PG_WAIT_EXTENSION);
+#else
 		rc = WaitLatch(MyLatch,
 					   WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 					   campaign_retry_interval * pg_prng_double(&drandom_seed),
 					   PG_WAIT_EXTENSION);
+#endif
 
 		if (rc & WL_LATCH_SET)
 			ResetLatch(MyLatch);
@@ -4239,7 +4258,11 @@ GetLoggedPreparedXactState(HTAB *txset)
 	XLogRecPtr start_lsn;
 	XLogRecPtr lsn;
 	TimeLineID timeline;
+#if PG_VERSION_NUM < 150000
+	XLogRecPtr end_wal_lsn = GetFlushRecPtr();
+#else
 	XLogRecPtr end_wal_lsn = GetFlushRecPtr(NULL);
+#endif
 	XLogRecPtr end_lsn = end_wal_lsn;
 	int		   n_trans = hash_get_num_entries(txset);
 

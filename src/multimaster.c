@@ -1097,7 +1097,9 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 	bool		conninfo_isnull;
 	int			n_nodes;
 	int			rc;
+#if PG_VERSION_NUM >= 150000
 	ParseState *pstate;
+#endif
 
 	Assert(CALLED_AS_TRIGGER(fcinfo));
 	Assert(TRIGGER_FIRED_FOR_ROW(trigdata->tg_event));
@@ -1138,7 +1140,9 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 
 	mtm_log(NodeMgmt, "mtm_after_node_create %d", node_id);
 
+#if PG_VERSION_NUM >= 150000
 	pstate = make_parsestate(NULL);
+#endif
 
 	if (is_self)
 	{
@@ -1148,11 +1152,19 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		 */
 		pub_stmt->pubname = MULTIMASTER_NAME;
 		pub_stmt->for_all_tables = false;
+#if PG_VERSION_NUM < 150000
+		pub_stmt->tables = NIL;
+#else
 		pub_stmt->pubobjects = NIL;
+#endif
 		pub_stmt->options = list_make1(
 									   makeDefElem("publish", (Node *) makeString(pstrdup("insert, truncate")), -1)
 			);
+#if PG_VERSION_NUM < 150000
+		CreatePublication(pub_stmt);
+#else
 		CreatePublication(pstate, pub_stmt);
+#endif
 
 		/* liftoff */
 		MtmMonitorStart(MyDatabaseId, GetUserId());
@@ -1191,7 +1203,11 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		client_min_messages = ERROR;
 		log_min_messages = ERROR;
 
+#if PG_VERSION_NUM < 150000
+		CreateSubscription(cs_stmt, true);
+#else
 		CreateSubscription(pstate, cs_stmt, true);
+#endif
 
 		/* restore log_level's */
 		client_min_messages = saved_client_min_messages;
@@ -1209,7 +1225,9 @@ mtm_after_node_create(PG_FUNCTION_ARGS)
 		origin_name = psprintf(MULTIMASTER_SLOT_PATTERN, node_id);
 		replorigin_create(origin_name);
 	}
+#if PG_VERSION_NUM >= 150000
 	free_parsestate(pstate);
+#endif
 
 	PG_RETURN_VOID();
 }
