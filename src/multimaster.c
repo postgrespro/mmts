@@ -1548,7 +1548,11 @@ mtm_ping(PG_FUNCTION_ARGS)
 					"Failed to query mtm.cluster_status on '%s': %s",
 					peer_connstr, msg);
 		}
+#if PG_VERSION_NUM < 150000
 		peer_gen_num = pg_strtouint64(PQgetvalue(res, 0, 0), NULL, 10);
+#else
+		peer_gen_num = strtou64(PQgetvalue(res, 0, 0), NULL, 10);
+#endif
 		PQclear(res);
 		PQfinish(conn);
 		if (curr_gen.num != peer_gen_num)
