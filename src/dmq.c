@@ -44,7 +44,9 @@
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
 #include "storage/shm_toc.h"
+#include "postmaster/autovacuum.h"
 #include "postmaster/interrupt.h"
+#include "replication/walsender.h"
 #include "storage/shm_mq.h"
 #include "storage/ipc.h"
 #include "tcop/tcopprot.h"
@@ -362,9 +364,13 @@ static Size
 dmq_shmem_size(void)
 {
 	Size		size = 0;
+	int maxbackends = 0;
+
+	maxbackends = MaxConnections + autovacuum_max_workers +
+				max_worker_processes + max_wal_senders + 1;
 
 	size = add_size(size, sizeof(struct DmqSharedState));
-	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
+	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND * maxbackends,
 											 sizeof(DmqStreamSubscription)));
 	return MAXALIGN(size);
 }
