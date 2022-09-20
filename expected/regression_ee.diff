@@ -638,6 +638,38 @@ diff ../../../src/test/regress/expected/atx.out ../tmp_check/regress_outdir/resu
  \c regression_atx_test_database
  create table atx_test as select 1 as id;
  begin;
+diff ../../../src/test/regress/expected/atx3.out ../tmp_check/regress_outdir/results/atx3.out
+--- ../../../src/test/regress/expected/atx3.out	CENSORED
++++ ../tmp_check/regress_outdir/results/atx3.out	CENSORED
+@@ -69,12 +69,14 @@
+   return 1;
+ end$$;
+ select * from test_func5893(10);
++NOTICE:  other exception 42703, [MTM] failed to prepare transaction at peer node
+  test_func5893 
+ ---------------
+              1
+ (1 row)
+ 
+ drop table mmm5893;
++ERROR:  table "mmm5893" does not exist
+ drop function test_func5893(i int);
+ -- test without 'exception' block
+ create or replace function test_func5893(i int) returns int language plpgsql as $$
+@@ -88,10 +90,8 @@
+   return 1;
+ end$$;
+ select * from test_func5893(10);
+- test_func5893 
+----------------
+-             1
+-(1 row)
+-
++ERROR:  [MTM] failed to prepare transaction at peer node
++CONTEXT:  PL/pgSQL function test_func5893(integer) line 5 during autonomous statement block exit
+ drop table mmm5893;
++ERROR:  table "mmm5893" does not exist
+ drop function test_func5893(i int);
 diff ../../../src/test/regress/expected/atx5.out ../tmp_check/regress_outdir/results/atx5.out
 --- ../../../src/test/regress/expected/atx5.out	CENSORED
 +++ ../tmp_check/regress_outdir/results/atx5.out	CENSORED
