@@ -44,7 +44,9 @@
 #include "utils/builtins.h"
 #include "utils/catcache.h"
 #include "utils/guc.h"
+#if PG_VERSION_NUM < 150000
 #include "utils/int8.h"
+#endif
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"

@@ -24,7 +24,9 @@
 #include "nodes/makefuncs.h"
 
 #include "utils/builtins.h"
+#if PG_VERSION_NUM < 150000
 #include "utils/int8.h"
+#endif
 #include "utils/inval.h"
 #include "utils/varlena.h"
 #include "utils/lsyscache.h"
@@ -378,6 +380,7 @@ parse_param_bool(DefElem *elem)
 static uint32
 parse_param_uint32(DefElem *elem)
 {
+#if PG_VERSION_NUM < 150000
 	int64		res;
 
 	if (!scanint8(strVal(elem->arg), true, &res))
@@ -385,6 +388,18 @@ parse_param_uint32(DefElem *elem)
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 MTM_ERRMSG("could not parse integer value \"%s\" for parameter \"%s\"",
 							strVal(elem->arg), elem->defname)));
+#else
+	unsigned long res;
+	char	   *endptr;
+
+	errno = 0;
+	res = strtoul(strVal(elem->arg), &endptr, 10);
+	if (errno != 0 || *endptr != '\0')
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 MTM_ERRMSG("could not parse integer value \"%s\" for parameter \"%s\"",
+							strVal(elem->arg), elem->defname)));
+#endif
 
 	if (res > PG_UINT32_MAX || res < 0)
 		ereport(ERROR,

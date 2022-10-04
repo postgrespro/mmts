@@ -1453,7 +1453,11 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 		extra = dmq_receiver_start_hook(sender_name);
 
 	/* do not hold globalxmin. XXX: try to carefully release snaps */
+#if PG_VERSION_NUM < 150000
 	MyProc->xmin = InvalidTransactionId;
+#else
+	pg_atomic_write_u64(&MyProc->xmin, InvalidTransactionId);
+#endif
 
 	for (;;)
 	{
