@@ -240,6 +240,11 @@ static volatile sig_atomic_t got_SIGHUP = false;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static void mtm_dmq_shmem_request(void);
+#endif
+
 void *(*dmq_receiver_start_hook)(char *sender_name);
 dmq_hook_type dmq_receiver_stop_hook;
 dmq_hook_type dmq_sender_connect_hook;
@@ -364,14 +369,19 @@ static Size
 dmq_shmem_size(void)
 {
 	Size		size = 0;
-	int maxbackends = 0;
-
-	maxbackends = MaxConnections + autovacuum_max_workers +
-				max_worker_processes + max_wal_senders + 1;
+#if PG_VERSION_NUM < 150000
+	int maxbackends = MaxConnections + autovacuum_max_workers +
+					max_worker_processes + max_wal_senders + 1;
+#endif
 
 	size = add_size(size, sizeof(struct DmqSharedState));
+#if PG_VERSION_NUM >= 150000
+	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND * MaxBackends,
+											 sizeof(DmqStreamSubscription)));
+#else
 	size = add_size(size, hash_estimate_size(DMQ_MAX_SUBS_PER_BACKEND * maxbackends,
 											 sizeof(DmqStreamSubscription)));
+#endif
 	return MAXALIGN(size);
 }
 
@@ -384,9 +394,14 @@ dmq_init(int send_timeout, int connect_timeout)
 		return;
 
 	/* Reserve area for our shared state */
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = mtm_dmq_shmem_request;
+#else
 	RequestAddinShmemSpace(dmq_shmem_size());
 
 	RequestNamedLWLockTranche("dmq", 1);
+#endif
 
 	/* Set up common data for all our workers */
 	memset(&worker, 0, sizeof(worker));
@@ -407,6 +422,18 @@ dmq_init(int send_timeout, int connect_timeout)
 	PreviousShmemStartupHook = shmem_startup_hook;
 	shmem_startup_hook = dmq_shmem_startup_hook;
 }
+
+#if PG_VERSION_NUM >= 150000
+static void
+mtm_dmq_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	RequestAddinShmemSpace(dmq_shmem_size());
+	RequestNamedLWLockTranche("dmq", 1);
+}
+#endif
 
 static Size
 dmq_toc_size()

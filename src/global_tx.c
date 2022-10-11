@@ -47,6 +47,11 @@ char const *const GlobalTxStatusMnem[] =
 	"GTXAborted"
 };
 
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static void mtm_gtx_shmem_request(void);
+#endif
+
 int
 term_cmp(GlobalTxTerm t1, GlobalTxTerm t2)
 {
@@ -154,7 +159,23 @@ GlobalTxAtExit(int code, Datum arg)
 void
 MtmGlobalTxInit()
 {
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = mtm_gtx_shmem_request;
+#else
+	RequestAddinShmemSpace(size);
+	RequestNamedLWLockTranche("mtm-gtx-lock", 1);
+#endif
+}
+
+#if PG_VERSION_NUM >= 150000
+static void
+mtm_gtx_shmem_request(void)
+{
 	Size		size = 0;
+
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
 
 	size = add_size(size, sizeof(gtx_shared_data));
 	size = add_size(size, hash_estimate_size(2*MaxConnections,
@@ -164,6 +185,7 @@ MtmGlobalTxInit()
 	RequestAddinShmemSpace(size);
 	RequestNamedLWLockTranche("mtm-gtx-lock", 1);
 }
+#endif
 
 void
 MtmGlobalTxShmemStartup(void)

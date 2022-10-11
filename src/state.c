@@ -246,6 +246,11 @@ static PrepareBarrierMode pb_acquired_in_mode;
 
 static bool	campaign_requested;
 
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static void mtm_state_shmem_request(void);
+#endif
+
 /*
  * -----------------------------------
  * Startup
@@ -255,9 +260,26 @@ static bool	campaign_requested;
 void
 MtmStateInit()
 {
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = mtm_state_shmem_request;
+#else
+	RequestAddinShmemSpace(sizeof(struct MtmState));
+	RequestNamedLWLockTranche("mtm_state_locks", 3);
+#endif
+}
+
+#if PG_VERSION_NUM >= 150000
+static void
+mtm_state_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
 	RequestAddinShmemSpace(sizeof(struct MtmState));
 	RequestNamedLWLockTranche("mtm_state_locks", 3);
 }
+#endif
 
 void
 MtmStateShmemStartup()

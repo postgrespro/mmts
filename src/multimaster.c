@@ -220,6 +220,10 @@ bool mtm_config_valid;
 
 static shmem_startup_hook_type PreviousShmemStartupHook;
 
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static void mtm_shmem_request(void);
+#endif
 
 /*
  * If you get really bored one day, you may try hardware-accelerated popcount
@@ -716,8 +720,13 @@ NULL);
 	 * the postmaster process.)	 We'll allocate or attach to the shared
 	 * resources in mtm_shmem_startup().
 	 */
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = mtm_shmem_request;
+#else
 	RequestAddinShmemSpace(MTM_SHMEM_SIZE + sizeof(MtmTime));
 	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
+#endif
 
 	dmq_init(MtmHeartbeatSendTimeout, MtmConnectTimeout);
 	dmq_receiver_start_hook = MtmOnDmqReceiverConnect;
@@ -749,6 +758,18 @@ NULL);
 #endif
 #endif
 }
+
+#if PG_VERSION_NUM >= 150000
+static void
+mtm_shmem_request(void)
+{
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	RequestAddinShmemSpace(MTM_SHMEM_SIZE + sizeof(MtmTime));
+	RequestNamedLWLockTranche(MULTIMASTER_NAME, 2);
+}
+#endif
 
 /*
  * Module unload callback

@@ -150,6 +150,11 @@ static void MtmFinishDDLCommand(void);
 
 PG_FUNCTION_INFO_V1(mtm_make_table_local);
 
+#if PG_VERSION_NUM >= 150000
+static shmem_request_hook_type prev_shmem_request_hook = NULL;
+static void mtm_ddl_shmem_request(void);
+#endif
+
 /*****************************************************************************
  *
  * Init
@@ -159,16 +164,14 @@ PG_FUNCTION_INFO_V1(mtm_make_table_local);
 void
 MtmDDLReplicationInit()
 {
-	Size		size = 0;
-
-	size = add_size(size, sizeof(struct DDLSharedState));
-	size = add_size(size, hash_estimate_size(MULTIMASTER_MAX_LOCAL_TABLES,
-											 sizeof(Oid)));
-	size = MAXALIGN(size);
-
+#if PG_VERSION_NUM >= 150000
+	prev_shmem_request_hook = shmem_request_hook;
+	shmem_request_hook = mtm_ddl_shmem_request;
+#else
 	RequestAddinShmemSpace(size);
 
 	RequestNamedLWLockTranche("mtm-ddl", 1);
+#endif
 
 	PreviousExecutorStartHook = ExecutorStart_hook;
 	ExecutorStart_hook = MtmExecutorStart;
@@ -182,6 +185,25 @@ MtmDDLReplicationInit()
 	PreviousSeqNextvalHook = SeqNextvalHook;
 	SeqNextvalHook = MtmSeqNextvalHook;
 }
+
+#if PG_VERSION_NUM >= 150000
+static void
+mtm_ddl_shmem_request(void)
+{
+	Size		size = 0;
+
+	if (prev_shmem_request_hook)
+		prev_shmem_request_hook();
+
+	size = add_size(size, sizeof(struct DDLSharedState));
+	size = add_size(size, hash_estimate_size(MULTIMASTER_MAX_LOCAL_TABLES,
+											 sizeof(Oid)));
+	size = MAXALIGN(size);
+
+	RequestAddinShmemSpace(size);
+	RequestNamedLWLockTranche("mtm-ddl", 1);
+}
+#endif
 
 void
 MtmDDLReplicationShmemStartup(void)
