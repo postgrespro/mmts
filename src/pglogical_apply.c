@@ -166,7 +166,6 @@ create_rel_estate(Relation rel)
 	EState	   *estate;
 	ResultRelInfo *resultRelInfo;
 	RangeTblEntry *rte;
-	List *rangeTable;
 
 	estate = CreateExecutorState();
 
@@ -178,11 +177,7 @@ create_rel_estate(Relation rel)
 	rte->relid = RelationGetRelid(rel);
 	rte->relkind = rel->rd_rel->relkind;
 	rte->rellockmode = AccessShareLock;
-	rangeTable = list_make1(rte);
 	ExecInitRangeTable(estate, list_make1(rte));
-
-	ExecInitRangeTable(estate, rangeTable);
-	ExecInitResultRelation(estate, resultRelInfo, 1);
 
 	estate->es_result_relation_info = resultRelInfo;
 	estate->es_output_cid = GetCurrentCommandId(true);

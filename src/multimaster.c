@@ -751,11 +751,9 @@ NULL);
 
 	DetectGlobalDeadLock = MtmDetectGlobalDeadLock;
 
-#if 0
 #ifdef PGPRO_EE
 	SuspendTransactionHook = MtmSuspendTransaction;
 	ResumeTransactionHook = MtmResumeTransaction;
-#endif
 #endif
 }
 

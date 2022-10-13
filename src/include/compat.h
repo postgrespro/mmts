@@ -1,7 +1,16 @@
 #ifndef MTMCOMPAT_H
 #define MTMCOMPAT_H
 
+#if 0   /* built-in connection pool ported */
+/* EE pooler gets rid of static variable */
+#ifdef PGPRO_EE
+#define FeBeWaitSetCompat() (MyProcPort->pqcomm_waitset)
+#else
 #define FeBeWaitSetCompat() (FeBeWaitSet)
+#endif
+#else
+#define FeBeWaitSetCompat() (FeBeWaitSet)
+#endif
 
 #ifdef PGPRO_EE /* atx */
 #define BeginTransactionBlockCompat() (BeginTransactionBlock(false, NIL))

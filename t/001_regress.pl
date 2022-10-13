@@ -75,10 +75,6 @@ $cluster->{nodes}->[0]->safe_psql('regression', q{
 	CREATE VIEW pg_prepared_xacts AS
 		select * from _pg_prepared_xacts where gid not like 'MTM-%'
 		ORDER BY transaction::text::bigint;
-	ALTER TABLE pg_publication RENAME TO _pg_publication;
-	CREATE VIEW pg_catalog.pg_publication AS SELECT * FROM pg_catalog._pg_publication WHERE pubname<>'multimaster';
-	ALTER TABLE pg_subscription RENAME TO _pg_subscription;
-	CREATE VIEW pg_catalog.pg_subscription AS SELECT * FROM pg_catalog._pg_subscription WHERE subname NOT LIKE 'mtm_sub_%';
 });
 
 $cluster->{nodes}->[0]->safe_psql('regression', q{
@@ -104,6 +100,7 @@ $schedule =~ s/test: tablespace/#test: tablespace/g;
 $schedule =~ s/test: cfs/#test: cfs/g;
 $schedule =~ s/test: largeobject//; # serial schedule
 $schedule =~ s/largeobject//; # parallel schedule
+$schedule =~ s/atx0//; # parallel schedule
 unlink('parallel_schedule');
 if ($Cluster::pg_15_modules)
 {
@@ -195,6 +192,11 @@ else
 {
 	$expected_file = "expected/regression_vanilla.diff"
 }
+# Remove lines which contains random data (like ports, users, etc) from output file
+# Remove line which starts with '+ mtm_sub_' from output file because it contains random user
+run [ "sed", "-i.bak", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
+# Remove line which starts from '+ multimaster' from output file because it contains random port number
+run [ "sed", "-i.bak", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
 if ($Cluster::pg_15_modules)
 {
 	$diff = PostgreSQL::Test::Utils::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
