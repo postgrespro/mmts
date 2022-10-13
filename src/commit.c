@@ -742,7 +742,11 @@ commit_tour_done:
 	}
 	PG_CATCH();
 	{
+#ifdef PGPRO_EE
 		mtm_commit_cleanup(0, Int32GetDatum(atxLevel));
+#else
+		mtm_commit_cleanup(0, Int32GetDatum(0));
+#endif
 
 		PG_RE_THROW();
 	}
