@@ -103,8 +103,9 @@ MaybeLogSyncpoint(void)
 		(GetInsertRecPtr() - Mtm->latestSyncpoint >= MtmSyncpointInterval * 1024))
 	{
 		XLogRecPtr syncpoint_lsn;
+		const char *msg = "MTM syncpoint in MaybeLogsyncpoint";
 
-		syncpoint_lsn = LogLogicalMessage("S", "", 1, false);
+		syncpoint_lsn = LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 		Mtm->latestSyncpoint = syncpoint_lsn;
 
 		mtm_log(SyncpointCreated,
@@ -144,6 +145,7 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 {
 	char	   *sql;
 	int			rc;
+	const char *msg = "MTM Syncpoint in SyncpointRegister";
 
 	/* Start tx */
 	StartTransactionCommand();
@@ -156,7 +158,7 @@ SyncpointRegister(int origin_node_id, XLogRecPtr origin_lsn,
 	 * performed instead of 3PC and so receiver is not allowed to fail
 	 * applying this transaction and go ahead even in normal mode.
 	 */
-	LogLogicalMessage("B", "", 1, true);
+	LogLogicalMessage("B", msg, strlen(msg) + 1, true);
 
 	/* Save syncpoint */
 	sql = psprintf("insert into mtm.syncpoints values "

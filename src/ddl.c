@@ -680,7 +680,8 @@ MtmProcessDDLCommand(char const *queryString, bool transactional,
 static void
 MtmFinishDDLCommand()
 {
-	LogLogicalMessage("E", "", 1, true);
+	const char *msg = "MTM Finish DDL Command";
+	LogLogicalMessage("E", msg, strlen(msg) + 1, true);
 }
 
 

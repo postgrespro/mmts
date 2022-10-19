@@ -1389,6 +1389,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 	/* Await for workers finish and create syncpoints */
 	PG_TRY();
 	{
+		const char *logmsg = "MTM Syncpoint in join_node";
 
 		while (!MtmAllApplyWorkersFinished())
 			MtmSleep(USECS_PER_SEC / 10);
@@ -1415,7 +1416,7 @@ mtm_join_node(PG_FUNCTION_ARGS)
 			LogLogicalMessage("S", msg, strlen(msg) + 1, false);
 			replorigin_session_origin = InvalidRepOriginId;
 		}
-		LogLogicalMessage("S", "", 1, false);
+		LogLogicalMessage("S", logmsg, strlen(logmsg) + 1, false);
 	}
 	PG_CATCH();
 	{
