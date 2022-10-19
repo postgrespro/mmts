@@ -450,7 +450,7 @@ handle_response(MtmConfig *mtm_cfg, MtmMessage *raw_msg)
 	else if (raw_msg->tag == T_Mtm2AResponse)
 		gid = ((Mtm2AResponse *) raw_msg)->gid;
 	else
-		Assert(false);
+		mtm_log(ERROR, "Illegal message tag %d", raw_msg->tag);
 
 	mtm_log(ResolverTx, "handle_response: got '%s'", MtmMesageToString(raw_msg));
 
