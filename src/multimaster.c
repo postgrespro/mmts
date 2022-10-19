@@ -2043,6 +2043,7 @@ gather(nodemask_t participants,
 	   int *sendconn_cnt, uint64 gen_num)
 {
 	time_t start;
+	bool to = false;
 	*msg_count = 0;
    
 	start = time(NULL);
@@ -2059,8 +2060,9 @@ gather(nodemask_t participants,
 	   
 		current = time(NULL);
 
-		if (current - start > 5) {
+		if (current - start > 3) {
 			elog(LOG, "----> gather timeout");
+			to = true;
 //			return false;
 		}
 
@@ -2117,7 +2119,8 @@ gather(nodemask_t participants,
 		}
 
 	}
-	//elog(LOG, "----> gather 2");
+	if (to)
+		elog(LOG, "----> gather end");
 	return true;
 }
 
