@@ -1498,6 +1498,8 @@ dmq_receiver_loop(PG_FUNCTION_ARGS)
 #else
 	pg_atomic_write_u64(&MyProc->xmin, InvalidTransactionId);
 #endif
+	dmq_receiver_recreate_mqs(&dmq_state->receivers[receiver_id],
+		  segs, mq_handles);
 
 	for (;;)
 	{
