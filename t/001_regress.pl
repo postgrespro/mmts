@@ -166,6 +166,9 @@ $res_diff =~ s/(--- |\+\+\+ |\*\*\* ).+contrib\/mmts(.+\.out)\t.+\n/$1..$2\tCENS
 #   diff -U3 /blabla/contrib/mmts/../../src/test/regress/expected/opr_sanity.out /blabla/mmts/../../src/test/regress/results/opr_sanity.out
 # was added to each file diff
 $res_diff =~ s/(diff ).+contrib\/mmts(.+\.out).+contrib\/mmts(.+\.out\n)/$1..$2 ..$3/g;
+# Since 15 paths are more canonicalized removing '..' if possible
+$res_diff =~ s/(--- |\+\+\+ |\*\*\* ).+(\/src\/test\/regress\/expected\/.+\.out)\t.+\n/$1..\/..\/..$2\tCENSORED\n/g;
+$res_diff =~ s/(diff ).+(\/src\/test\/regress\/expected\/.+\.out).+contrib\/mmts(.+\.out\n)/$1..\/..\/..$2 ..$3/g;
 $res_diff =~ s/(lo_import[ \(]')\/[^']+\//$1\/CENSORED\//g;
 #SELECT lo_export(loid, '/home/alex/projects/ppro/postgrespro/contrib/mmts/../../src/test/regress/results/lotest.txt') FROM lotest_stash_values;
 $res_diff =~ s/(lo_export.*\'\/).+\//$1CENSORED\//g;
@@ -195,9 +198,9 @@ else
 }
 # Remove lines which contains random data (like ports, users, etc) from output file
 # Remove line which starts with '+ mtm_sub_' from output file because it contains random user
-run [ "sed", "-i.bak", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
+run [ "sed", "-i.bak.000", "/+ mtm_sub_/d", "$ENV{TESTDIR}/results/regression.diff" ];
 # Remove line which starts from '+ multimaster' from output file because it contains random port number
-run [ "sed", "-i.bak", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
+run [ "sed", "-i.bak.001", "/+ multimaster/d", "$ENV{TESTDIR}/results/regression.diff" ];
 if ($Cluster::pg_15_modules)
 {
 	$diff = PostgreSQL::Test::Utils::system_log("diff -U3 ${expected_file} $ENV{TESTDIR}/results/regression.diff");
