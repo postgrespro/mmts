@@ -52,6 +52,8 @@
 
 #include "compat.h"
 
+#include "time.h"
+
 typedef enum
 {
 	MTM_STATE_LOCK_ID
@@ -2040,7 +2042,12 @@ gather(nodemask_t participants,
 	   gather_hook_t msg_ok, Datum msg_ok_arg,
 	   int *sendconn_cnt, uint64 gen_num)
 {
+	time_t start;
 	*msg_count = 0;
+   
+	start = time(NULL);
+
+	//elog(LOG, "----> gather 1");
 	while (participants != 0)
 	{
 		bool		ret;
@@ -2048,6 +2055,14 @@ gather(nodemask_t participants,
 		StringInfoData msg;
 		int			rc;
 		bool		wait;
+		time_t current;
+	   
+		current = time(NULL);
+
+		if (current - start > 5) {
+			elog(LOG, "----> gather timeout");
+//			return false;
+		}
 
 		ret = dmq_pop_nb(&sender_mask_pos, &msg, participants, &wait);
 		if (ret)
@@ -2102,6 +2117,7 @@ gather(nodemask_t participants,
 		}
 
 	}
+	//elog(LOG, "----> gather 2");
 	return true;
 }
 

@@ -175,6 +175,7 @@ pglogical_write_begin(StringInfo out, PGLogicalOutputData *data,
 	MtmLastRelId = InvalidOid;
 	MtmCurrentXid = txn->xid;
 	DDLInProgress = false;
+	elog(LOG, "---> pglogical_write_begin: false");
 
 	pq_sendbyte(out, 'B');		/* BEGIN */
 	pq_sendint(out, hooks_data->cfg->my_node_id, 4);
@@ -253,6 +254,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 
 		case 'D':
 			DDLInProgress = true;
+			elog(LOG, "---> pglogical_write_message: true %d: %s",hooks_data->receiver_node_id, message);
 			mtm_log(ProtoTraceMessage, "Sent tx DDL message to node %d: %s",
 					hooks_data->receiver_node_id, message);
 			break;
@@ -266,6 +268,7 @@ pglogical_write_message(StringInfo out, LogicalDecodingContext *ctx,
 
 		case 'E':
 			DDLInProgress = false;
+			elog(LOG, "---> pglogical_write_message: false");
 
 			/*
 			 * we use End message only as indicator of DDL transaction finish,

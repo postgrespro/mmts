@@ -809,7 +809,7 @@ dmq_sender_main(Datum main_arg)
 			switch (conns[conn_id].state)
 			{
 				case Idle:
-					Assert(false);
+//					Assert(false);
 					break;
 
 					/*
@@ -908,10 +908,23 @@ dmq_sender_main(Datum main_arg)
 					if (!PQisBusy(conns[conn_id].pgconn))
 					{
 						int8 mask_pos = conns[conn_id].mask_pos;
+						PGresult *result = PQgetResult(conns[conn_id].pgconn);
 
-						/*
-						 * XXX check here that dmq_receiver_loop not failed?
-						 */
+						if (!result) {
+							mtm_log(ERROR, "[DMQ] PQgetResult returned NULL");
+						}
+
+						mtm_log(DmqStateIntermediate, "PQgetResult status: %d", PQresultStatus(result));
+
+						if (PQresultStatus(result) != PGRES_COPY_BOTH) {
+							mtm_log(DmqStateFinal, "[DMQ] wrong response from dmq receiver '%s': '%s'; '%s'",
+									conns[conn_id].receiver_name,
+									PQresStatus(PQresultStatus(result)),
+									PQerrorMessage(conns[conn_id].pgconn));
+							conns[conn_id].state = Idle;
+							dmq_state->sconn_cnt[conns[conn_id].mask_pos] = DMQSCONN_DEAD;
+							break;
+						}
 
 						conns[conn_id].state = Active;
 						DeleteWaitEvent(set, event.pos);
