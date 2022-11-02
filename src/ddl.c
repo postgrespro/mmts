@@ -141,6 +141,7 @@ static void MtmProcessUtilitySender(PlannedStmt *pstmt,
 static void MtmGucUpdate(const char *key);
 static void MtmInitializeRemoteFunctionsMap(void);
 static char *MtmGucSerialize(void);
+static void MtmGucSync(const char *prefix);
 static void MtmMakeRelationLocal(Oid relid, bool locked);
 static List *AdjustCreateSequence(List *options);
 
@@ -638,6 +639,71 @@ MtmGucSerialize(void)
 	return serialized_gucs->data;
 }
 
+/*
+ * Any loaded extension can set ist own parameters
+ * replacing existing placeholders if needed
+ * and reserve its own parameter pefix.
+ * Then all remaining placeholders with this prefix are deleted.
+ * Multimaster guc list MtmGucEntry should be updated also.
+ * This version just removes parameters which:
+ * - have reserved prefixes,
+ * - are not in guc variables list now.
+ *
+ * XXX: Can module name be used as a reserved prefix?
+ *
+ * XXX: Is it better to store placeholder flag in MtmGucEntry?
+ *
+ */
+void
+MtmGucSync(const char *prefix)
+{
+	dlist_mutable_iter	iter;
+
+	if (!MtmGucHash)
+		MtmGucInit();
+
+	dlist_foreach_modify(iter, &MtmGucList)
+	{
+		MtmGucEntry *cur_entry = dlist_container(MtmGucEntry, list_node, iter.cur);
+		struct config_generic *gconf;
+		bool is_reserved_class = false;
+		const char *sep = strchr(cur_entry->key, GUC_QUALIFIER_SEPARATOR);
+		size_t classLen;
+		ListCell *lc;
+
+		if (sep == NULL)
+			/* leave if is not prefixed */
+			continue;
+
+		classLen = sep - cur_entry->key;
+		foreach(lc, reserved_class_prefix)
+		{
+			const char *rcprefix = lfirst(lc);
+
+			if (strlen(rcprefix) == classLen &&
+				strncmp(cur_entry->key, rcprefix, classLen) == 0)
+			{
+				elog(LOG, "----> MtmGucSerialize: invalid configuration parameter name \"%s\": "
+					"\"%s\" is a reserved prefix.",
+					cur_entry->key, rcprefix);
+				is_reserved_class = true;
+				break;
+			}
+		}
+
+		if (!is_reserved_class)
+			/* leave if prefix is not rerserved */
+			continue;
+
+		gconf = fing_guc_conf(cur_entry->key);
+		if (gconf)
+			/* leave if is in guc variable list */
+			continue;
+
+		dlist_delete(iter.cur);
+		hash_search(MtmGucHash, cur_entry->key, HASH_REMOVE, NULL);
+	}
+}
 
 
 /*****************************************************************************
@@ -1224,6 +1290,14 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString, bool readOn
 		{
 			MtmGucSet(stmt, stmt_string);
 		}
+	}
+
+	/* Catch GUC changes after LOAD */
+	if (nodeTag(parsetree) == T_LoadStmt)
+	{
+		LoadStmt *stmt = (LoadStmt *) parsetree;
+
+		MtmGucSync(stmt->filename);
 	}
 
 	if (executed)

@@ -717,6 +717,8 @@ NULL);
 			NULL);
 	}
 
+	MarkGUCPrefixReserved("multimaster");
+
 	/*
 	 * Request additional shared resources.	 (These are no-ops if we're not in
 	 * the postmaster process.)	 We'll allocate or attach to the shared
