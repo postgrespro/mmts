@@ -163,6 +163,13 @@ MtmGlobalTxInit()
 	prev_shmem_request_hook = shmem_request_hook;
 	shmem_request_hook = mtm_gtx_shmem_request;
 #else
+	Size		size = 0;
+
+	size = add_size(size, sizeof(gtx_shared_data));
+	size = add_size(size, hash_estimate_size(2*MaxConnections,
+											 sizeof(GlobalTx)));
+	size = MAXALIGN(size);
+
 	RequestAddinShmemSpace(size);
 	RequestNamedLWLockTranche("mtm-gtx-lock", 1);
 #endif

@@ -169,6 +169,13 @@ MtmDDLReplicationInit()
 	prev_shmem_request_hook = shmem_request_hook;
 	shmem_request_hook = mtm_ddl_shmem_request;
 #else
+	Size		size = 0;
+
+	size = add_size(size, sizeof(struct DDLSharedState));
+	size = add_size(size, hash_estimate_size(MULTIMASTER_MAX_LOCAL_TABLES,
+											 sizeof(Oid)));
+	size = MAXALIGN(size);
+
 	RequestAddinShmemSpace(size);
 
 	RequestNamedLWLockTranche("mtm-ddl", 1);
