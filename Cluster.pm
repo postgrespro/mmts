@@ -274,14 +274,52 @@ sub init
 
 			# multimaster.CoordinatorTrace_log_level = LOG
 
+			# multimaster.DmqStateIntermediate_log_level = LOG
+			# multimaster.DmqStateFinal_log_level = LOG
+			# multimaster.DmqTraceOutgoing_log_level = LOG
+			# multimaster.DmqTraceIncoming_log_level = LOG
+			# multimaster.DmqTraceShmMq_log_level = LOG
+			# multimaster.DmqPqTiming_log_level = LOG
+
+			# multimaster.ResolverState_log_level = LOG
+			# multimaster.ResolverTx_log_level = LOG
+			# multimaster.ResolverTasks_log_level = LOG
+
+			# multimaster.StatusRequest_log_level = LOG
+
+			# multimaster.BgwPoolEvent_log_level = LOG
 			# multimaster.BgwPoolEventDebug_log_level = LOG
 
+			# multimaster.DeadlockCheck_log_level = LOG
+			# multimaster.DeadlockUpdate_log_level = LOG
+			# multimaster.DeadlockSerialize_log_level = LOG
+
+			# multimaster.DDLStmtOutgoing_log_level = LOG
+			# multimaster.DDLStmtIncoming_log_level = LOG
+			# multimaster.DDLProcessingTrace_log_level = LOG
+
+			# multimaster.ProtoTraceFilter_log_level = LOG
+			# multimaster.ProtoTraceSender_log_level = LOG
+			# multimaster.ProtoTraceMessage_log_level = LOG
+			# multimaster.ProtoTraceState_log_level = LOG
+
+			# multimaster.ReceiverState_log_level = LOG
 			# multimaster.ReceiverStateDebug_log_level = LOG
+			# multimaster.ReceiverFilter_log_level = LOG
 			# multimaster.ApplyMessage_log_level = LOG
 			# multimaster.ApplyTrace_log_level = LOG
+			# multimaster.ApplyError_log_level = LOG
+			# multimaster.ApplyBgwFinish_log_level = LOG
 			# multimaster.ReceiverFeedback_log_level = LOG
 
+			# multimaster.StateMessage_log_level = LOG
+			# multimaster.StateSwitch_log_level = LOG
 			multimaster.StateDebug_log_level = LOG
+
+			# multimaster.SyncpointCreated_log_level = LOG
+			# multimaster.SyncpointApply_log_level = LOG
+
+			# multimaster.NodeMgmt_log_level = LOG
 		});
 		$node->append_conf('pg_hba.conf', $hba);
 
