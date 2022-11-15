@@ -1032,6 +1032,10 @@ MtmProcessUtilitySender(PlannedStmt *pstmt, const char *queryString, bool readOn
 						MtmExplicitFinishPrepared(isTopLevel, stmt->gid, false);
 						return;
 
+					case TRANS_STMT_ROLLBACK_TO:
+						MtmDDLResetStatement();
+						break;
+
 					default:
 						break;
 				}
