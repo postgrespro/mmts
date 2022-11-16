@@ -3918,7 +3918,7 @@ stop_node_workers(int node_id, MtmConfig *new_cfg, Datum arg)
 	ReplicationSlotDrop(filter_slot_name, true);
 
 	/* delete replication origin, was acquired by receiver */
-	replorigin_by_name(logical_slot, false);
+	replorigin_drop_by_name(logical_slot, false, true);
 
 	/*
 	 * Delete logical slot. It is aquired by walsender, so call with nowait =
