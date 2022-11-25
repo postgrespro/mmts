@@ -1629,7 +1629,7 @@ MtmDDLResetApplyState()
 	DDLApplyInProgress = false;
 	/* the memory it points to is about to go away */
 	debug_query_string = NULL;
-	pgstat_report_activity(STATE_RUNNING, NULL);
+	pgstat_report_activity(STATE_IDLE, "");
 }
 
 

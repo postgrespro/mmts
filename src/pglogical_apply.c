@@ -385,7 +385,7 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 				MtmApplyDDLMessage(messageBody, false);
 				CommitTransactionCommand();
 
-				pgstat_report_activity(STATE_RUNNING, NULL);
+				pgstat_report_activity(STATE_IDLE, "");
 				standalone = true;
 				break;
 			}
@@ -396,7 +396,7 @@ process_remote_message(StringInfo s, MtmReceiverWorkerContext *rwctx)
 				pfree(activity);
 				mtm_log(MtmApplyMessage, "executing tx DDL message %s", messageBody);
 				MtmApplyDDLMessage(messageBody, true);
-				pgstat_report_activity(STATE_RUNNING, NULL);
+				pgstat_report_activity(STATE_IDLE, "");
 				break;
 			}
 		case 'L':
