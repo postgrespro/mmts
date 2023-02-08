@@ -6,7 +6,7 @@ cached-property==1.5.1
 certifi==2020.6.20
 cffi==1.14.2
 chardet==3.0.4
-cryptography==3.1
+cryptography==39.0.1
 distro==1.5.0
 docker==4.3.1
 docker-compose==1.26.2
